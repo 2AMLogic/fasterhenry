@@ -11,13 +11,13 @@ Prioritized roadmap of upcoming work, maintained by the Guide role.
 ## Ready
 
 Human-approved issues ready for implementation (`loom:issue`) — the M0 set,
-seeded at bootstrap (issue numbers filled in once filed):
+seeded at bootstrap:
 
-- Geometry model + filament discretization
-- Partial self/mutual inductance kernels (closed forms + arbitrary-orientation quadrature, SIMD batched)
-- Mesh assembly + dense complex solve + frequency sweep
-- Validation harness: PyPEEC + Mohan/Greenhouse closed forms on a 2-turn spiral
-- CLI: `.inp` deck reader + JSON in/out
+- **#1**: Geometry model + filament discretization
+- **#2**: Partial self/mutual inductance kernels (closed forms + arbitrary-orientation quadrature, SIMD batched)
+- **#3**: Mesh assembly + dense complex solve + frequency sweep (blocked by #1, #2)
+- **#4**: Validation harness: PyPEEC + Mohan/Greenhouse closed forms on a 2-turn spiral (blocked by #3)
+- **#5**: CLI: `.inp` deck reader + JSON in/out (blocked by #3)
 
 ## In Progress
 
@@ -29,7 +29,7 @@ seeded at bootstrap (issue numbers filled in once filed):
 
 ## Epics
 
-- M0 — dense core, validated (tracking epic filed at bootstrap)
+- **#6**: fasterhenry M0 → release (Phase 1 = M0, issues #1–#5)
 
 ## Backlog Balance
 
