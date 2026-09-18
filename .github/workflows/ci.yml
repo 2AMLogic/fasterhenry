@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           # The FastHenry/FastCap notice is the fingerprint of copied source.
-          if grep -rIl --exclude-dir=.git --exclude=CONTRIBUTING.md --exclude=README.md \
+          if grep -rIl --exclude-dir=.git --exclude-dir=.github --exclude=CONTRIBUTING.md --exclude=README.md \
                -e 'internal, noncommercial purposes' -e 'LICENSEE agrees not to make any copies' . ; then
             echo '::error::MIT RLE FastHenry/FastCap license text found — this project is clean-room; see CONTRIBUTING.md'
             exit 1
