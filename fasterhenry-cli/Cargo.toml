@@ -1,0 +1,18 @@
+[package]
+name = "fasterhenry-cli"
+description = "Command-line front end for fasterhenry: FastHenry-format .inp decks (public format) and JSON in, JSON out"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "fasterhenry"
+path = "src/main.rs"
+
+[dependencies]
+fasterhenry = { path = "../fasterhenry" }
+clap = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }

@@ -1,0 +1,19 @@
+[package]
+name = "fasterhenry"
+description = "Clean-room PEEC inductance/resistance extraction for 3-D conductor geometries — FastHenry's problem class, none of its code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["peec", "inductance", "electromagnetics", "eda", "simd"]
+categories = ["science", "simulation"]
+
+[dependencies]
+nalgebra = { workspace = true }
+simba = { workspace = true }
+wide = { workspace = true }
+rayon = { workspace = true }
+num-complex = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
