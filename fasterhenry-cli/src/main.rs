@@ -9,6 +9,9 @@ struct Cli {}
 
 fn main() -> anyhow::Result<()> {
     let _cli = Cli::parse();
-    println!("fasterhenry {} — engine not yet implemented", fasterhenry::VERSION);
+    println!(
+        "fasterhenry {} — engine not yet implemented",
+        fasterhenry::VERSION
+    );
     Ok(())
 }
