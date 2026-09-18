@@ -1,0 +1,41 @@
+# Rust
+target/
+Cargo.lock.bak
+*.rs.bk
+
+# Python oracle/venv (validation harness)
+.venv/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+.env.local
+*.local
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Loom runtime state (never commit)
+.loom-in-use
+.loom/state.json
+.loom/sweep-checkpoint/
+.loom/health-metrics.json
+.loom/stuck-history.json
+.loom/alerts.json
+.loom/manifest.json
+.loom/worktrees/
+.loom/interventions/
+.loom/claims/
+.loom/signals/
+.loom/status/
+.loom/progress/
+.loom/diagnostics/
+.loom/metrics/
+.loom/logs/
+.loom/*.log
+.loom/*.sock
