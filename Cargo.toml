@@ -10,6 +10,11 @@ repository = "https://github.com/2AMLogic/fasterhenry"
 rust-version = "1.85"
 
 [workspace.dependencies]
+# The library, as the CLI depends on it. `path` is what the workspace builds
+# against; `version` is what `cargo publish` writes into the packaged CLI
+# manifest (a path-only dependency is rejected). Cargo cannot inherit this from
+# `workspace.package.version`, so bump the two together.
+fasterhenry = { path = "fasterhenry", version = "0.0.1" }
 nalgebra = "0.34"
 simba = { version = "0.9", features = ["wide"] }
 wide = "0.7"

@@ -6,8 +6,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+documentation = "https://docs.rs/fasterhenry"
+readme = "README.md"
 keywords = ["peec", "inductance", "electromagnetics", "eda", "simd"]
 categories = ["science", "simulation"]
+# Allowlist, not a denylist: the published tarball carries the sources and the
+# three documents below, nothing else (no fixtures, oracle/venv files, or repo
+# tooling). LICENSE and CHANGELOG.md are symlinks to the workspace root; cargo
+# packages the file they point at.
+include = ["src/**/*.rs", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [dependencies]
 nalgebra = { workspace = true }

@@ -6,13 +6,20 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+documentation = "https://docs.rs/fasterhenry"
+readme = "README.md"
+keywords = ["peec", "inductance", "electromagnetics", "eda", "cli"]
+categories = ["command-line-utilities", "science", "simulation"]
+# Allowlist, not a denylist — see the note in ../fasterhenry/Cargo.toml.
+# LICENSE and CHANGELOG.md are symlinks to the workspace root.
+include = ["src/**/*.rs", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [[bin]]
 name = "fasterhenry"
 path = "src/main.rs"
 
 [dependencies]
-fasterhenry = { path = "../fasterhenry" }
+fasterhenry = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
