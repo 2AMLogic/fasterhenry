@@ -11,5 +11,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod filament;
+pub mod geometry;
+
+pub use filament::{discretize, DiscretizeError, Filament};
+pub use geometry::{
+    Geometry, GeometryError, LocalBasis, Node, NodeId, Segment, SegmentDef, SegmentError,
+};
+
 /// Crate version, for CLI `--version` and JSON output provenance.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

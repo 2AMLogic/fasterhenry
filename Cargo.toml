@@ -10,7 +10,7 @@ repository = "https://github.com/2AMLogic/fasterhenry"
 rust-version = "1.85"
 
 [workspace.dependencies]
-nalgebra = "0.34"
+nalgebra = { version = "0.34", features = ["serde-serialize"] }
 simba = { version = "0.9", features = ["wide"] }
 wide = "0.7"
 rayon = "1"
