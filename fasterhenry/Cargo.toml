@@ -9,6 +9,10 @@ rust-version.workspace = true
 keywords = ["peec", "inductance", "electromagnetics", "eda", "simd"]
 categories = ["science", "simulation"]
 
+[lib]
+# Criterion owns `cargo bench`; the default libtest harness rejects its flags.
+bench = false
+
 [dependencies]
 nalgebra = { workspace = true }
 simba = { workspace = true }
@@ -19,4 +23,9 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 serde_json = { workspace = true }
+
+[[bench]]
+name = "kernels"
+harness = false
