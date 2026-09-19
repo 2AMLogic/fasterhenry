@@ -22,9 +22,26 @@
 //! | parallel, cross-section axes aligned (a filament with itself, its bundle neighbours, collinear or stacked segments) | [`Method::BarClosedForm`]: the exact 64-term Hoer–Love/Ruehli formula, when its rounding error is provably small; otherwise [`Method::AlignedQuadrature`]: exact in both lengths, singularity-aware quadrature over the cross-sections |
 //! | anything else that is close | [`Method::SampledFilaments`]: exact Grover line-to-line formulas sampled over both cross-sections |
 //!
-//! The first three reach a relative accuracy of about `1e-9`; see each
-//! [`Method`] for the last, and the crate's integration tests for the
-//! validation of every path against independent numerical integration.
+//! The aligned-bar methods reach a relative accuracy of about `1e-9` and the
+//! point quadrature about `1e-8`; see [`Method::SampledFilaments`] for the
+//! last, and the crate's integration tests for the validation of every path
+//! against independent numerical integration.
+//!
+//! # Validated range and limitations
+//!
+//! * Self and aligned-bar terms are validated against independent references
+//!   for length : cross-section ratios from `0.2` to `1e7` and cross-section
+//!   aspect ratios up to `1e4`, and exercised (finite, monotone, bounded by
+//!   the Cauchy–Schwarz inequality) down to `1e-3`.
+//! * Non-aligned bars that touch, overlap, or lie closer than about half a
+//!   cross-section extent are flagged [`Mutual::resolved`]` == false`; on the
+//!   bends and crossings of the test-suite they are within `1e-4` of a fine
+//!   reference, and should be trusted to about `1e-3`.
+//! * Filaments between `1e-6` and `1e-4` rad from parallel that are also
+//!   close and not aligned lose accuracy as `1e-17/sin²ε` (to `1e-5` at
+//!   `1e-6` rad); below `1e-6` rad they are treated as exactly parallel.
+//! * Current density is uniform over each cross-section and directed along
+//!   the filament — the PEEC assumption. Nothing here is frequency dependent.
 //!
 //! # Units
 //!
@@ -117,7 +134,7 @@ pub enum Method {
     /// including touching and overlapping bars.
     AlignedQuadrature,
     /// Adaptive-order Gauss–Legendre quadrature of the Neumann integral over
-    /// both volumes. Relative accuracy about `1e-9`.
+    /// both volumes. Relative accuracy about `1e-8`.
     PointQuadrature,
     /// Close bars that are not parallel-and-aligned: both length integrals
     /// in closed form (Grover's parallel or inclined filament formulas),
@@ -138,8 +155,8 @@ pub struct Mutual {
     /// only for [`Method::SampledFilaments`] on bars that touch, overlap, or
     /// lie closer than about half a cross-section extent: the cross-section
     /// integrand is then weakly singular and the fixed maximum sampling order
-    /// is used, which the test-suite shows to be good to roughly 1 % for
-    /// bars meeting at a bend.
+    /// is used, which the test-suite shows to be within `1e-4` of a fine
+    /// reference for bars meeting at a bend or interpenetrating at a crossing.
     pub resolved: bool,
 }
 
@@ -205,8 +222,20 @@ pub fn mutual_inductance_detailed(a: &Filament, b: &Filament) -> Result<Mutual, 
 /// pair the same way round.
 fn canonical(a: &Filament, b: &Filament) -> Ordering {
     let key = |f: &Filament| {
-        let (s, e) = (f.start(), f.end());
-        [s.x, s.y, s.z, e.x, e.y, e.z, f.width(), f.height()]
+        let (s, e, w) = (f.start(), f.end(), f.width_dir());
+        [
+            s.x,
+            s.y,
+            s.z,
+            e.x,
+            e.y,
+            e.z,
+            f.width(),
+            f.height(),
+            w.x,
+            w.y,
+            w.z,
+        ]
     };
     let (ka, kb) = (key(a), key(b));
     ka.iter()
@@ -287,15 +316,7 @@ pub(crate) fn evaluate(a: &Filament, b: &Filament, simd: bool) -> Result<Mutual,
     let point_orders = orders.filter(|o| aligned.is_none() || pairs(o) <= CHEAP_POINT_PAIRS);
 
     let (integral, method, resolved) = if let Some((oa, ob)) = point_orders {
-        let (ca, cb) = (
-            neumann::Cloud::new(&bar_a, oa),
-            neumann::Cloud::new(&bar_b, ob),
-        );
-        let sum = if simd {
-            neumann::point_sum_simd(&ca, &cb)
-        } else {
-            neumann::point_sum_scalar(&ca, &cb)
-        };
+        let sum = neumann::point_sum(&bar_a, oa, &bar_b, ob, simd);
         (sum * cos, Method::PointQuadrature, true)
     } else if let Some(bars) = aligned {
         let (integral, method) = aligned_integral(&bars);

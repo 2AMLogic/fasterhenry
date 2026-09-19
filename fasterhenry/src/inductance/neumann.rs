@@ -8,7 +8,7 @@
 //!   and height, and `Σ wᵢ wⱼ / |rᵢ − rⱼ|` is accumulated — optionally four
 //!   inner points at a time in `wide::f64x4` lanes. The order along each of
 //!   the six dimensions adapts to the geometry through
-//!   [`gauss::order_for`]: it grows as the separation of the bars shrinks
+//!   [`gauss::OrderTable`]: it grows as the separation of the bars shrinks
 //!   relative to that dimension's extent. Used when the bars are separated
 //!   by roughly half a length or more.
 //! * **Sampled filaments** ([`sampled_filaments`]). For close bars the two
@@ -17,6 +17,9 @@
 //!   with adaptive order. If the bars touch or overlap the cross-section
 //!   integrand is weakly singular and the fixed maximum order is used; the
 //!   result is then flagged as not resolved.
+
+use std::cell::RefCell;
+use std::sync::OnceLock;
 
 use nalgebra::Vector3;
 use wide::f64x4;
@@ -35,6 +38,17 @@ const CLOUD_CAPACITY: usize = 256;
 const SAMPLE_TOLERANCE: f64 = 1e-6;
 /// Largest order per cross-section dimension for sampled filaments.
 const SAMPLE_MAX_ORDER: usize = 8;
+/// Order tables for the two schemes, built on first use.
+fn point_table() -> &'static gauss::OrderTable {
+    static TABLE: OnceLock<gauss::OrderTable> = OnceLock::new();
+    TABLE.get_or_init(|| gauss::OrderTable::new(POINT_TOLERANCE, POINT_MAX_ORDER))
+}
+
+fn sample_table() -> &'static gauss::OrderTable {
+    static TABLE: OnceLock<gauss::OrderTable> = OnceLock::new();
+    TABLE.get_or_init(|| gauss::OrderTable::new(SAMPLE_TOLERANCE, SAMPLE_MAX_ORDER))
+}
+
 /// Below this `|sin ε|` two filaments count as parallel.
 pub(crate) const PARALLEL_SIN: f64 = 1e-6;
 
@@ -58,6 +72,12 @@ impl Bar {
         }
     }
 
+    /// Radius of the sphere about the centre that contains the bar.
+    fn circumradius(&self) -> f64 {
+        (self.half[0] * self.half[0] + self.half[1] * self.half[1] + self.half[2] * self.half[2])
+            .sqrt()
+    }
+
     /// Half the extent of the bar's projection onto the unit vector `n`.
     fn projected_half_extent(&self, n: &Vector3<f64>) -> f64 {
         (0..3)
@@ -70,8 +90,16 @@ impl Bar {
 /// theorem: the largest gap between their projections onto the 15 candidate
 /// axes (face normals and edge cross products). Non-positive exactly when the
 /// bars touch or overlap.
+///
+/// Well-separated bars (centres more than eight combined circumradii apart)
+/// skip the 15 projections for the bounding-sphere bound, which is then
+/// within 12.5 % of the truth.
 pub(crate) fn separation(a: &Bar, b: &Bar) -> f64 {
     let delta = b.centre - a.centre;
+    let (distance, reach) = (delta.norm(), a.circumradius() + b.circumradius());
+    if distance > 8.0 * reach {
+        return distance - reach;
+    }
     let mut best = f64::NEG_INFINITY;
     let mut consider = |n: Vector3<f64>| {
         let gap = n.dot(&delta).abs() - a.projected_half_extent(&n) - b.projected_half_extent(&n);
@@ -97,9 +125,10 @@ pub(crate) fn separation(a: &Bar, b: &Bar) -> f64 {
 /// point quadrature against something `gap` away, or `None` if the bars are
 /// too close for it.
 pub(crate) fn point_orders(bar: &Bar, gap: f64) -> Option<[usize; 3]> {
+    let table = point_table();
     let mut orders = [1; 3];
     for (order, &half) in orders.iter_mut().zip(&bar.half) {
-        *order = gauss::order_for(half, gap, POINT_TOLERANCE, POINT_MAX_ORDER)?;
+        *order = table.order_for(half, gap)?;
     }
     (orders.iter().product::<usize>() <= CLOUD_CAPACITY).then_some(orders)
 }
@@ -116,17 +145,21 @@ pub(crate) struct Cloud {
 }
 
 impl Cloud {
-    pub(crate) fn new(bar: &Bar, orders: [usize; 3]) -> Self {
-        // Padding sits far away with zero weight, so whole SIMD lanes can be
-        // processed without a remainder loop; 1e150² does not overflow.
-        let mut cloud = Self {
-            x: [1e150; CLOUD_CAPACITY],
-            y: [1e150; CLOUD_CAPACITY],
-            z: [1e150; CLOUD_CAPACITY],
+    const fn empty() -> Self {
+        Self {
+            x: [0.0; CLOUD_CAPACITY],
+            y: [0.0; CLOUD_CAPACITY],
+            z: [0.0; CLOUD_CAPACITY],
             w: [0.0; CLOUD_CAPACITY],
             len: 0,
-        };
+        }
+    }
+
+    /// Overwrites the cloud with the points of `bar`; `orders` must come from
+    /// [`point_orders`], which bounds their product by the capacity.
+    fn fill(&mut self, bar: &Bar, orders: [usize; 3]) {
         let [rl, rw, rh] = orders.map(gauss::rule);
+        let mut i = 0;
         for (xl, wl) in rl.on(-bar.half[0], bar.half[0]) {
             for (xw, ww) in rw.on(-0.5, 0.5) {
                 for (xh, wh) in rh.on(-0.5, 0.5) {
@@ -134,19 +167,47 @@ impl Cloud {
                         + bar.axes[0] * xl
                         + bar.axes[1] * (2.0 * bar.half[1] * xw)
                         + bar.axes[2] * (2.0 * bar.half[2] * xh);
-                    let i = cloud.len;
-                    (cloud.x[i], cloud.y[i], cloud.z[i]) = (p.x, p.y, p.z);
-                    cloud.w[i] = wl * ww * wh;
-                    cloud.len += 1;
+                    (self.x[i], self.y[i], self.z[i]) = (p.x, p.y, p.z);
+                    self.w[i] = wl * ww * wh;
+                    i += 1;
                 }
             }
         }
-        cloud
+        self.len = i;
+        // Pad the last SIMD lane with zero-weight points far away, so whole
+        // lanes can be processed without a remainder loop; 1e150² does not
+        // overflow.
+        for pad in i..i.next_multiple_of(4) {
+            (self.x[pad], self.y[pad], self.z[pad]) = (1e150, 1e150, 1e150);
+            self.w[pad] = 0.0;
+        }
     }
 }
 
+thread_local! {
+    /// Per-thread scratch clouds: refilled for every pair, never reallocated.
+    static SCRATCH: RefCell<Box<(Cloud, Cloud)>> =
+        RefCell::new(Box::new((Cloud::empty(), Cloud::empty())));
+}
+
+/// `1/(A₁A₂) ∫∫ dV dV'/|r − r'|` by tensor Gauss–Legendre quadrature of the
+/// given orders over both bars; `simd` evaluates the inner quadrature in
+/// four-wide lanes.
+pub(crate) fn point_sum(a: &Bar, oa: [usize; 3], b: &Bar, ob: [usize; 3], simd: bool) -> f64 {
+    SCRATCH.with_borrow_mut(|scratch| {
+        let (ca, cb) = &mut **scratch;
+        ca.fill(a, oa);
+        cb.fill(b, ob);
+        if simd {
+            point_sum_simd(ca, cb)
+        } else {
+            point_sum_scalar(ca, cb)
+        }
+    })
+}
+
 /// `Σᵢ Σⱼ wᵢ wⱼ / |rᵢ − rⱼ|`, one pair at a time.
-pub(crate) fn point_sum_scalar(a: &Cloud, b: &Cloud) -> f64 {
+fn point_sum_scalar(a: &Cloud, b: &Cloud) -> f64 {
     let mut total = 0.0;
     for i in 0..a.len {
         let mut inner = 0.0;
@@ -161,7 +222,7 @@ pub(crate) fn point_sum_scalar(a: &Cloud, b: &Cloud) -> f64 {
 
 /// `Σᵢ Σⱼ wᵢ wⱼ / |rᵢ − rⱼ|`, with the inner quadrature over `b` evaluated
 /// four points at a time.
-pub(crate) fn point_sum_simd(a: &Cloud, b: &Cloud) -> f64 {
+fn point_sum_simd(a: &Cloud, b: &Cloud) -> f64 {
     let lanes = b.len.div_ceil(4);
     let pack = |v: &[f64; CLOUD_CAPACITY], lane: usize| {
         f64x4::new([
@@ -205,17 +266,13 @@ pub(crate) struct Sampled {
 /// `±` that of `a`); otherwise the skew kernel is used. Returns `None` if a
 /// pair of sample filaments is coaxial and overlapping (a divergent sample).
 pub(crate) fn sampled_filaments(a: &Bar, b: &Bar, gap: f64, parallel: bool) -> Option<Sampled> {
+    let table = sample_table();
     let mut resolved = true;
-    let mut order = |half: f64, bump: usize| match gauss::order_for(
-        half,
-        gap,
-        SAMPLE_TOLERANCE,
-        SAMPLE_MAX_ORDER,
-    ) {
+    let mut order = |half: f64, bump: usize| match table.order_for(half, gap) {
         Some(n) => n,
         None => {
             resolved = false;
-            SAMPLE_MAX_ORDER + bump
+            table.max_order() + bump
         }
     };
     // Unequal orders keep the two sample grids from coinciding when
@@ -285,14 +342,18 @@ mod tests {
         let a = bar([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 0.2, 0.1);
         let b = bar([0.3, 1.5, 0.4], [1.1, 2.0, 0.2], 0.1, 0.3);
         for orders in [[1, 1, 1], [3, 1, 1], [5, 2, 3], [7, 3, 3]] {
-            let (ca, cb) = (Cloud::new(&a, orders), Cloud::new(&b, orders));
-            let weight: f64 = ca.w.iter().sum();
+            let (mut ca, mut cb) = (Box::new(Cloud::empty()), Box::new(Cloud::empty()));
+            ca.fill(&a, orders);
+            cb.fill(&b, orders);
+            let weight: f64 = ca.w[..ca.len].iter().sum();
             assert!((weight - 1.0).abs() < 1e-14, "weights sum to the length");
             let (scalar, simd) = (point_sum_scalar(&ca, &cb), point_sum_simd(&ca, &cb));
             assert!(
                 ((scalar - simd) / scalar).abs() < 1e-14,
                 "{orders:?}: {scalar} vs {simd}"
             );
+            assert_eq!(point_sum(&a, orders, &b, orders, true), simd);
+            assert_eq!(point_sum(&a, orders, &b, orders, false), scalar);
         }
     }
 

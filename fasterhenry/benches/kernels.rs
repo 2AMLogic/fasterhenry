@@ -50,16 +50,21 @@ fn bench_batches(c: &mut Criterion) {
         ("simd", Execution::Simd),
         ("simd+rayon", Execution::Parallel),
     ];
-    // Two clouds of skew filaments a few lengths apart: all point quadrature,
-    // where the SIMD lanes do the work.
-    let rows = scattered(64, [0.0, 0.0, 0.0], 5e-3, 1);
-    let cols = scattered(64, [8e-3, 3e-3, 1e-3], 5e-3, 2);
+    // Two clouds of skew filaments many lengths apart: point quadrature of
+    // the lowest orders, dominated by per-pair set-up.
+    let far_rows = scattered(64, [0.0, 0.0, 0.0], 5e-3, 1);
+    let far_cols = scattered(64, [30e-3, 10e-3, 5e-3], 5e-3, 2);
+    // The same a length or two apart: higher orders, where the SIMD lanes of
+    // the inner quadrature do the work.
+    let mid_rows = scattered(64, [0.0, 0.0, 0.0], 1e-3, 3);
+    let mid_cols = scattered(64, [2.5e-3, 1e-3, 0.5e-3], 1e-3, 4);
     // A bundle against itself: closed forms and singular quadrature, where
     // only the thread pool helps.
     let near = bundle();
 
     for (name, r, c_) in [
-        ("point_quadrature_64x64", &rows, &cols),
+        ("point_quadrature_far_64x64", &far_rows, &far_cols),
+        ("point_quadrature_mid_64x64", &mid_rows, &mid_cols),
         ("bundle_32x32", &near, &near),
     ] {
         let mut group = c.benchmark_group(name);

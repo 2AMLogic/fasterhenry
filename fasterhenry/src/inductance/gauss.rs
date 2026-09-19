@@ -92,28 +92,47 @@ pub(crate) fn rule(n: usize) -> &'static Rule {
 /// integrated by the `n`-point rule with error `O(ρ^(−2n))` (Trefethen,
 /// *Approximation Theory and Approximation Practice*, Thm 19.3). Of all
 /// points at distance `δ` (in units of the half-length) from `[-1, 1]`, the
-/// one lying on the smallest ellipse is `iδ`, for which `ρ = δ + √(1 + δ²)`;
-/// that conservative value is used. Returns `None` when the requirement
-/// exceeds `max_order` (the near-singular regime).
-pub(crate) fn order_for(
-    half_extent: f64,
-    distance: f64,
-    tolerance: f64,
-    max_order: usize,
-) -> Option<usize> {
-    if half_extent <= 0.0 {
-        return Some(1);
+/// one lying on the smallest ellipse is `iδ`, for which
+/// `ρ = δ + √(1 + δ²) = exp(asinh δ)`; that conservative value is used. So
+/// `n` points suffice once `δ ≥ sinh(ln(1/tolerance) / 2n)`, and the rule is
+/// a table of those thresholds.
+#[derive(Debug)]
+pub(crate) struct OrderTable {
+    /// `thresholds[n − 1]` is the smallest `δ` for which `n` points suffice.
+    thresholds: Vec<f64>,
+}
+
+impl OrderTable {
+    /// Table for orders `1..=max_order`.
+    pub(crate) fn new(tolerance: f64, max_order: usize) -> Self {
+        let log = (1.0 / tolerance).ln();
+        Self {
+            thresholds: (1..=max_order)
+                .map(|n| (log / (2.0 * n as f64)).sinh())
+                .collect(),
+        }
     }
-    if distance <= 0.0 {
-        return None;
+
+    /// Largest order in the table.
+    pub(crate) fn max_order(&self) -> usize {
+        self.thresholds.len()
     }
-    let delta = distance / half_extent;
-    let ln_rho = (delta + delta.hypot(1.0)).ln();
-    let needed = ((1.0 / tolerance).ln() / (2.0 * ln_rho)).ceil();
-    if needed.is_finite() && needed <= max_order as f64 {
-        Some((needed as usize).max(1))
-    } else {
-        None
+
+    /// The order to use, or `None` when even the largest order of the table
+    /// is not enough (the near-singular regime).
+    pub(crate) fn order_for(&self, half_extent: f64, distance: f64) -> Option<usize> {
+        if half_extent <= 0.0 {
+            return Some(1);
+        }
+        if distance.is_nan() || distance <= 0.0 {
+            return None;
+        }
+        let delta = distance / half_extent;
+        // Thresholds decrease with n; take the first one that δ reaches.
+        self.thresholds
+            .iter()
+            .position(|&needed| delta >= needed)
+            .map(|index| index + 1)
     }
 }
 
@@ -154,19 +173,22 @@ mod tests {
 
     #[test]
     fn order_estimate_grows_as_the_singularity_approaches() {
-        assert_eq!(order_for(0.0, 1.0, 1e-9, 32), Some(1));
-        assert_eq!(order_for(1.0, 0.0, 1e-9, 32), None);
-        let far = order_for(1.0, 1e6, 1e-9, 32).unwrap();
-        let mid = order_for(1.0, 10.0, 1e-9, 32).unwrap();
-        let near = order_for(1.0, 1.0, 1e-9, 32).unwrap();
+        let table = OrderTable::new(1e-9, 64);
+        assert_eq!(table.max_order(), 64);
+        assert_eq!(table.order_for(0.0, 1.0), Some(1));
+        assert_eq!(table.order_for(1.0, 0.0), None);
+        assert_eq!(table.order_for(1.0, f64::NAN), None);
+        let far = table.order_for(1.0, 1e6).unwrap();
+        let mid = table.order_for(1.0, 10.0).unwrap();
+        let near = table.order_for(1.0, 1.0).unwrap();
         assert!(far <= mid && mid < near, "{far} {mid} {near}");
         assert_eq!(far, 1);
-        assert_eq!(order_for(1.0, 1e-3, 1e-9, 32), None);
+        assert_eq!(table.order_for(1.0, 1e-3), None);
 
-        // The estimate is honest: 1/(x − a) on [-1, 1] with the pole at
+        // The estimate is honest: 1/(a − x) on [-1, 1] with the pole at
         // distance δ from the interval reaches the requested accuracy.
         for delta in [0.5_f64, 1.0, 3.0, 30.0] {
-            let n = order_for(1.0, delta, 1e-9, 64).unwrap();
+            let n = table.order_for(1.0, delta).unwrap();
             let a = 1.0 + delta;
             let got: f64 = rule(n).on(-1.0, 1.0).map(|(x, w)| w / (a - x)).sum();
             let want = ((a + 1.0) / (a - 1.0)).ln();

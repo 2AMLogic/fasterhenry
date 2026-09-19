@@ -636,47 +636,67 @@ fn orthogonal_filaments_do_not_couple_even_when_touching() {
 }
 
 #[test]
-fn bars_meeting_at_a_bend_are_finite_and_close_to_a_fine_reference() {
-    // Two segments of a 45° bend overlap near their common node, where the
-    // cross-section integrand is weakly singular: the documented, unresolved
-    // regime. The reference samples the same exact line-to-line formula on a
-    // much finer cross-section grid.
+fn touching_and_overlapping_skew_bars_are_close_to_a_fine_reference() {
+    // Segments of a bend overlap near their common node, and crossing bars
+    // may interpenetrate: the cross-section integrand is then weakly
+    // singular and the sampling order is capped — the documented
+    // "unresolved" regime. The reference samples the same exact line-to-line
+    // formula on a cross-section grid twice as fine in each of the four
+    // dimensions (itself converged to a few 1e-5).
     let a = filament([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 0.1, 0.05);
-    let b = filament([1.0, 0.0, 0.0], [1.7, 0.7, 0.0], 0.1, 0.05);
-    let got = mutual_inductance_detailed(&a, &b).unwrap();
-    assert_eq!(got.method, Method::SampledFilaments);
-    assert!(!got.resolved);
-
-    let nodes = gauss_legendre(24);
+    let cases = [
+        (
+            "45° bend",
+            filament([1.0, 0.0, 0.0], [1.7, 0.7, 0.0], 0.1, 0.05),
+        ),
+        (
+            "135° bend",
+            filament([1.0, 0.0, 0.0], [0.3, 0.7, 0.0], 0.1, 0.05),
+        ),
+        (
+            "10° bend",
+            filament([1.0, 0.0, 0.0], [1.98, 0.17, 0.0], 0.1, 0.05),
+        ),
+        (
+            "interpenetrating crossing",
+            filament([0.2, -0.3, 0.0], [0.8, 0.3, 0.0], 0.1, 0.05),
+        ),
+    ];
+    let (nodes_a, nodes_b) = (gauss_legendre(16), gauss_legendre(17));
     let sample = |f: &Filament, y: f64, z: f64| {
         let offset =
             f.width_dir() * ((y - 0.5) * f.width()) + f.height_dir() * ((z - 0.5) * f.height());
         let (s, e) = (f.start() + offset, f.end() + offset);
         ([s.x, s.y, s.z], [e.x, e.y, e.z])
     };
-    let mut want = 0.0;
-    for &(ya, wya) in &nodes {
-        for &(za, wza) in &nodes {
-            let (a0, a1) = sample(&a, ya, za);
-            for &(yb, wyb) in &nodes {
-                for &(zb, wzb) in &nodes {
-                    let (b0, b1) = sample(&b, yb, zb);
-                    want += wya
-                        * wza
-                        * wyb
-                        * wzb
-                        * closed_form::inclined_filaments(a0, a1, b0, b1).unwrap();
+    for (name, b) in cases {
+        let got = mutual_inductance_detailed(&a, &b).unwrap();
+        assert_eq!(
+            (got.method, got.resolved),
+            (Method::SampledFilaments, false),
+            "{name}"
+        );
+        let mut want = 0.0;
+        for &(ya, wya) in &nodes_a {
+            for &(za, wza) in &nodes_a {
+                let (a0, a1) = sample(&a, ya, za);
+                for &(yb, wyb) in &nodes_b {
+                    for &(zb, wzb) in &nodes_b {
+                        let (b0, b1) = sample(&b, yb, zb);
+                        let line = closed_form::inclined_filaments(a0, a1, b0, b1).unwrap();
+                        want += wya * wza * wyb * wzb * line;
+                    }
                 }
             }
         }
+        assert!(got.value.is_finite());
+        assert!(
+            rel(got.value, want) < 1e-3,
+            "{name}: {} vs {want} ({:e})",
+            got.value,
+            rel(got.value, want)
+        );
     }
-    assert!(got.value.is_finite() && got.value > 0.0);
-    assert!(
-        rel(got.value, want) < 1e-2,
-        "{} vs {want} ({:e})",
-        got.value,
-        rel(got.value, want)
-    );
 }
 
 #[test]
@@ -824,4 +844,64 @@ fn inductance_matrix_is_symmetric_and_positive_definite() {
     let currents = Vector3::new(1.0, -2.0, 0.5);
     let pattern = DMatrix::from_fn(n, 1, |i, _| currents[i % 3]);
     assert!((pattern.transpose() * &l * &pattern)[(0, 0)] > 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Robustness
+// ---------------------------------------------------------------------------
+
+#[test]
+fn random_pairs_are_finite_symmetric_and_obey_cauchy_schwarz() {
+    // The Neumann kernel is positive definite, so M² ≤ L₁·L₂ for any two
+    // conductors, however they touch or overlap. Log-uniform sizes over four
+    // decades, random orientations, and separations from overlapping to far.
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut uniform = move || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut methods = std::collections::HashMap::new();
+    for case in 0..400 {
+        let mut make = |origin: [f64; 3], reach: f64| {
+            let length = 10f64.powf(-2.0 + 2.0 * uniform());
+            let width = length * 10f64.powf(-3.0 + 3.0 * uniform());
+            let height = width * 10f64.powf(-2.0 + 2.0 * uniform());
+            let start = origin.map(|c| c + reach * (uniform() - 0.5));
+            let dir = Vector3::new(uniform() - 0.5, uniform() - 0.5, uniform() - 0.5).normalize();
+            // Every fourth filament is axis-parallel, so that aligned and
+            // orthogonal pairs occur too.
+            let dir = if case % 4 == 0 { Vector3::x() } else { dir };
+            let end = Vector3::from(start) + dir * length;
+            filament(start, [end.x, end.y, end.z], width, height)
+        };
+        let a = make([0.0; 3], 0.0);
+        let reach = 10f64.powf(-3.0 + 4.0 * (case % 97) as f64 / 97.0);
+        let b = make([0.0; 3], reach);
+        let ab = mutual_inductance_detailed(&a, &b).unwrap();
+        let ba = mutual_inductance_detailed(&b, &a).unwrap();
+        assert_eq!(ab, ba, "case {case}");
+        assert!(ab.value.is_finite(), "case {case}");
+        let bound = (self_inductance(&a) * self_inductance(&b)).sqrt();
+        assert!(bound.is_finite() && bound > 0.0, "case {case}");
+        assert!(
+            ab.value.abs() <= bound * (1.0 + 1e-9),
+            "case {case} ({:?}): |M| = {:e} > √(L₁L₂) = {bound:e}",
+            ab.method,
+            ab.value.abs()
+        );
+        *methods.entry(ab.method).or_insert(0) += 1;
+    }
+    // The sweep exercises every evaluation path.
+    for method in [
+        Method::PointQuadrature,
+        Method::SampledFilaments,
+        Method::AlignedQuadrature,
+    ] {
+        assert!(
+            methods.contains_key(&method),
+            "{method:?} never used: {methods:?}"
+        );
+    }
 }
