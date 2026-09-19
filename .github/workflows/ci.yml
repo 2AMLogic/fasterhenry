@@ -103,6 +103,9 @@ jobs:
           set -euo pipefail
           # LICENSE and CHANGELOG.md are symlinks to the workspace root inside
           # each crate directory; check the tarballs hold the files themselves.
+          # Start from an empty target/package so the glob below matches exactly
+          # the tarball this step builds, never a stale one from an earlier run.
+          rm -rf target/package
           cargo package --workspace --no-verify
           for crate in fasterhenry fasterhenry-cli; do
             tarball="$(ls target/package/"$crate"-[0-9]*.crate)"
