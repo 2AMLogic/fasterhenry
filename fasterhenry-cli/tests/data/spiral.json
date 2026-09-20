@@ -1,0 +1,28 @@
+{
+  "geometry": {
+    "nodes": [
+      { "x": 0, "y": 0, "z": 0 },
+      { "x": 1e-3, "y": 0, "z": 0 },
+      { "x": 1e-3, "y": 1e-3, "z": 0 },
+      { "x": -1e-3, "y": 1e-3, "z": 0 },
+      { "x": -1e-3, "y": -1e-3, "z": 0 },
+      { "x": 2e-3, "y": -1e-3, "z": 0 },
+      { "x": 2e-3, "y": 2e-3, "z": 0 },
+      { "x": -2e-3, "y": 2e-3, "z": 0 },
+      { "x": -2e-3, "y": -2e-3, "z": 0 }
+    ],
+    "segments": [
+      { "a": 0, "b": 1, "width": 2e-4, "height": 3.5e-5, "sigma": 5.8e7 },
+      { "a": 1, "b": 2, "width": 2e-4, "height": 3.5e-5, "sigma": 5.8e7 },
+      { "a": 2, "b": 3, "width": 2e-4, "height": 3.5e-5, "sigma": 5.8e7 },
+      { "a": 3, "b": 4, "width": 2e-4, "height": 3.5e-5, "sigma": 5.8e7 },
+      { "a": 4, "b": 5, "width": 2e-4, "height": 3.5e-5, "sigma": 5.8e7 },
+      { "a": 5, "b": 6, "width": 2e-4, "height": 3.5e-5, "sigma": 5.8e7 },
+      { "a": 6, "b": 7, "width": 2e-4, "height": 3.5e-5, "sigma": 5.8e7 },
+      { "a": 7, "b": 8, "width": 2e-4, "height": 3.5e-5, "sigma": 5.8e7 }
+    ]
+  },
+  "ports": [{ "positive": 0, "negative": 8, "name": "spiral" }],
+  "discretization": { "uniform": { "nw": 3, "nh": 2 } },
+  "frequencies_hz": [1e6, 1e7, 1e8, 1e9]
+}

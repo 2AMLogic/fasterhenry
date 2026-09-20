@@ -11,8 +11,10 @@ readme = "README.md"
 keywords = ["peec", "inductance", "electromagnetics", "eda", "cli"]
 categories = ["command-line-utilities", "science", "simulation"]
 # Allowlist, not a denylist — see the note in ../fasterhenry/Cargo.toml.
-# LICENSE and CHANGELOG.md are symlinks to the workspace root.
-include = ["src/**/*.rs", "README.md", "LICENSE", "CHANGELOG.md"]
+# LICENSE and CHANGELOG.md are symlinks to the workspace root. build.rs only
+# stamps a `git describe` into `--version`; without a repository to describe it
+# reports `unknown`, so a published package still builds.
+include = ["src/**/*.rs", "build.rs", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [[bin]]
 name = "fasterhenry"
@@ -21,5 +23,7 @@ path = "src/main.rs"
 [dependencies]
 fasterhenry = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 anyhow = { workspace = true }
