@@ -7,13 +7,26 @@
 //! inductances) from the literature. It contains no code derived from MIT's
 //! FastHenry/FastCap, whose license permits only internal, noncommercial use
 //! and forbids redistribution. See CONTRIBUTING.md before adding anything.
+//!
+//! # Pipeline
+//!
+//! A [`Geometry`] of nodes and segments is cut into [`Filament`]s
+//! ([`discretize`]); their resistances and partial inductances
+//! ([`mod@inductance`]) form the branch impedance `R + jωL`; a loop basis
+//! ([`mesh`]) turns that into the mesh system, which [`solve()`] reduces to
+//! the impedance matrix `Z(ω)` seen at user-defined [`Port`]s over a list of
+//! frequencies, returned as a JSON-serializable [`SweepResult`].
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod dense;
 pub mod filament;
 pub mod geometry;
 pub mod inductance;
+pub mod mesh;
+pub mod result;
+pub mod solve;
 
 pub use filament::{discretize, DiscretizeError, Filament};
 pub use geometry::{
@@ -22,6 +35,9 @@ pub use geometry::{
 pub use inductance::{
     mutual_batch, mutual_inductance, partial_inductance_matrix, self_inductance, KernelError, MU0,
 };
+pub use mesh::{MeshError, MeshMatrix, Port};
+pub use result::{Counts, Provenance, SweepResult, Timing};
+pub use solve::{filament_resistance, solve, Discretization, MeshSystem, SolveError, Subdivision};
 
 /// Crate version, for CLI `--version` and JSON output provenance.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

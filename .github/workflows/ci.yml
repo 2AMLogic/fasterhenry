@@ -52,6 +52,11 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: test
         run: cargo test --workspace
+      # The 2 000-filament budget is defined on ubuntu-latest and only means
+      # something optimized, so it is an ignored test run here in release mode.
+      - name: performance smoke (2 000 filaments < 10 s, release)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --release -p fasterhenry --test perf_smoke -- --ignored --nocapture --test-threads=1
 
   package:
     name: Package (cargo publish --dry-run)
