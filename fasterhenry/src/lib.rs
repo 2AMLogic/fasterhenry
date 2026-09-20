@@ -13,10 +13,14 @@
 
 pub mod filament;
 pub mod geometry;
+pub mod inductance;
 
 pub use filament::{discretize, DiscretizeError, Filament};
 pub use geometry::{
     Geometry, GeometryError, LocalBasis, Node, NodeId, Segment, SegmentDef, SegmentError,
+};
+pub use inductance::{
+    mutual_batch, mutual_inductance, partial_inductance_matrix, self_inductance, KernelError, MU0,
 };
 
 /// Crate version, for CLI `--version` and JSON output provenance.
