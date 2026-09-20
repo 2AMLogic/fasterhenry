@@ -10,11 +10,14 @@ Prioritized roadmap of upcoming work, maintained by the Guide role.
 
 ## Ready
 
-Human-approved issues ready for implementation (`loom:issue`):
+M0 is complete (merged 2026-09-20/21 overnight session). The M1
+FastHenry-parity set, filed and ready in implementation order:
 
-- **#4**: Validation harness: PyPEEC + Mohan/Greenhouse closed forms on a
-  2-turn spiral (≤2 %) — the M0 "validated" gate. The dead sweep for this
-  issue left its worktree untouched; start fresh.
+- **#21**: binary `Zc.mat` (MAT v4) + SPICE subcircuit export
+- **#22**: ground planes (`G`) with holes
+- **#23**: skin-depth-adaptive filament subdivision
+- **#24**: precorrected-FFT acceleration
+- **#25**: coupling truncation (`.couples`-style)
 
 ## In Progress
 
