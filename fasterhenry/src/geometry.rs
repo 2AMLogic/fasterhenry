@@ -32,8 +32,30 @@ const VERTICAL_SIN_TOLERANCE: f64 = 1.0e-6;
 /// smaller than this fraction of its norm counts as parallel to the segment.
 const PARALLEL_TOLERANCE: f64 = 1.0e-9;
 
+/// `v.norm()`, computed so that a component magnitude outside roughly
+/// `1e-162..1e154` — where naively squaring it under/overflows `f64` even
+/// though the component itself is finite — does not corrupt the result.
+/// Divides by the largest-magnitude component first, so the intermediate
+/// squares stay near unit scale, then rescales back.
+///
+/// Any non-finite component still propagates as `NaN` (rather than being
+/// masked by `f64::max`'s NaN-ignoring behavior), so callers that check
+/// `is_finite()` on the result keep rejecting non-finite input exactly as
+/// before.
+fn scale_invariant_norm(v: Vector3<f64>) -> f64 {
+    if !(v.x.is_finite() && v.y.is_finite() && v.z.is_finite()) {
+        return f64::NAN;
+    }
+    let scale = v.x.abs().max(v.y.abs()).max(v.z.abs());
+    if scale == 0.0 {
+        return 0.0;
+    }
+    (v / scale).norm() * scale
+}
+
 /// A point in 3-D space at which segments begin, end, and connect.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Node {
     /// x coordinate.
     pub x: f64,
@@ -89,6 +111,7 @@ pub struct LocalBasis {
 
 /// Why a single [`Segment`] is not a valid conductor.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum SegmentError {
     /// An end-point coordinate is NaN or infinite.
     #[error("segment end point has a non-finite coordinate")]
@@ -123,6 +146,7 @@ pub enum SegmentError {
 /// [`validate`](Self::validate) (or go through [`Geometry`], which does)
 /// before relying on it.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Segment {
     /// Start of the centreline.
     pub a: Node,
@@ -210,7 +234,7 @@ impl Segment {
         }
 
         let span = self.b.position() - self.a.position();
-        let norm = span.norm();
+        let norm = scale_invariant_norm(span);
         if !(norm.is_finite() && norm > 0.0) {
             return Err(SegmentError::ZeroLength);
         }
@@ -219,7 +243,7 @@ impl Segment {
         let hint = match self.width_dir {
             Some(dir) => {
                 let dir = Vector3::from(dir);
-                let dir_norm = dir.norm();
+                let dir_norm = scale_invariant_norm(dir);
                 if !(dir_norm.is_finite() && dir_norm > 0.0) {
                     return Err(SegmentError::InvalidWidthDirection);
                 }
@@ -262,6 +286,7 @@ pub struct NodeId(pub usize);
 ///
 /// [`Geometry::segment`] resolves it to a self-contained [`Segment`].
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SegmentDef {
     /// Node at the start of the centreline.
     pub a: NodeId,
@@ -302,6 +327,7 @@ impl SegmentDef {
 
 /// Why a [`Geometry`] was rejected.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum GeometryError {
     /// A node has a NaN or infinite coordinate.
     #[error("node {node} has a non-finite coordinate")]
@@ -347,6 +373,7 @@ pub struct Geometry {
 
 /// Unvalidated wire form of a [`Geometry`], used to validate on deserialize.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GeometryParts {
     #[serde(default)]
     nodes: Vec<Node>,
@@ -640,6 +667,59 @@ mod tests {
         }
     }
 
+    /// Extreme-but-finite magnitudes must not be misreported as
+    /// `ZeroLength`/`InvalidWidthDirection` — the naive `norm()` under/overflows
+    /// for components outside roughly `1e-162..1e154`, even though the segment
+    /// is perfectly valid (#12).
+    #[test]
+    fn extreme_magnitude_but_valid_segments_are_accepted() {
+        // Endpoints far enough apart that `norm()` on the naive span would
+        // overflow to infinity (1e200^2 overflows f64).
+        let huge_span = Segment::new(
+            Node::new(0.0, 0.0, 0.0),
+            Node::new(1e200, 0.0, 0.0),
+            0.2,
+            0.1,
+            COPPER,
+        );
+        let basis = huge_span.basis().expect("large-but-finite span is valid");
+        assert_vec_close(basis.length, [1.0, 0.0, 0.0]);
+
+        // Endpoints so close that the naive span's norm underflows to exactly
+        // zero (1e-200^2 underflows below the smallest subnormal f64), even
+        // though the points are genuinely distinct.
+        let tiny_span = Segment::new(
+            Node::new(0.0, 0.0, 0.0),
+            Node::new(1e-200, 0.0, 0.0),
+            0.2,
+            0.1,
+            COPPER,
+        );
+        let basis = tiny_span.basis().expect("nonzero-but-tiny span is valid");
+        assert_vec_close(basis.length, [1.0, 0.0, 0.0]);
+
+        // An explicit width direction with an extreme-magnitude component:
+        // a perfectly good perpendicular direction whose naive norm overflows.
+        let huge_width_dir = unit_x_segment().with_width_dir([0.0, 1e200, 0.0]);
+        let basis = huge_width_dir
+            .basis()
+            .expect("huge-but-finite width_dir is valid");
+        assert_vec_close(basis.width, [0.0, 1.0, 0.0]);
+
+        // A genuinely zero-length segment or zero width_dir must still be
+        // rejected — the fix distinguishes overflow from real degeneracy,
+        // it does not relax the zero case.
+        let zero_length = Segment {
+            b: huge_span.a,
+            ..huge_span
+        };
+        assert_eq!(zero_length.validate(), Err(SegmentError::ZeroLength));
+        assert_eq!(
+            unit_x_segment().with_width_dir([0.0, 0.0, 0.0]).validate(),
+            Err(SegmentError::InvalidWidthDirection)
+        );
+    }
+
     fn two_segment_geometry() -> Geometry {
         let mut g = Geometry::new();
         let n0 = g.add_node(Node::new(0.0, 0.0, 0.0)).unwrap();
@@ -807,5 +887,30 @@ mod tests {
         let s = unit_x_segment().with_width_dir([0.0, 1.0, 1.0]);
         let back: Segment = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
+    }
+
+    /// A misspelt key (`"widthdir"` for `"width_dir"`) must be a parse error,
+    /// not silently accepted with the default orientation (#12).
+    #[test]
+    fn misspelt_segment_field_is_a_parse_error() {
+        let json = r#"{
+            "nodes": [{"x": 0, "y": 0, "z": 0}, {"x": 1, "y": 0, "z": 0}],
+            "segments": [{
+                "a": 0, "b": 1, "width": 0.2, "height": 0.1, "sigma": 5.8e7,
+                "widthdir": [0.0, 0.0, 1.0]
+            }]
+        }"#;
+        let err = serde_json::from_str::<Geometry>(json).unwrap_err();
+        assert!(err.to_string().contains("widthdir"), "{err}");
+
+        // Same check on a bare `Segment` and a bare `Node`.
+        let bad_segment = r#"{
+            "a": {"x": 0, "y": 0, "z": 0}, "b": {"x": 1, "y": 0, "z": 0},
+            "width": 0.2, "height": 0.1, "sigma": 5.8e7, "widthdir": [0.0, 0.0, 1.0]
+        }"#;
+        assert!(serde_json::from_str::<Segment>(bad_segment).is_err());
+
+        let bad_node = r#"{"x": 0, "y": 0, "z": 0, "w": 1}"#;
+        assert!(serde_json::from_str::<Node>(bad_node).is_err());
     }
 }
