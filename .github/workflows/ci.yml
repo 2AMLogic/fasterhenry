@@ -74,6 +74,20 @@ jobs:
             echo "::error::spiral_validation skipped although the reference was generated"
             exit 1
           fi
+      # The ground-plane PyPEEC gate: slotted-vs-solid differential on
+      # both solvers (contact terms cancel), release mode for the 96x64
+      # reference grid. ubuntu-latest only; it needs the venv above.
+      - name: validation reference (PyPEEC planes) + assert it did not skip
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          /tmp/pypeec-venv/bin/python tools/pypeec_reference.py             --fixture plane --voxel-um 5.0 --out target/pypeec_plane.json
+          /tmp/pypeec-venv/bin/python tools/pypeec_reference.py             --fixture plane-solid --voxel-um 5.0 --out target/pypeec_plane_solid.json
+          FASTERHENRY_PYPEEC_PLANE_REFERENCE=target/pypeec_plane.json           FASTERHENRY_PYPEEC_PLANE_SOLID_REFERENCE=target/pypeec_plane_solid.json             cargo test --release -p fasterhenry --test plane_validation -- --nocapture             | tee target/plane-validation.log
+          if grep -q "SKIPPED" target/plane-validation.log; then
+            echo "::error::plane_validation skipped although the references were generated"
+            exit 1
+          fi
       # The MAT v4 export round-trips through scipy.io.loadmat with values
       # identical to the JSON output (structure check lives in the Rust tests).
       - name: output formats (scipy loadmat vs JSON)

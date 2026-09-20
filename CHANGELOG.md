@@ -13,6 +13,15 @@ unstable and may change in any release.
 
 ### Added
 
+- Ground planes (`G` directive with `.hole`): thick rectangular sheets
+  discretized into a cell-centre bar mesh on the same kernels/mesh/solve
+  machinery; segment and port endpoints landing in a plane's footprint
+  snap to the nearest live cell node (assembly order-independent,
+  `.equiv` preserved). Deck syntax, library `fasterhenry::plane` API,
+  and validation: trace-over-plane DC/grid checks plus the PyPEEC
+  slot-differential gate (4.97 % measured, 5.5 % bound; CI regenerates
+  the references and asserts the test did not skip).
+
 - Output formats for tool interop: `--zc-mat` writes a binary MAT v4
   `Zc.mat`-format file (`Zc_1 … Zc_K` complex matrices + `freqs`; exact
   round-trip asserted against `scipy.io.loadmat` in CI), and `--spice
