@@ -63,3 +63,36 @@ here, not a defect of the engine.
   `K₂ = 2.75`, `d_out`/`d_in` measured from the metal extents.
 - **Analytic DC resistance**: the series sum `l_k / (σ w t)` over the
   eight segments.
+
+
+## Ground planes (issue #22)
+
+Two gates. First, a **trace-over-plane** fixture (0.2 mm × 35 µm trace, 8 mm
+long, 0.5 mm above a 10 × 6 × 0.035 mm plane, vias snapped to the mesh)
+against method-of-images references: the DC resistance is the parallel of
+trace and plane paths (verified against independent node analysis to seven
+digits during development), the loop inductance is grid-converged (2.4 %
+from 10 × 3 to 40 × 12), and the RF value is reported against the
+rectangle-image + via oracle — a composite fixture (vias, snap offsets,
+finite plane) that oracle does not bound at 10 %, so it is not asserted.
+
+Second, the **slot differential** — the AC's PyPEEC gate. A
+1.2 × 0.8 × 0.02 mm copper plane with a 0.2 × 0.64 mm slot, driven across
+its short ends; comparing `L(slotted) − L(solid)` cancels the differently
+modelled drive contacts on both sides, isolating the slot's physics.
+
+| quantity | fasterhenry (96 × 64) | PyPEEC 5 µm voxels | rel |
+|---|---|---|---|
+| ΔL (slot) | 0.173660 nH | 0.165443 nH | **4.97 %** (bound 5.5 %) |
+| ΔR (slot) | 2.280 mΩ | 2.222 mΩ | 2.6 % (bound 15 %) |
+
+Convergence, measured: fasterhenry's ΔL is 0.184 / 0.174 / 0.172 nH at
+48 × 32 / 96 × 64 / 192 × 128 (cell-centre mesh, ~1/n); PyPEEC moves 0.2 %
+from 5 µm to 2.5 µm voxels. The ~4 % residual at full convergence is the
+two discretizations' method bias; the bound leaves headroom rather than
+encoding today's number. CI regenerates both PyPEEC references and runs
+the gate in release mode (assert-not-skipped, like the spiral gate).
+
+The `--fixture plane` / `--fixture plane-solid` modes of
+`tools/pypeec_reference.py` regenerate the references
+(`--voxel-um 5`, ~10 s each locally).

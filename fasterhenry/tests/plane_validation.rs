@@ -161,3 +161,150 @@ fn dc_resistance_is_dominated_by_the_trace() {
     // resistance through the snap nodes keeps it above the ideal).
     assert!(r > 0.003 && r < r_trace);
 }
+
+/// The PyPEEC plane reference, if generated (`--fixture plane`).
+fn pypeec_plane_reference() -> Option<serde_json::Value> {
+    let path = std::env::var("FASTERHENRY_PYPEEC_PLANE_REFERENCE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../tools/pypeec_plane_reference.json")
+        });
+    path.exists()
+        .then(|| serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap())
+}
+
+/// The plane-with-slot fixture (1.2 × 0.8 × 0.02 mm copper, 0.2 × 0.64 mm
+/// slot) as a solvable system: port between the cell nodes nearest the
+/// two short ends.
+fn slotted_plane(nx: usize, ny: usize, slotted: bool) -> (Geometry, Vec<Port>, Discretization) {
+    let mut geometry = Geometry::new();
+    let holes = if slotted {
+        vec![fasterhenry::plane::Hole {
+            lo: [0.5e-3, 0.0],
+            hi: [0.7e-3, 0.64e-3],
+        }]
+    } else {
+        Vec::new()
+    };
+    let plane = GroundPlane {
+        lo: [0.0, 0.0],
+        hi: [1.2e-3, 0.8e-3],
+        z_top: 20e-6,
+        thickness: 20e-6,
+        nx,
+        ny,
+        sigma: SIGMA,
+        holes,
+    };
+    let centres = plane.build_into(&mut geometry).unwrap();
+    let west = plane.attach(&centres, [1e-9, 0.4e-3, 10e-6]).unwrap();
+    let east = plane
+        .attach(&centres, [1.2e-3 - 1e-9, 0.4e-3, 10e-6])
+        .unwrap();
+    let ports = vec![Port::new(west, east).named("plane")];
+    let subdivisions = vec![Subdivision::SINGLE; geometry.segment_count()];
+    (geometry, ports, Discretization::PerSegment(subdivisions))
+}
+
+/// The slotted minus solid differential — the slot's own contribution,
+/// with the (differently-modelled) drive contacts cancelling to first
+/// order on both sides of the comparison.
+#[test]
+fn slot_differential_against_pypec() {
+    let measure = |slotted: bool| -> (f64, f64) {
+        let system = slotted_plane(96, 64, slotted);
+        let result = solve(&system.0, &system.1, &system.2, &[0.0, 1e3]).unwrap();
+        let z_dc = result.impedance_ohm[0][(0, 0)];
+        let z_ac = result.impedance_ohm[1][(0, 0)];
+        (z_ac.im / (std::f64::consts::TAU * 1e3), z_dc.re)
+    };
+    let (l_slotted, r_slotted) = measure(true);
+    let (l_solid, r_solid) = measure(false);
+    let (dl, dr) = (l_slotted - l_solid, r_slotted - r_solid);
+    println!(
+        "fasterhenry: L {:.6} -> {:.6} nH (dL {:.6}); R {:.6} -> {:.6} (dR {:.6})",
+        l_solid * 1e9,
+        l_slotted * 1e9,
+        dl * 1e9,
+        r_solid,
+        r_slotted,
+        dr
+    );
+
+    // Grid sensitivity of the differential: the cell-centre mesh converges
+    // like ~1/n (measured dL: 0.184 / 0.174 / 0.172 nH at 48x32 / 96x64 /
+    // 192x128), so the 48x64-vs-96x64 gap is ~6 % — the reference grid is
+    // the comparison above, this only guards regressions in the trend.
+    {
+        let l = |nx: usize, ny: usize, slotted: bool| {
+            let s = slotted_plane(nx, ny, slotted);
+            let r = solve(&s.0, &s.1, &s.2, &[1e3]).unwrap();
+            r.impedance_ohm[0][(0, 0)].im / (std::f64::consts::TAU * 1e3)
+        };
+        let coarse = l(48, 32, true) - l(48, 32, false);
+        let grid_relative = (coarse - dl).abs() / dl;
+        println!("dL grid rel (48x32 vs 96x64) {grid_relative:.4}");
+        assert!(grid_relative < 0.07, "dL grid sensitivity {grid_relative}");
+    }
+
+    match pypeec_plane_reference() {
+        Some(reference) => {
+            let solid = std::env::var("FASTERHENRY_PYPEEC_PLANE_SOLID_REFERENCE")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../tools/pypeec_plane_solid_reference.json")
+                });
+            if !solid.exists() {
+                eprintln!("SKIPPED (solid-plane reference absent)");
+                return;
+            }
+            let solid: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(solid).unwrap()).unwrap();
+            let pypeec_dl = reference["l_h"].as_f64().unwrap() - solid["l_h"].as_f64().unwrap();
+            let pypeec_dr = reference["r_ohm"].as_f64().unwrap() - solid["r_ohm"].as_f64().unwrap();
+            let relative = (dl - pypeec_dl).abs() / pypeec_dl;
+            println!(
+                "PyPEEC: dL {:.6} nH (fh {:.6}, rel {relative:.4}); dR {:.6} vs {:.6} ohm",
+                pypeec_dl * 1e9,
+                dl * 1e9,
+                pypeec_dr,
+                dr
+            );
+            // Measured: fh dL converges 0.184 -> 0.174 -> 0.172 nH at
+            // 48x32 / 96x64 / 192x128; PyPEEC 0.1654 nH at 5 um voxels
+            // (0.2 % shift at 2.5 um). The residual ~4 % is the two
+            // discretizations' method bias plus contact terms the
+            // differential cancels only to first order; the bound leaves
+            // headroom rather than encoding today's exact number.
+            assert!(
+                relative < 0.055,
+                "PyPEEC slot-differential deviation {relative}"
+            );
+            assert!((dr - pypeec_dr).abs() / pypeec_dr < 0.15);
+        }
+        None => {
+            eprintln!(
+                "SKIPPED (pypeec plane reference absent): regenerate with\n  \
+                 python3 tools/pypeec_reference.py --fixture plane --voxel-um 5 \
+                 --out tools/pypeec_plane_reference.json and --fixture plane-solid \
+                 --out tools/pypeec_plane_solid_reference.json"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual convergence probe"]
+fn slot_convergence_probe() {
+    let l = |nx: usize, ny: usize, slotted: bool| {
+        let s = slotted_plane(nx, ny, slotted);
+        let r = solve(&s.0, &s.1, &s.2, &[1e3]).unwrap();
+        r.impedance_ohm[0][(0, 0)].im / (std::f64::consts::TAU * 1e3)
+    };
+    for (nx, ny) in [(48usize, 32usize), (96, 64), (192, 128)] {
+        let dl = l(nx, ny, true) - l(nx, ny, false);
+        println!("{nx}x{ny}: dL = {:.6} nH", dl * 1e9);
+    }
+}
