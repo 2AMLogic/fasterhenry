@@ -13,6 +13,13 @@ unstable and may change in any release.
 
 ### Added
 
+- Validation harness (M0's "validated" gate): the 2-turn square spiral
+  fixture checked against PyPEEC 5.8.0 (2 % tolerance; `tools/pypeec_reference.py`
+  regenerates the reference, CI regenerates it on the Linux legs and
+  asserts the test did not skip), Greenhouse segment summation (5 %), and
+  the analytic DC resistance; Mohan modified-Wheeler reported for the
+  record. Measured: 0.47 % vs PyPEEC, 0.12 % vs Greenhouse. See
+  `docs/validation.md`.
 - `fasterhenry run <deck.inp | problem.json> [--freq FMIN FMAX NDEC]
   [--json OUT] [--zc-mat OUT]`: the CLI's first real subcommand. Reads an
   M0-subset FastHenry `.inp` deck (public format; clean-room parser with

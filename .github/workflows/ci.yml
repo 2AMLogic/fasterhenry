@@ -57,6 +57,23 @@ jobs:
       - name: performance smoke (2 000 filaments < 10 s, release)
         if: matrix.os == 'ubuntu-latest'
         run: cargo test --release -p fasterhenry --test perf_smoke -- --ignored --nocapture --test-threads=1
+      # The validation oracle regenerates the PyPEEC reference here (nothing
+      # generated is committed) and asserts the test did NOT take its skip
+      # path. Linux legs only: pypeec wheels are not needed elsewhere.
+      - name: validation reference (PyPEEC) + assert it did not skip
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/pypeec-venv
+          /tmp/pypeec-venv/bin/pip install -q pypeec==5.8.0
+          /tmp/pypeec-venv/bin/python tools/pypeec_reference.py --out target/pypeec_reference.json
+          FASTERHENRY_PYPEEC_REFERENCE=target/pypeec_reference.json \
+            cargo test -p fasterhenry --test spiral_validation -- --nocapture \
+            | tee target/spiral-validation.log
+          if grep -q "SKIPPED" target/spiral-validation.log; then
+            echo "::error::spiral_validation skipped although the reference was generated"
+            exit 1
+          fi
 
   package:
     name: Package (cargo publish --dry-run)

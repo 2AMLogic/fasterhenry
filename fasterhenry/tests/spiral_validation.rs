@@ -77,15 +77,7 @@ fn spiral_system() -> (Geometry, Vec<Port>, Discretization) {
         nodes.push(Node::new(end.0 * UM, end.1 * UM, T_UM / 2.0 * UM));
     }
     let defs: Vec<SegmentDef> = (0..segments.len())
-        .map(|i| {
-            SegmentDef::new(
-                NodeId(i),
-                NodeId(i + 1),
-                W_UM * UM,
-                T_UM * UM,
-                SIGMA,
-            )
-        })
+        .map(|i| SegmentDef::new(NodeId(i), NodeId(i + 1), W_UM * UM, T_UM * UM, SIGMA))
         .collect();
     let geometry = Geometry::from_parts(nodes, defs).unwrap();
     let ports = vec![Port::new(NodeId(0), NodeId(segments.len())).named("spiral")];
@@ -156,9 +148,7 @@ fn greenhouse_total(segments: &[Segment]) -> f64 {
             // bounds; the relative-direction sign carries the orientation.
             let (s0, s1) = if a.0 <= a.1 { (a.0, a.1) } else { (a.1, a.0) };
             let (t0, t1) = if b.0 <= b.1 { (b.0, b.1) } else { (b.1, b.0) };
-            total += 2.0
-                * sign
-                * filament_mutual(s0 * UM, s1 * UM, t0 * UM, t1 * UM, d);
+            total += 2.0 * sign * filament_mutual(s0 * UM, s1 * UM, t0 * UM, t1 * UM, d);
         }
     }
     total
@@ -212,9 +202,16 @@ fn spiral_inductance_against_references() {
         })
         .sum::<f64>();
 
-    println!("fasterhenry  L = {:.6} nH   R = {:.6} ohm", inductance * 1e9, resistance);
+    println!(
+        "fasterhenry  L = {:.6} nH   R = {:.6} ohm",
+        inductance * 1e9,
+        resistance
+    );
     println!("greenhouse  L = {:.6} nH", greenhouse * 1e9);
-    println!("mohan-mw    L = {:.6} nH (reported, ±20 % class)", mohan * 1e9);
+    println!(
+        "mohan-mw    L = {:.6} nH (reported, ±20 % class)",
+        mohan * 1e9
+    );
     println!("dc analytic R = {:.6} ohm", dc_analytic);
 
     // DC resistance: exact series sum, no proximity correction at DC.
@@ -226,7 +223,10 @@ fn spiral_inductance_against_references() {
     // Greenhouse: 5 % stated tolerance.
     let rel_greenhouse = (inductance - greenhouse).abs() / greenhouse;
     println!("vs Greenhouse: rel {rel_greenhouse:.4} (tol 0.05)");
-    assert!(rel_greenhouse < 0.05, "Greenhouse deviation {rel_greenhouse}");
+    assert!(
+        rel_greenhouse < 0.05,
+        "Greenhouse deviation {rel_greenhouse}"
+    );
 
     match pypeec_reference() {
         Some(path) => {
