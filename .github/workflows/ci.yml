@@ -52,3 +52,67 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: test
         run: cargo test --workspace
+
+  package:
+    name: Package (cargo publish --dry-run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Nothing here uploads anything: every publish command carries --dry-run,
+      # and the job has no registry token. The real publish is an operator step.
+      - name: Package contents (allowlist, both crates)
+        run: |
+          set -euo pipefail
+          # A published crate carries sources, the manifest, README, LICENSE and
+          # CHANGELOG -- plus the files cargo itself generates. Anything else
+          # (fixtures, oracle/venv files, .loom/.claude tooling) fails the job.
+          allowed='^(\.cargo_vcs_info\.json|Cargo\.lock|Cargo\.toml|Cargo\.toml\.orig|README\.md|LICENSE|CHANGELOG\.md|src/.+\.rs)$'
+          for crate in fasterhenry fasterhenry-cli; do
+            echo "::group::cargo package -p $crate --list"
+            list="$(cargo package -p "$crate" --list)"
+            printf '%s\n' "$list"
+            echo "::endgroup::"
+            if extra="$(printf '%s\n' "$list" | grep -Ev "$allowed")"; then
+              echo "::error::$crate would package files outside the allowlist:"
+              printf '%s\n' "$extra"
+              exit 1
+            fi
+            for required in Cargo.toml README.md LICENSE CHANGELOG.md; do
+              if ! printf '%s\n' "$list" | grep -xF "$required" >/dev/null; then
+                echo "::error::$crate would not package $required"
+                exit 1
+              fi
+            done
+          done
+      - name: cargo publish --dry-run (library)
+        run: cargo publish --dry-run -p fasterhenry
+      # `cargo publish --dry-run -p fasterhenry-cli` on its own cannot pass until
+      # the library's first real publish: the packaged CLI manifest depends on
+      # `fasterhenry = "0.0.1"` from crates.io, and that version is not in the
+      # index yet ("no matching package named `fasterhenry` found"). The
+      # --workspace form below packages the library first and verifies the CLI
+      # against that local package, so the CLI still gets a full verify build.
+      # Once the library is on crates.io, a per-crate CLI dry-run works too.
+      - name: cargo publish --dry-run (workspace, verifies the CLI against the packaged library)
+        run: cargo publish --dry-run --workspace
+      - name: Each packaged crate ships a real LICENSE, README and CHANGELOG
+        run: |
+          set -euo pipefail
+          # LICENSE and CHANGELOG.md are symlinks to the workspace root inside
+          # each crate directory; check the tarballs hold the files themselves.
+          # Start from an empty target/package so the glob below matches exactly
+          # the tarball this step builds, never a stale one from an earlier run.
+          rm -rf target/package
+          cargo package --workspace --no-verify
+          for crate in fasterhenry fasterhenry-cli; do
+            tarball="$(ls target/package/"$crate"-[0-9]*.crate)"
+            root="$(basename "$tarball" .crate)"
+            # (no `grep -q`: under pipefail an early exit would SIGPIPE tar)
+            tar -xzOf "$tarball" "$root/LICENSE" | grep 'MIT License' >/dev/null
+            tar -xzOf "$tarball" "$root/CHANGELOG.md" | grep '^# Changelog$' >/dev/null
+            tar -xzOf "$tarball" "$root/README.md" | grep "^# $crate\$" >/dev/null
+            echo "$crate: $tarball ok"
+          done
