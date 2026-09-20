@@ -131,6 +131,7 @@ impl Filament {
 
 /// Why [`discretize`] failed.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum DiscretizeError {
     /// The segment itself is not a valid conductor.
     #[error(transparent)]
@@ -138,6 +139,14 @@ pub enum DiscretizeError {
     /// A filament count of zero was requested along the width or the height.
     #[error("filament counts must be at least 1, got nw = {nw}, nh = {nh}")]
     ZeroSubdivision {
+        /// Requested number of filaments across the width.
+        nw: usize,
+        /// Requested number of filaments across the height.
+        nh: usize,
+    },
+    /// `nw * nh` would overflow `usize`.
+    #[error("filament grid nw * nh overflows usize, got nw = {nw}, nh = {nh}")]
+    Overflow {
         /// Requested number of filaments across the width.
         nw: usize,
         /// Requested number of filaments across the height.
@@ -194,6 +203,9 @@ pub fn discretize(
     if nw == 0 || nh == 0 {
         return Err(DiscretizeError::ZeroSubdivision { nw, nh });
     }
+    let filament_count = nw
+        .checked_mul(nh)
+        .ok_or(DiscretizeError::Overflow { nw, nh })?;
     let basis = segment.basis()?;
     let (a, b) = (segment.a.position(), segment.b.position());
     // Shared by the whole bundle, so parallel filaments compare equal in length.
@@ -205,7 +217,7 @@ pub fn discretize(
     // the full extent: cell centres of a uniform grid on [−½, ½].
     let fraction = |index: usize, count: usize| (index as f64 + 0.5) / count as f64 - 0.5;
 
-    let mut filaments = Vec::with_capacity(nw * nh);
+    let mut filaments = Vec::with_capacity(filament_count);
     for j in 0..nh {
         let along_height = basis.height * (fraction(j, nh) * segment.height);
         for i in 0..nw {
@@ -251,6 +263,31 @@ mod tests {
             COPPER,
         )
         .with_width_dir([0.2, 1.0, 0.1])
+    }
+
+    /// `nw * nh` overflowing `usize` must be a `DiscretizeError`, never a
+    /// panic (debug) or a wildly undersized `Vec::with_capacity` (release,
+    /// where the unchecked multiply used to wrap) — #12.
+    #[test]
+    fn overflowing_filament_grid_is_rejected_not_panicked() {
+        let err = discretize(&skew_segment(), usize::MAX, 2).unwrap_err();
+        assert_eq!(
+            err,
+            DiscretizeError::Overflow {
+                nw: usize::MAX,
+                nh: 2
+            }
+        );
+        // Multiplying by 1 never overflows, so this remains an ordinary
+        // ZeroSubdivision-free call — a `usize::MAX` sanity control.
+        let err = discretize(&skew_segment(), 0, usize::MAX).unwrap_err();
+        assert_eq!(
+            err,
+            DiscretizeError::ZeroSubdivision {
+                nw: 0,
+                nh: usize::MAX
+            }
+        );
     }
 
     #[test]
