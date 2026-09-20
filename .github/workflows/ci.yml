@@ -74,7 +74,7 @@ jobs:
           # A published crate carries sources, the manifest, README, LICENSE and
           # CHANGELOG -- plus the files cargo itself generates. Anything else
           # (fixtures, oracle/venv files, .loom/.claude tooling) fails the job.
-          allowed='^(\.cargo_vcs_info\.json|Cargo\.lock|Cargo\.toml|Cargo\.toml\.orig|README\.md|LICENSE|CHANGELOG\.md|src/.+\.rs)$'
+          allowed='^(\.cargo_vcs_info\.json|Cargo\.lock|Cargo\.toml|Cargo\.toml\.orig|README\.md|LICENSE|CHANGELOG\.md|build\.rs|src/.+\.rs)$'
           for crate in fasterhenry fasterhenry-cli; do
             echo "::group::cargo package -p $crate --list"
             list="$(cargo package -p "$crate" --list)"

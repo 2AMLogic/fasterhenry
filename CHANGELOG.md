@@ -13,6 +13,19 @@ unstable and may change in any release.
 
 ### Added
 
+- `fasterhenry run <deck.inp | problem.json> [--freq FMIN FMAX NDEC]
+  [--json OUT] [--zc-mat OUT]`: the CLI's first real subcommand. Reads an
+  M0-subset FastHenry `.inp` deck (public format; clean-room parser with
+  line-numbered errors) or a JSON problem document, runs the sweep, and
+  writes the JSON result (with provenance) and optionally a plain-text
+  impedance matrix. `--version` prints the crate version plus a
+  build-time `git describe`.
+- Round-trip guarantee: a self-authored two-turn spiral as an `.inp` deck
+  and as the equivalent JSON document produce bit-identical sweeps
+  (`fasterhenry-cli` integration test).
+- `--freq` overrides the deck's sweep with the same decade sampling `.freq`
+  uses (`fmin == fmax` runs one frequency; `0` runs the DC solve).
+
 - Cargo workspace with the `fasterhenry` library crate and the
   `fasterhenry-cli` crate, which installs the `fasterhenry` binary.
 - Packaging metadata for both crates (`readme`, `documentation`, `keywords`,

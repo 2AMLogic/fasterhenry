@@ -272,7 +272,9 @@ dependencies = [
  "anyhow",
  "clap",
  "fasterhenry",
+ "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
