@@ -19,6 +19,8 @@
 //! | `E<name> N<a> N<b> [field]=<v> …` | Segment between two nodes; fields as for `.default` minus `x`/`y`/`z` |
 //! | `.external N<+> N<-> [name]` | A port: current in at `N<+>`, out at `N<->`, labelled `name` (extension; default `<+>/<->`) |
 //! | `.freq fmin=<v> fmax=<v> ndec=<n>` | Frequency sweep in hertz (see below) |
+//! | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=]` | Ground plane: extent, top surface `z`, thickness `t` down, `nx × ny` cells |
+//! | `.hole G<name> x1 y1 x2 y2` | Rectangular hole in that plane's footprint |
 //! | `.equiv N<a> N<b>` | Electrically join two nodes into one |
 //! | `.end` | End of deck (required) |
 //!
@@ -45,15 +47,19 @@
 //! * **`.equiv a b`** makes `b` an alias of `a`: every reference — declared
 //!   before or after the directive — resolves to `a`, and `b`'s node does
 //!   not appear in the resulting geometry.
-//! * Everything else — `G` ground planes in particular, which are M1 — is
-//!   rejected with an error carrying the line number. Deck-level problems
-//!   that belong to no single line (missing `.units`, a geometry validation
-//!   failure) report line 0.
+//! * **Planes connect by landing**: a segment or port endpoint that lies
+//!   within a plane's footprint and depth is snapped to the nearest live
+//!   cell-centre node, wiring the segment into the plane mesh. Declare the
+//!   plane before or after the segment — the assembly is order-independent.
+//! * Everything else is rejected with an error carrying the line number.
+//!   Deck-level problems that belong to no single line (missing `.units`, a
+//!   geometry validation failure) report line 0.
 
 use std::collections::HashMap;
 
 use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
 use fasterhenry::mesh::Port;
+use fasterhenry::plane::{GroundPlane, Hole};
 use fasterhenry::solve::{Discretization, Subdivision};
 
 /// A parsed `.inp` deck: everything [`fasterhenry::solve::solve`] needs.
@@ -70,6 +76,13 @@ pub struct Deck {
     pub discretization: Discretization,
     /// Frequencies in hertz from `.freq`.
     pub frequencies: Vec<f64>,
+}
+
+/// A `G` line pending assembly: the plane and the name `.hole` refers to.
+#[derive(Clone, Debug)]
+struct PlaneSpec {
+    name: String,
+    plane: GroundPlane,
 }
 
 /// A parse error: what went wrong, and on which line (`0` = deck-level).
@@ -161,7 +174,7 @@ fn parse_count(text: &str, what: &str, line: usize) -> Result<usize, ParseError>
 fn parse_value(key: &str, value: &str, unit: f64, line: usize) -> Result<f64, ParseError> {
     match key {
         "sigma" => Ok(parse_number(value, line)? / unit),
-        "nwinc" | "nhinc" => Ok(parse_count(value, key, line)? as f64),
+        "nwinc" | "nhinc" | "nx" | "ny" => Ok(parse_count(value, key, line)? as f64),
         _ => Ok(parse_number(value, line)? * unit),
     }
 }
@@ -281,6 +294,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     let mut subdivisions: Vec<Subdivision> = Vec::new();
     let mut ports: Vec<Port> = Vec::new();
     let mut frequencies: Vec<f64> = Vec::new();
+    let mut planes: Vec<PlaneSpec> = Vec::new();
     let mut ended = false;
 
     for &(number, ref tokens) in &lines {
@@ -365,6 +379,30 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                     }
                     names.aliases.insert(b, a);
                 }
+                "hole" => {
+                    if tokens.len() != 6 {
+                        return Err(err(number, "expected .hole G<name> x1 y1 x2 y2"));
+                    }
+                    let name = tokens[1];
+                    let mut bounds = [0.0f64; 4];
+                    for (slot, token) in bounds.iter_mut().zip(&tokens[2..]) {
+                        *slot = parse_number(token, number)? * factor;
+                    }
+                    let wanted = name.strip_prefix(['g', 'G']).unwrap_or(name);
+                    let plane = planes
+                        .iter_mut()
+                        .find(|spec| spec.name[1..] == *wanted || spec.name == name)
+                        .ok_or_else(|| {
+                            err(
+                                number,
+                                format!("'.hole' names unknown ground plane '{name}'"),
+                            )
+                        })?;
+                    plane.plane.holes.push(Hole {
+                        lo: [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
+                        hi: [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
+                    });
+                }
                 "end" => {
                     if tokens.len() != 1 {
                         return Err(err(number, "expected .end (no arguments)"));
@@ -375,7 +413,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                     return Err(err(
                         number,
                         format!(
-                            "'.{other}' is not in the M0 subset (ground planes ('G') and the rest of FastHenry are M1)"
+                            "'.{other}' is not in the deck subset (the rest of FastHenry is M1+)"
                         ),
                     ));
                 }
@@ -486,10 +524,76 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                 subdivisions.push(Subdivision::new(nwinc.unwrap_or(1), nhinc.unwrap_or(1)));
             }
             Some('g') => {
-                return Err(err(
-                    number,
-                    "ground planes ('G' lines) are not supported in M0 (M1 feature)",
-                ));
+                if unit.is_none() {
+                    return Err(err(
+                        number,
+                        "ground plane before .units (lengths need a unit)",
+                    ));
+                }
+                if tokens.len() < 8 {
+                    return Err(err(
+                        number,
+                        "expected G<name> x1 y1 z1 x2 y2 z2 thickness [nx=…] [ny=…]",
+                    ));
+                }
+                let mut corners = [None; 7];
+                for (slot, token) in corners.iter_mut().zip(&tokens[1..8]) {
+                    *slot = Some(
+                        parse_number(token, number).map_err(|mut error| {
+                            error.line = number;
+                            error
+                        })? * factor,
+                    );
+                }
+                let mut nx = 1usize;
+                let mut ny = 1usize;
+                for token in &tokens[8..] {
+                    let (key, raw_value) = parse_field(token, number)?;
+                    let value = parse_value(&key, &raw_value, factor, number)?;
+                    match key.as_str() {
+                        "nx" => nx = value as usize,
+                        "ny" => ny = value as usize,
+                        other => {
+                            return Err(err(
+                                number,
+                                format!("unknown G field '{other}' (supported: nx, ny)"),
+                            ));
+                        }
+                    }
+                }
+                let corners: Vec<f64> = corners.into_iter().flatten().collect();
+                let [x1, y1, z1, x2, y2, z2, thickness] = [
+                    corners[0], corners[1], corners[2], corners[3], corners[4], corners[5],
+                    corners[6],
+                ];
+                if nx < 1 || ny < 1 {
+                    return Err(err(
+                        number,
+                        format!(
+                            "ground plane '{head}' needs nx and ny >= 1 (got nx={nx}, ny={ny})"
+                        ),
+                    ));
+                }
+                planes.push(PlaneSpec {
+                    name: head.to_string(),
+                    plane: GroundPlane {
+                        lo: [x1.min(x2), y1.min(y2)],
+                        hi: [x1.max(x2), y1.max(y2)],
+                        z_top: z1.max(z2),
+                        thickness,
+                        nx,
+                        ny,
+                        sigma: defaults.sigma.ok_or_else(|| {
+                            err(
+                                number,
+                                format!(
+                                    "ground plane '{head}' has no conductivity: set sigma= in .default"
+                                ),
+                            )
+                        })?,
+                        holes: Vec::new(),
+                    },
+                });
             }
             _ => {
                 return Err(err(
@@ -528,28 +632,122 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
         }
         compaction[id].expect("a canonical node is live by construction")
     };
-    let nodes: Vec<Node> = positions
-        .iter()
-        .enumerate()
-        .filter(|(slot, _)| compaction[*slot].is_some())
-        .map(|(_, &[x, y, z])| Node::new(x, y, z))
-        .collect();
-    let segments: Vec<SegmentDef> = segment_defs
-        .iter()
-        .map(|&(a, b, w, h, sigma)| {
-            SegmentDef::new(NodeId(resolve(a)), NodeId(resolve(b)), w, h, sigma)
-        })
-        .collect();
-    for port in &mut ports {
-        port.positive = NodeId(resolve(port.positive.0));
-        port.negative = NodeId(resolve(port.negative.0));
+    // Assembly: ground-plane meshes first (their cell nodes and bars), then
+    // the declared nodes, then the segments — with every endpoint that
+    // lands in a plane's footprint snapped to the nearest live cell node.
+    let mut geometry = Geometry::new();
+    let mut plane_meshes: Vec<(&PlaneSpec, Vec<Vec<Option<NodeId>>>)> = Vec::new();
+    let mut plane_bars = 0usize;
+    for spec in &planes {
+        let centres = spec
+            .plane
+            .build_into(&mut geometry)
+            .map_err(|error| ParseError {
+                line: 0,
+                message: error.to_string(),
+            })?;
+        plane_bars = geometry.segment_count();
+        plane_meshes.push((spec, centres));
     }
-    let geometry = Geometry::from_parts(nodes, segments).map_err(|error| ParseError {
-        line: 0,
-        message: error.to_string(),
-    })?;
+    // Endpoint resolution: follow `.equiv` aliases to the canonical slot,
+    // take that slot's position, and if it lands in a plane's footprint,
+    // snap to the nearest live cell node. Plane ids are final here; the
+    // declared nodes that are still referenced as themselves get their ids
+    // below (a snapped endpoint's declared node is dropped, not orphaned).
+    let snap = |slot: usize| -> Result<Option<usize>, ParseError> {
+        let live = resolve(slot);
+        let position = live_position(live, &positions, &compaction);
+        for (spec, centres) in &plane_meshes {
+            if spec.plane.contains(position, 0.0) {
+                return Ok(Some(
+                    spec.plane
+                        .attach(centres, position)
+                        .map_err(|error| ParseError {
+                            line: 0,
+                            message: error.to_string(),
+                        })?
+                        .0,
+                ));
+            }
+        }
+        Ok(None)
+    };
+
+    // One endpoint: the plane node it snapped to (final id), or the live
+    // declared slot it stays on (id assigned below).
+    let endpoint = |slot: usize| -> Result<(Option<usize>, usize), ParseError> {
+        Ok((snap(slot)?, resolve(slot)))
+    };
+    type End = (Option<usize>, usize);
+    let segment_ends: Vec<(End, End, (f64, f64, f64))> = segment_defs
+        .iter()
+        .map(|&(a, b, w, h, sigma)| Ok((endpoint(a)?, endpoint(b)?, (w, h, sigma))))
+        .collect::<Result<_, ParseError>>()?;
+    let port_ends: Vec<(End, End)> = ports
+        .iter()
+        .map(|port| Ok((endpoint(port.positive.0)?, endpoint(port.negative.0)?)))
+        .collect::<Result<_, ParseError>>()?;
+
+    // Live declared slots still referenced as themselves keep their nodes.
+    let mut used = vec![false; positions.len()];
+    let mark = |endpoint: &(Option<usize>, usize), used: &mut Vec<bool>| {
+        if endpoint.0.is_none() {
+            used[endpoint.1] = true;
+        }
+    };
+    for (a, b, _) in &segment_ends {
+        mark(a, &mut used);
+        mark(b, &mut used);
+    }
+    for (a, b) in &port_ends {
+        mark(a, &mut used);
+        mark(b, &mut used);
+    }
+    let mut live_to_id = vec![usize::MAX; positions.len()];
+    let mut next_id = geometry.nodes().len();
+    for (slot, &position) in positions.iter().enumerate() {
+        let Some(live) = compaction[slot] else {
+            continue; // aliased away by .equiv
+        };
+        if !used[live] {
+            continue; // every reference snapped into a plane
+        }
+        geometry
+            .add_node(Node::new(position[0], position[1], position[2]))
+            .map_err(|error| ParseError {
+                line: 0,
+                message: error.to_string(),
+            })?;
+        live_to_id[live] = next_id;
+        next_id += 1;
+    }
+
+    let final_id = |endpoint: &(Option<usize>, usize)| -> usize {
+        endpoint.0.unwrap_or(live_to_id[endpoint.1])
+    };
+    for ((a, b, (w, h, sigma)), _) in segment_ends.iter().zip(0..) {
+        geometry
+            .add_segment(SegmentDef::new(
+                NodeId(final_id(a)),
+                NodeId(final_id(b)),
+                *w,
+                *h,
+                *sigma,
+            ))
+            .map_err(|error| ParseError {
+                line: 0,
+                message: error.to_string(),
+            })?;
+    }
+    for (port, (positive, negative)) in ports.iter_mut().zip(&port_ends) {
+        port.positive = NodeId(final_id(positive));
+        port.negative = NodeId(final_id(negative));
+    }
 
     let discretization = {
+        let mut all = vec![Subdivision::SINGLE; plane_bars];
+        all.extend(subdivisions);
+        let subdivisions = all;
         let first = subdivisions[0];
         if subdivisions.iter().all(|&sub| sub == first) {
             Discretization::Uniform(first)
@@ -565,6 +763,21 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
         discretization,
         frequencies,
     })
+}
+
+/// The position of the `live`-th surviving slot (the index space `resolve`
+/// produces: aliased-away slots are compacted out, survivors keep order).
+fn live_position(live: usize, positions: &[[f64; 3]], compaction: &[Option<usize>]) -> [f64; 3] {
+    let mut seen = 0usize;
+    for (slot, mapped) in compaction.iter().enumerate() {
+        if mapped.is_some() {
+            if seen == live {
+                return positions[slot];
+            }
+            seen += 1;
+        }
+    }
+    unreachable!("compaction guarantees a live slot for every resolved id")
 }
 
 /// The `.freq` decade sweep; see the module documentation. Integer decades
@@ -761,22 +974,61 @@ e1 n1 n2 w=1 h=1 sigma=1.0
     }
 
     #[test]
-    fn g_ground_plane_rejected_with_line_number() {
-        let error = parse(
+    fn g_ground_plane_builds_mesh_and_holes() {
+        let deck = parse_ok(
             "\
-.units m
-n1 x=0 y=0 z=0
-n2 x=1 y=0 z=0
-e1 n1 n2 w=1 h=1 sigma=1.0
-G1 x=0 y=0 z=0
+.units mm
+.default sigma=5.8e4
+Gp 0 0 0 10 6 0 0.035 nx=5 ny=3
+.hole Gp 4.9 2.9 5.1 3.1
+n1 x=1 y=0 z=0
+n2 x=9 y=0 z=0
+e1 n1 n2 w=0.2 h=0.035
 .external n1 n2
 .freq fmin=1 fmax=1 ndec=1
 .end
 ",
+        );
+        // 15 cells minus the holed one; 22 bars minus its 4 incident,
+        // plus the declared segment.
+        assert_eq!(deck.geometry.nodes().len(), 14);
+        assert_eq!(deck.geometry.segment_count(), 18 + 1);
+        // The segment endpoints land in the plane footprint and are
+        // snapped off the declared nodes onto cell centres.
+        let end_a = deck.geometry.segment(18).unwrap().a;
+        assert_ne!(end_a, Node::new(1e-3, 0.0, 0.0));
+    }
+
+    #[test]
+    fn g_plane_errors_carry_lines() {
+        let error = parse(
+            "\
+.units mm
+.default sigma=5.8e4
+.hole Gq 0 0 1 1
+.end
+",
         )
         .unwrap_err();
-        assert_eq!(error.line, 5);
-        assert!(error.message.contains("ground plane"));
+        assert!(error.message.contains("unknown ground plane 'Gq'"));
+        let error = parse(
+            "\
+.units mm
+Gp 0 0 0 10 6 0 0.035 nx=0
+.end
+",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("nx"));
+        let error = parse(
+            "\
+.units mm
+Gp 0 0 0 10 6 0 0.035
+.end
+",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("conductivity"));
     }
 
     #[test]
@@ -795,7 +1047,7 @@ e1 n1 n2 w=1 h=1 sigma=1
         assert!(error.message.contains(".end"));
         let error = parse(".units m\n.cparams tol=1e-3\n.end\n").unwrap_err();
         assert_eq!(error.line, 2);
-        assert!(error.message.contains("M0 subset"));
+        assert!(error.message.contains("deck subset"));
     }
 
     #[test]

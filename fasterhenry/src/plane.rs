@@ -23,7 +23,7 @@
 //! # Connection
 //!
 //! A segment endpoint that lands within a plane's footprint and depth is
-//! **snapped** to the nearest live cell-centre node ([`attach`]): the
+//! **snapped** to the nearest live cell-centre node ([`GroundPlane::attach`]): the
 //! segment then shares that node with the plane mesh, closing the current
 //! path. Snapping is explicit in the API and in the deck reader (`G`'
 //! footprint), never silent elsewhere.
@@ -44,7 +44,7 @@ use crate::geometry::{Geometry, GeometryError, Node, NodeId, SegmentDef};
 pub struct Hole {
     /// Inclusive lower corner `(x, y)`.
     pub lo: [f64; 2],
-    /// Exclusive... see [`contains`]: a cell centre strictly inside.
+    /// Exclusive... see [`GroundPlane::contains`]: a cell centre strictly inside.
     pub hi: [f64; 2],
 }
 
@@ -134,46 +134,67 @@ impl GroundPlane {
     /// # Errors
     ///
     /// See [`PlaneError`].
-    pub fn build_into(&self, geometry: &mut Geometry) -> Result<Vec<Vec<Option<NodeId>>>, PlaneError> {
+    pub fn build_into(
+        &self,
+        geometry: &mut Geometry,
+    ) -> Result<Vec<Vec<Option<NodeId>>>, PlaneError> {
         if self.nx < 1 || self.ny < 1 {
-            return Err(PlaneError::ZeroSubdivision { nx: self.nx, ny: self.ny });
+            return Err(PlaneError::ZeroSubdivision {
+                nx: self.nx,
+                ny: self.ny,
+            });
         }
         if !(self.hi[0] > self.lo[0] && self.hi[1] > self.lo[1]) {
-            return Err(PlaneError::DegenerateExtent { lo: self.lo, hi: self.hi });
+            return Err(PlaneError::DegenerateExtent {
+                lo: self.lo,
+                hi: self.hi,
+            });
         }
         let (dx, dy) = self.cell();
-        let cross_x = dy * self.thickness; // x-bar cross-section
-        let cross_y = dx * self.thickness; // y-bar cross-section
+        // An x-directed bar is dy wide (the cell's extent across y) and
+        // `thickness` tall; a y-directed bar is dx wide.
+        let width_x = dy;
+        let width_y = dx;
 
-        let mut centres = vec![vec![None; self.ny]; self.nx];
-        for i in 0..self.nx {
-            for j in 0..self.ny {
+        let mut centres: Vec<Vec<Option<NodeId>>> =
+            (0..self.nx).map(|_| vec![None; self.ny]).collect();
+        for (i, column) in centres.iter_mut().enumerate() {
+            for (j, slot) in column.iter_mut().enumerate() {
                 if self.holed(i, j) {
                     continue;
                 }
                 let position = self.centre(i, j);
-                let node = geometry.add_node(Node::new(position[0], position[1], position[2]))?;
-                centres[i][j] = Some(node);
+                *slot =
+                    Some(geometry.add_node(Node::new(position[0], position[1], position[2]))?);
             }
         }
         let mut bars = 0;
-        for i in 0..self.nx {
-            for j in 0..self.ny {
-                let here = match centres[i][j] {
-                    Some(node) => node,
-                    None => continue,
-                };
+        for (i, column) in centres.iter().enumerate() {
+            for (j, here) in column.iter().enumerate() {
+                let Some(here) = *here else { continue };
                 // x-direction bar to the right neighbour.
                 if i + 1 < self.nx {
                     if let Some(right) = centres[i + 1][j] {
-                        geometry.add_segment(SegmentDef::new(here, right, cross_x, self.thickness, self.sigma))?;
+                        geometry.add_segment(SegmentDef::new(
+                            here,
+                            right,
+                            width_x,
+                            self.thickness,
+                            self.sigma,
+                        ))?;
                         bars += 1;
                     }
                 }
                 // y-direction bar upward.
                 if j + 1 < self.ny {
-                    if let Some(up) = centres[i][j + 1] {
-                        geometry.add_segment(SegmentDef::new(here, up, cross_y, self.thickness, self.sigma))?;
+                    if let Some(up) = column[j + 1] {
+                        geometry.add_segment(SegmentDef::new(
+                            here,
+                            up,
+                            width_y,
+                            self.thickness,
+                            self.sigma,
+                        ))?;
                         bars += 1;
                     }
                 }
@@ -243,7 +264,10 @@ impl GroundPlane {
             }
         }
         best.map(|(_, node)| node)
-            .ok_or(PlaneError::DegenerateExtent { lo: self.lo, hi: self.hi })
+            .ok_or(PlaneError::DegenerateExtent {
+                lo: self.lo,
+                hi: self.hi,
+            })
     }
 }
 
@@ -287,7 +311,10 @@ mod tests {
         let mut geometry = Geometry::new();
         let mut plane = test_plane();
         // A hole covering the middle cell (2,1): its centre (5mm, 3mm).
-        plane.holes.push(Hole { lo: [4.9e-3, 2.9e-3], hi: [5.1e-3, 3.1e-3] });
+        plane.holes.push(Hole {
+            lo: [4.9e-3, 2.9e-3],
+            hi: [5.1e-3, 3.1e-3],
+        });
         let centres = plane.build_into(&mut geometry).unwrap();
         assert!(centres[2][1].is_none());
         assert_eq!(geometry.nodes().len(), 14);
@@ -296,7 +323,10 @@ mod tests {
         // A hole exactly on a centre boundary does not remove the cell.
         let mut geometry = Geometry::new();
         let mut plane = test_plane();
-        plane.holes.push(Hole { lo: [5e-3, 0.0], hi: [6e-3, 6e-3] });
+        plane.holes.push(Hole {
+            lo: [5e-3, 0.0],
+            hi: [6e-3, 6e-3],
+        });
         plane.build_into(&mut geometry).unwrap();
         assert_eq!(geometry.nodes().len(), 15);
     }
@@ -309,7 +339,10 @@ mod tests {
         // dies; a point over the holed corner then snaps to the nearest
         // live centre, cell (0, 1) at (1 mm, 3 mm) — ties resolved by
         // grid order.
-        plane.holes.push(Hole { lo: [0.0, 0.0], hi: [2.0e-3, 2.0e-3] });
+        plane.holes.push(Hole {
+            lo: [0.0, 0.0],
+            hi: [2.0e-3, 2.0e-3],
+        });
         let centres = plane.build_into(&mut geometry).unwrap();
         assert!(centres[0][0].is_none());
         let snapped = plane.attach(&centres, [0.5e-3, 0.5e-3, 0.0]).unwrap();
@@ -333,9 +366,20 @@ mod tests {
     #[test]
     fn errors_for_degenerate_specifications() {
         let mut geometry = Geometry::new();
-        let error = GroundPlane { nx: 0, ny: 3, ..test_plane() }.build_into(&mut geometry).unwrap_err();
+        let error = GroundPlane {
+            nx: 0,
+            ny: 3,
+            ..test_plane()
+        }
+        .build_into(&mut geometry)
+        .unwrap_err();
         assert_eq!(error, PlaneError::ZeroSubdivision { nx: 0, ny: 3 });
-        let error = GroundPlane { hi: [0.0, 6e-3], ..test_plane() }.build_into(&mut geometry).unwrap_err();
+        let error = GroundPlane {
+            hi: [0.0, 6e-3],
+            ..test_plane()
+        }
+        .build_into(&mut geometry)
+        .unwrap_err();
         assert!(matches!(error, PlaneError::DegenerateExtent { .. }));
     }
 }
