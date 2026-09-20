@@ -25,6 +25,7 @@ pub mod filament;
 pub mod geometry;
 pub mod inductance;
 pub mod mesh;
+pub mod plane;
 pub mod result;
 pub mod solve;
 
