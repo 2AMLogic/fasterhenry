@@ -37,9 +37,17 @@ pub enum Command {
         /// Write the JSON result to this file instead of stdout.
         #[arg(long, value_name = "OUT_JSON")]
         json: Option<PathBuf>,
-        /// Also write a plain-text Z matrix (one block per frequency).
+        /// Write the impedance sweep as a binary MAT v4 `Zc.mat`-format
+        /// file: `Zc_1 … Zc_K` (complex, ohms) and `freqs` (Hz).
         #[arg(long, value_name = "OUT_MAT")]
         zc_mat: Option<PathBuf>,
+        /// Write a SPICE subcircuit at one frequency (coupled inductors
+        /// for L, H sources for R).
+        #[arg(long, value_name = "OUT_CIR")]
+        spice: Option<PathBuf>,
+        /// The frequency for `--spice`, in hertz; default: the last one.
+        #[arg(long, value_name = "HZ")]
+        spice_freq: Option<f64>,
     },
 }
 

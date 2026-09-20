@@ -6,7 +6,9 @@
 
 pub mod cli;
 pub mod inp;
+pub mod mat;
 pub mod problem;
+pub mod spice;
 
 pub use problem::Problem;
 
@@ -48,45 +50,6 @@ pub fn run(problem: &Problem, frequency_override: Option<Vec<f64>>) -> Result<Sw
         &frequencies,
     )
     .map_err(|error| error.to_string())
-}
-
-/// Writes `result` as a human-readable text matrix — one block per
-/// frequency — for tools that expect a `Zc.mat`-style file.
-///
-/// This is **not** FastHenry's binary MATLAB `Zc.mat`; it is a documented
-/// plain-text format of our own (the JSON output is the primary,
-/// tool-readable form). Port `i` is row `i`; entries are `re + j im` ohms.
-pub fn write_zc_text(result: &SweepResult) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    let ports: Vec<&str> = result
-        .ports
-        .iter()
-        .map(|port| port.name.as_deref().unwrap_or("?"))
-        .collect();
-    let _ = writeln!(
-        out,
-        "# fasterhenry Zc text matrix (not FastHenry's binary Zc.mat)"
-    );
-    let _ = writeln!(out, "# ports: {}", ports.join(", "));
-    for (index, &frequency) in result.frequencies_hz.iter().enumerate() {
-        let z = &result.impedance_ohm[index];
-        let _ = writeln!(out, "frequency {:.17e} Hz", frequency);
-        for row in z.row_iter() {
-            let entries: Vec<String> = row
-                .iter()
-                .map(|z| {
-                    if z.im < 0.0 {
-                        format!("{:.17e} - j {:.17e}", z.re, -z.im)
-                    } else {
-                        format!("{:.17e} + j {:.17e}", z.re, z.im)
-                    }
-                })
-                .collect();
-            let _ = writeln!(out, "  {}", entries.join("  "));
-        }
-    }
-    out
 }
 
 #[cfg(test)]

@@ -13,6 +13,13 @@ unstable and may change in any release.
 
 ### Added
 
+- Output formats for tool interop: `--zc-mat` writes a binary MAT v4
+  `Zc.mat`-format file (`Zc_1 … Zc_K` complex matrices + `freqs`; exact
+  round-trip asserted against `scipy.io.loadmat` in CI), and `--spice
+  [--spice-freq HZ]` writes a SPICE subcircuit stamping `Z = R + jωL`
+  (coupled inductors for L, H sources for R; ngspice-verified to
+  reproduce Z to six digits). See `docs/output-formats.md`. The previous
+  plain-text `--zc-mat` experiment is superseded (0.0.x-unstable CLI).
 - Validation harness (M0's "validated" gate): the 2-turn square spiral
   fixture checked against PyPEEC 5.8.0 (2 % tolerance; `tools/pypeec_reference.py`
   regenerates the reference, CI regenerates it on the Linux legs and

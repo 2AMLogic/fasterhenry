@@ -5,7 +5,8 @@
 
 use clap::Parser;
 use fasterhenry_cli::cli::{Cli, Command};
-use fasterhenry_cli::{read_inputs, run, write_zc_text};
+use fasterhenry_cli::spice::write_spice_subckt;
+use fasterhenry_cli::{read_inputs, run};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -15,6 +16,8 @@ fn main() -> anyhow::Result<()> {
             freq,
             json,
             zc_mat,
+            spice,
+            spice_freq,
         } => {
             let problem = read_inputs(&input).map_err(|m| anyhow::anyhow!("{m}"))?;
             let override_frequencies = match &freq {
@@ -29,7 +32,36 @@ fn main() -> anyhow::Result<()> {
                 None => println!("{serialized}"),
             }
             if let Some(path) = &zc_mat {
-                std::fs::write(path, write_zc_text(&result))?;
+                let file = std::fs::File::create(path)?;
+                let mut writer = std::io::BufWriter::new(file);
+                fasterhenry_cli::mat::write_zc_mat(&mut writer, &result)
+                    .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", path.display()))?;
+            }
+            if let Some(path) = &spice {
+                let index = match spice_freq {
+                    Some(hz) => result
+                        .frequencies_hz
+                        .iter()
+                        .position(|&f| f == hz)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "--spice-freq {hz:e} Hz is not one of the sweep's frequencies ({})",
+                                result
+                                    .frequencies_hz
+                                    .iter()
+                                    .map(|f| format!("{f:e}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })?,
+                    None => result.frequencies_hz.len() - 1,
+                };
+                let name = input
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("fasterhenry")
+                    .replace('.', "_");
+                std::fs::write(path, write_spice_subckt(&result, index, &name))?;
             }
             Ok(())
         }

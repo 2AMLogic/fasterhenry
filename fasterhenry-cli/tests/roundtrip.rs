@@ -2,7 +2,7 @@
 //! deck (`tests/data/spiral.inp`) and as the equivalent JSON problem
 //! document (`tests/data/spiral.json`) must produce identical sweeps.
 
-use fasterhenry_cli::{read_inputs, run, write_zc_text};
+use fasterhenry_cli::{read_inputs, run};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
@@ -67,18 +67,71 @@ fn frequency_override_replaces_the_sweep() {
 }
 
 #[test]
-fn zc_text_has_one_block_per_frequency() {
+fn mat4_file_carries_the_whole_sweep() {
     let problem = read_inputs(&fixture("spiral.inp")).unwrap();
     let result = run(&problem, Some(vec![0.0, 1e6])).unwrap();
-    let text = write_zc_text(&result);
-    assert_eq!(
-        text.matches("frequency ").count(),
-        2,
-        "one block per frequency:\n{text}"
-    );
-    assert!(text.contains("not FastHenry's binary Zc.mat"));
-    assert!(text.contains("spiral"));
-    assert!(text.contains("+ j"));
+    let mut bytes = Vec::new();
+    fasterhenry_cli::mat::write_zc_mat(&mut bytes, &result).unwrap();
+    // freqs (1x2 real) + Zc_1, Zc_2 (1x1 complex): each record is a
+    // 20-byte header + the exact name bytes; data 2*8 for freqs and
+    // (8+8) per Zc_k. 41 + 40 + 40.
+    assert_eq!(bytes.len(), 41 + 40 + 40);
+    // mopt = 0 and imagf as declared for every record.
+    assert_eq!(&bytes[0..4], &0i32.to_le_bytes());
+    assert_eq!(&bytes[41..45], &0i32.to_le_bytes());
+    assert_eq!(&bytes[81..85], &0i32.to_le_bytes());
+    assert_eq!(&bytes[12..16], &0i32.to_le_bytes()); // imagf of freqs
+    assert_eq!(&bytes[53..57], &1i32.to_le_bytes()); // imagf of Zc_1
+    assert_eq!(&bytes[20..25], b"freqs");
+}
+
+#[test]
+fn spice_subcircuit_stamps_r_and_l() {
+    let problem = read_inputs(&fixture("spiral.inp")).unwrap();
+    let result = run(&problem, Some(vec![1e6])).unwrap();
+    let text = fasterhenry_cli::spice::write_spice_subckt(&result, 0, "spiral");
+    assert!(text.contains(".subckt spiral p1 n1"));
+    assert!(text.contains(".ends spiral"));
+    assert!(text.contains("L1 p1 a0_0 "));
+    assert!(text.contains("vsense1 a0_1 n1 0"));
+    assert!(text.contains("H1_1 a0_0 a0_1 vsense1 "));
+    // One port: no K lines.
+    assert!(!text.contains("\nK"));
+
+    // A coupled two-port fixture exercises the K stamp.
+    use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
+    use fasterhenry::mesh::Port;
+    use fasterhenry::solve::{Discretization, Subdivision};
+    let um = 1e-6;
+    let mut nodes = Vec::new();
+    for point in [
+        [0.0, 0.0, 0.0],
+        [100.0 * um, 0.0, 0.0],
+        [10.0 * um, 10.0 * um, 0.0],
+        [10.0 * um, -100.0 * um - 10.0 * um, 0.0],
+    ] {
+        nodes.push(Node::new(point[0], point[1], point[2]));
+    }
+    let geometry = Geometry::from_parts(
+        nodes,
+        vec![
+            SegmentDef::new(NodeId(0), NodeId(1), 5.0 * um, 2.0 * um, 5.8e7),
+            SegmentDef::new(NodeId(2), NodeId(3), 5.0 * um, 2.0 * um, 5.8e7),
+        ],
+    )
+    .unwrap();
+    let coupled = fasterhenry_cli::Problem {
+        geometry,
+        ports: vec![
+            Port::new(NodeId(0), NodeId(1)),
+            Port::new(NodeId(2), NodeId(3)),
+        ],
+        discretization: Discretization::Uniform(Subdivision::new(2, 2)),
+        frequencies_hz: vec![],
+    };
+    let result = run(&coupled, Some(vec![1e6])).unwrap();
+    let text = fasterhenry_cli::spice::write_spice_subckt(&result, 0, "twobar");
+    assert!(text.contains("K1_2 L1 L2 "));
 }
 
 #[test]
