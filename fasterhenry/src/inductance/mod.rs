@@ -63,7 +63,10 @@ use crate::filament::Filament;
 use aligned::AlignedBars;
 use neumann::Bar;
 
-pub use batch::{mutual_batch, mutual_batch_with, partial_inductance_matrix, Execution};
+pub use batch::{
+    mutual_batch, mutual_batch_detailed, mutual_batch_detailed_with, mutual_batch_with,
+    partial_inductance_matrix, partial_inductance_matrix_detailed, Execution, MutualBatch,
+};
 
 /// Vacuum permeability `μ0 = 4π × 10⁻⁷ H/m` (the classical defined value,
 /// which the 2019 SI value matches to better than 1e-9).

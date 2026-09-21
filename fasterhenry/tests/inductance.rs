@@ -15,11 +15,13 @@
 //! * far-field, scaling and symmetry identities.
 
 use fasterhenry::inductance::{
-    closed_form, mutual_batch_with, mutual_inductance_detailed, Execution, Method,
+    closed_form, mutual_batch_detailed_with, mutual_batch_with, mutual_inductance_detailed,
+    Execution, Method,
 };
 use fasterhenry::{
-    discretize, mutual_batch, mutual_inductance, partial_inductance_matrix, self_inductance,
-    Filament, Node, Segment, MU0,
+    discretize, mutual_batch, mutual_batch_detailed, mutual_inductance, partial_inductance_matrix,
+    partial_inductance_matrix_detailed, self_inductance, Filament, KernelError, MutualBatch, Node,
+    Segment, MU0,
 };
 use nalgebra::{DMatrix, Vector3};
 
@@ -642,7 +644,8 @@ fn touching_and_overlapping_skew_bars_are_close_to_a_fine_reference() {
     // singular and the sampling order is capped — the documented
     // "unresolved" regime. The reference samples the same exact line-to-line
     // formula on a cross-section grid twice as fine in each of the four
-    // dimensions (itself converged to a few 1e-5).
+    // dimensions (itself converged to a few 1e-5). This is a self-referential
+    // sampling-convergence check, not an independent reference for this regime.
     let a = filament([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 0.1, 0.05);
     let cases = [
         (
@@ -810,6 +813,170 @@ fn batch_matches_pairwise_evaluation_in_every_execution_mode() {
     assert!(worst < 1e-13, "scalar vs SIMD: {worst:e}");
     assert_eq!(mutual_batch(&[], cols).unwrap().shape(), (0, cols.len()));
     assert_eq!(mutual_batch(rows, &[]).unwrap().shape(), (rows.len(), 0));
+}
+
+/// Compare every entry and its accuracy flag with the public single-pair API.
+fn assert_detailed_batch(report: &MutualBatch, rows: &[Filament], cols: &[Filament]) {
+    assert_eq!(report.values.shape(), (rows.len(), cols.len()));
+    let mut expected = Vec::new();
+    for (i, a) in rows.iter().enumerate() {
+        for (j, b) in cols.iter().enumerate() {
+            let pair = mutual_inductance_detailed(a, b).unwrap();
+            let value = report.values[(i, j)];
+            assert!(
+                (value - pair.value).abs() <= 1e-13 * pair.value.abs(),
+                "value at ({i}, {j}): {value} vs {}",
+                pair.value
+            );
+            if !pair.resolved {
+                expected.push((i, j));
+            }
+        }
+    }
+    assert_eq!(report.unresolved_pairs, expected);
+}
+
+#[test]
+fn detailed_batch_reports_mixed_bends_crossings_and_separated_pairs() {
+    let rows = [
+        filament([0.0; 3], [1.0, 0.0, 0.0], 0.1, 0.05),
+        filament([0.0, 10.0, 0.0], [1.0, 10.0, 0.0], 0.1, 0.05),
+    ];
+    let mut cols = Vec::new();
+    for degrees in [10.0_f64, 45.0, 135.0] {
+        let (s, c) = degrees.to_radians().sin_cos();
+        cols.push(filament([1.0, 0.0, 0.0], [1.0 + c, s, 0.0], 0.1, 0.05));
+    }
+    let (s, c) = 60.0_f64.to_radians().sin_cos();
+    cols.push(filament(
+        [0.5 - 0.5 * c, -0.5 * s, 0.0],
+        [0.5 + 0.5 * c, 0.5 * s, 0.0],
+        0.1,
+        0.05,
+    ));
+    cols.push(rows[0].clone()); // Self term is resolved.
+    cols.push(filament([1.0, 0.0, 0.0], [1.0, 1.0, 0.0], 0.1, 0.05));
+    for execution in [Execution::Scalar, Execution::Simd, Execution::Parallel] {
+        let report = mutual_batch_detailed_with(&rows, &cols, execution).unwrap();
+        assert_detailed_batch(&report, &rows, &cols);
+        assert_eq!(report.unresolved_pairs, [(0, 0), (0, 1), (0, 2), (0, 3)]);
+        assert_eq!(
+            report.values,
+            mutual_batch_with(&rows, &cols, execution).unwrap()
+        );
+    }
+    let report = mutual_batch_detailed(&rows, &cols).unwrap();
+    assert_eq!(report.values, mutual_batch(&rows, &cols).unwrap());
+    assert!(mutual_batch_detailed(&rows[1..], &cols)
+        .unwrap()
+        .unresolved_pairs
+        .is_empty());
+    // Parallel scheduling must not change the report's ordering or values.
+    for threads in [1, 3] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        assert_eq!(
+            pool.install(|| mutual_batch_detailed(&rows, &cols).unwrap()),
+            report
+        );
+    }
+}
+
+#[test]
+fn detailed_matrix_mirrors_unresolved_entries_and_preserves_self_terms() {
+    let filaments = [
+        filament([0.0; 3], [10e-3, 0.0, 0.0], 1e-3, 35e-6),
+        filament([10e-3, 0.0, 0.0], [17e-3, 7e-3, 0.0], 1e-3, 35e-6),
+        filament([0.0, 1.0, 0.0], [10e-3, 1.0, 0.0], 1e-3, 35e-6),
+    ];
+    let report = partial_inductance_matrix_detailed(&filaments).unwrap();
+    assert_detailed_batch(&report, &filaments, &filaments);
+    assert_eq!(report.unresolved_pairs, [(0, 1), (1, 0)]);
+    assert_eq!(
+        report,
+        mutual_batch_detailed(&filaments, &filaments).unwrap()
+    );
+    assert_eq!(
+        report.values,
+        partial_inductance_matrix(&filaments).unwrap()
+    );
+    for (i, filament) in filaments.iter().enumerate() {
+        assert_eq!(report.values[(i, i)], self_inductance(filament));
+        for j in 0..filaments.len() {
+            assert_eq!(report.values[(i, j)], report.values[(j, i)]);
+        }
+    }
+    let separated = [filaments[0].clone(), filaments[2].clone()];
+    assert!(partial_inductance_matrix_detailed(&separated)
+        .unwrap()
+        .unresolved_pairs
+        .is_empty());
+}
+
+#[test]
+fn detailed_batches_preserve_empty_shapes() {
+    let one = [bar_x(1.0, 0.1, 0.05)];
+    for (rows, cols) in [(&[][..], &one[..]), (&one[..], &[][..]), (&[][..], &[][..])] {
+        for execution in [Execution::Scalar, Execution::Simd, Execution::Parallel] {
+            let report = mutual_batch_detailed_with(rows, cols, execution).unwrap();
+            assert_eq!(report.values.shape(), (rows.len(), cols.len()));
+            assert!(report.unresolved_pairs.is_empty());
+        }
+        assert_detailed_batch(&mutual_batch_detailed(rows, cols).unwrap(), rows, cols);
+    }
+    assert_detailed_batch(&partial_inductance_matrix_detailed(&[]).unwrap(), &[], &[]);
+    assert_detailed_batch(
+        &partial_inductance_matrix_detailed(&one).unwrap(),
+        &one,
+        &one,
+    );
+}
+
+#[test]
+fn detailed_batches_preserve_kernel_errors_and_pair_indices() {
+    // Finite dimensions outside the kernel's validated range underflow the
+    // area squared, giving a deterministic NotFinite error for the self term.
+    // The ordinary bars are orthogonal to this one, so all other pairs succeed.
+    let ordinary = filament([0.0; 3], [0.0, 1.0, 0.0], 0.1, 0.05);
+    let extreme = bar_x(1.0, 1e-100, 1e-100);
+    assert!(matches!(
+        mutual_inductance_detailed(&extreme, &extreme),
+        Err(KernelError::NotFinite { .. })
+    ));
+    let rows = [ordinary.clone(), extreme.clone()];
+    let cols = [ordinary.clone(), ordinary, extreme];
+    for execution in [Execution::Scalar, Execution::Simd, Execution::Parallel] {
+        let error = mutual_batch_with(&rows, &cols, execution).unwrap_err();
+        assert_eq!(
+            error,
+            KernelError::NotFinite {
+                first: 1,
+                second: 2
+            }
+        );
+        assert_eq!(
+            mutual_batch_detailed_with(&rows, &cols, execution).unwrap_err(),
+            error
+        );
+    }
+    assert_eq!(
+        mutual_batch_detailed(&rows, &cols).unwrap_err(),
+        mutual_batch(&rows, &cols).unwrap_err()
+    );
+    let error = partial_inductance_matrix(&rows).unwrap_err();
+    assert_eq!(
+        error,
+        KernelError::NotFinite {
+            first: 1,
+            second: 1
+        }
+    );
+    assert_eq!(
+        partial_inductance_matrix_detailed(&rows).unwrap_err(),
+        error
+    );
 }
 
 #[test]
