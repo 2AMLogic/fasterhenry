@@ -62,10 +62,16 @@ kernels, so it is dramatically faster than a single-threaded 1994-era
 solver on modern hardware — for problems that fit the dense regime
 (~10⁴ filaments comfortably, ~10⁵ with patience and memory). It is **not**
 yet accelerated: beyond that, a multipole/FFT method wins, and precorrected-FFT
-acceleration is tracked as the next milestone (#24). Literal head-to-head
-numbers against the original FastHenry binary are an operator-run,
-out-of-band benchmark (the clean-room rule forbids derived code, not
-comparisons — but the binary stays out of this repository's CI).
+acceleration is tracked as the next milestone (#24).
+
+Measured head-to-head against the original FastHenry (same machine,
+self-authored decks; method and caveats in [`docs/benchmarks.md`](docs/benchmarks.md)):
+fasterhenry's dense path is faster on wall clock at every size up to
+~20 000 filaments (3× at small sizes, ~1.2× at 20 k, where FastHenry's
+multipole stays 14× ahead per thread — our edge is parallelism today,
+algorithmics pending #24). On shared segment fixtures the two engines
+agree to **better than 0.1 %** on the extracted impedance — the
+cross-validation behind the "replacement" claim.
 
 ## Layout
 
