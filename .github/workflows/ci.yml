@@ -82,7 +82,7 @@ jobs:
           set -euo pipefail
           cargo run -q -p fasterhenry-cli -- run fasterhenry-cli/tests/data/spiral.inp \
             --freq 1e6 1e9 1 --json target/spiral.json --zc-mat target/spiral.mat
-          python3 - << 'PYEOF'
+          /tmp/pypeec-venv/bin/python - << 'PYEOF'
           import json
           from scipy.io import loadmat
           result = json.load(open('target/spiral.json'))
