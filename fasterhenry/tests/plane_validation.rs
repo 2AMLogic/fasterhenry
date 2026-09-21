@@ -212,6 +212,12 @@ fn slotted_plane(nx: usize, ny: usize, slotted: bool) -> (Geometry, Vec<Port>, D
 /// order on both sides of the comparison.
 #[test]
 fn slot_differential_against_pypec() {
+    // The 96×64 solve belongs to the release PyPEEC gate below. The ordinary
+    // workspace test has no reference and should skip before paying for it.
+    if pypeec_plane_reference().is_none() {
+        eprintln!("SKIPPED (pypeec plane reference absent)");
+        return;
+    }
     let measure = |slotted: bool| -> (f64, f64) {
         let system = slotted_plane(96, 64, slotted);
         let result = solve(&system.0, &system.1, &system.2, &[0.0, 1e3]).unwrap();
