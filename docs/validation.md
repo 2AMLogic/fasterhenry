@@ -67,16 +67,25 @@ here, not a defect of the engine.
 
 ## Ground planes (issue #22)
 
-Two gates. First, a **trace-over-plane** fixture (0.2 mm × 35 µm trace, 8 mm
-long, 0.5 mm above a 10 × 6 × 0.035 mm plane, vias snapped to the mesh)
-against method-of-images references: the DC resistance is the parallel of
-trace and plane paths (verified against independent node analysis to seven
-digits during development), the loop inductance is grid-converged (2.4 %
-from 10 × 3 to 40 × 12), and the RF value is reported against the
-rectangle-image + via oracle — a composite fixture (vias, snap offsets,
-finite plane) that oracle does not bound at 10 %, so it is not asserted.
+Plane validation is gated by the independent **PyPEEC slot differential**.
+The **trace-over-plane** fixture supplies convergence and coarse sanity
+checks; the earlier 5–10 % method-of-images accuracy claim is retired
+(issue #37).
 
-Second, the **slot differential** — the AC's PyPEEC gate. A
+The trace-over-plane fixture uses a 0.2 mm × 35 µm trace, 8 mm long,
+0.5 mm above a 10 × 6 × 0.035 mm plane, with vias snapped to the mesh.
+Its DC resistance is bounded between 3 mΩ and the trace-alone resistance,
+and low-frequency loop inductance is checked for grid convergence
+(2.4 % measured from 10 × 3 to 40 × 12, bound 5 %) and LF/RF ordering.
+`trace_over_plane_rf_image_estimate_is_a_coarse_sanity_check` reports RF
+inductance against the rectangle-image + via estimate: 3.3051 nH versus
+5.2397 nH at 1 GHz (36.92 % relative deviation), with the existing
+**45 % coarse sanity bound** retained.
+The vias, snap offsets, finite plane, and single-filament plane bars are
+outside what that estimate bounds at 5–10 %; this diagnostic does not
+establish an image-oracle accuracy guarantee.
+
+The separate **slot-differential** fixture is a
 1.2 × 0.8 × 0.02 mm copper plane with a 0.2 × 0.64 mm slot, driven across
 its short ends; comparing `L(slotted) − L(solid)` cancels the differently
 modelled drive contacts on both sides, isolating the slot's physics.
