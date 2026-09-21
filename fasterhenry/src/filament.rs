@@ -1,13 +1,21 @@
-//! Filaments — the PEEC current elements — and the uniform discretization of
-//! a [`Segment`] into an `nw × nh` bundle of them.
+//! Filaments — the PEEC current elements — and the discretization of a
+//! [`Segment`] into an `nw × nh` bundle of them, uniform ([`discretize`]) or
+//! graded toward the conductor surfaces ([`discretize_graded`]).
 //!
 //! Following Kamon, Tsuk & White (IEEE T-MTT 1994, §II), the current in a
 //! segment is approximated as piecewise constant over its cross-section: the
 //! segment is cut into parallel filaments, each a thinner rectangular bar
 //! spanning the segment's full length and carrying a uniform current density
-//! along it. More filaments resolve skin and proximity effects better. This
-//! module provides the uniform grid; the skin-effect-aware non-uniform grid is
-//! later work.
+//! along it. More filaments resolve skin and proximity effects better.
+//!
+//! At high frequency the current crowds into a layer of the order of the skin
+//! depth `δ` at each surface, which a *uniform* grid can only resolve by
+//! making every filament that thin — most of them wasted on the interior,
+//! where nothing happens. [`discretize_graded`] instead grows the filament
+//! extents geometrically inward from each surface by a fixed `ratio`
+//! (§II.C of the same paper), so a handful of thin filaments line the
+//! surfaces and a few fat ones fill the core. A `ratio` of exactly `1`
+//! reproduces [`discretize`] bit for bit.
 
 use nalgebra::Vector3;
 use serde::Serialize;
@@ -129,7 +137,7 @@ impl Filament {
     }
 }
 
-/// Why [`discretize`] failed.
+/// Why [`discretize`] or [`discretize_graded`] failed.
 #[derive(Clone, Debug, PartialEq, Error)]
 #[non_exhaustive]
 pub enum DiscretizeError {
@@ -152,6 +160,101 @@ pub enum DiscretizeError {
         /// Requested number of filaments across the height.
         nh: usize,
     },
+    /// The grading ratio is not a finite number at least 1.
+    #[error("the grading ratio must be finite and at least 1, got {ratio}")]
+    InvalidRatio {
+        /// The offending ratio.
+        ratio: f64,
+    },
+    /// The geometric progression `ratio^⌊count/2⌋` is not representable, so
+    /// the grading is far steeper than any useful grid.
+    #[error("grading ratio {ratio} over {count} filaments overflows to infinity")]
+    GradingOverflow {
+        /// The requested ratio.
+        ratio: f64,
+        /// The requested filament count along the offending axis.
+        count: usize,
+    },
+}
+
+/// Extents of `count` cells tiling an interval of length `total`, each cell
+/// `ratio` times the extent of its neighbour one step nearer the closer end
+/// of the interval.
+///
+/// Cell `i` carries the weight `ratio^min(i, count−1−i)` — its distance, in
+/// cells, from the nearer end — so the sequence is symmetric: thinnest at
+/// both ends, thickest in the middle. The weights are then scaled to sum to
+/// `total`, which is what makes the extent of the *surface* cell
+/// `total / Σᵢ ratio^min(i, count−1−i)`.
+///
+/// `ratio == 1.0` gives `count` equal extents, exactly `total / count` each.
+///
+/// # Errors
+///
+/// [`DiscretizeError::InvalidRatio`] unless `ratio` is finite and at least
+/// `1`, [`DiscretizeError::ZeroSubdivision`] for `count == 0`, and
+/// [`DiscretizeError::GradingOverflow`] if the weights overflow to infinity.
+///
+/// # Example
+///
+/// ```
+/// use fasterhenry::filament::graded_extents;
+///
+/// // Four cells at 3:1 have weights 1, 3, 3, 1 — a total of 8.
+/// let extents = graded_extents(8.0, 4, 3.0)?;
+/// assert_eq!(extents, vec![1.0, 3.0, 3.0, 1.0]);
+/// # Ok::<(), fasterhenry::DiscretizeError>(())
+/// ```
+pub fn graded_extents(total: f64, count: usize, ratio: f64) -> Result<Vec<f64>, DiscretizeError> {
+    let weights = graded_weights(count, ratio)?;
+    let sum: f64 = weights.iter().sum();
+    Ok(weights.into_iter().map(|w| total * w / sum).collect())
+}
+
+/// Extent of the outermost cell of [`graded_extents`] — the one that lines
+/// the conductor's surface — `total / Σᵢ ratio^min(i, count−1−i)`.
+///
+/// This is the quantity a skin-depth-adaptive grid sizes against: the grid
+/// resolves a skin depth `δ` when this is at most a fraction of `δ`.
+///
+/// # Errors
+///
+/// As [`graded_extents`].
+///
+/// # Example
+///
+/// ```
+/// use fasterhenry::filament::graded_surface_extent;
+///
+/// // Weights 1, 3, 3, 1 sum to 8, so the surface cell is an eighth.
+/// assert_eq!(graded_surface_extent(8.0, 4, 3.0)?, 1.0);
+/// // Doubling the count at 3:1 buys another factor of nine: 1+3+9+9+3+1.
+/// assert!((graded_surface_extent(8.0, 6, 3.0)? - 8.0 / 26.0).abs() < 1e-15);
+/// # Ok::<(), fasterhenry::DiscretizeError>(())
+/// ```
+pub fn graded_surface_extent(total: f64, count: usize, ratio: f64) -> Result<f64, DiscretizeError> {
+    let weights = graded_weights(count, ratio)?;
+    let sum: f64 = weights.iter().sum();
+    Ok(total / sum)
+}
+
+/// `ratio^min(i, count−1−i)` for `i` in `0..count` — the unnormalized cell
+/// extents, thinnest at both ends.
+fn graded_weights(count: usize, ratio: f64) -> Result<Vec<f64>, DiscretizeError> {
+    if !(ratio.is_finite() && ratio >= 1.0) {
+        return Err(DiscretizeError::InvalidRatio { ratio });
+    }
+    if count == 0 {
+        return Err(DiscretizeError::ZeroSubdivision { nw: 0, nh: 0 });
+    }
+    let weights: Vec<f64> = (0..count)
+        .map(|i| ratio.powi(i.min(count - 1 - i) as i32))
+        .collect();
+    if weights.iter().all(|w| w.is_finite()) {
+        Ok(weights)
+    } else {
+        Err(DiscretizeError::GradingOverflow { ratio, count })
+    }
 }
 
 /// Splits `segment` into `nw × nh` parallel filaments on a uniform grid over
@@ -234,6 +337,117 @@ pub fn discretize(
         }
     }
     Ok(filaments)
+}
+
+/// Splits `segment` into `nw × nh` parallel filaments whose cross-sections
+/// coarsen geometrically inward from every surface: each filament is `ratio`
+/// times the extent of its neighbour one step nearer the surface, along the
+/// width and along the height independently.
+///
+/// This is the skin-effect-aware grid of Kamon, Tsuk & White §II.C. At high
+/// frequency the current lives within a skin depth `δ` of the surface, so
+/// the accuracy of `R(f)` and `L(f)` is set by how finely the *outermost*
+/// filaments are cut, not by the average cell size. Grading buys that
+/// resolution geometrically: `n` filaments at `ratio` line the surface with
+/// a cell of `extent / Σᵢ ratioᵐⁱⁿ⁽ⁱ, ⁿ⁻¹⁻ⁱ⁾` (see
+/// [`graded_surface_extent`]) instead of the `extent / n` of a uniform grid.
+///
+/// Everything else matches [`discretize`]: the filaments tile the segment
+/// exactly, share its length, [`LocalBasis`] and conductivity, are symmetric
+/// about the centreline, and are ordered with the width index fastest —
+/// filament `(i, j)` at position `j · nw + i`. `ratio == 1.0` delegates to
+/// [`discretize`], so the uniform grid is reproduced bit for bit.
+///
+/// # Errors
+///
+/// As [`discretize`], plus [`DiscretizeError::InvalidRatio`] unless `ratio`
+/// is finite and at least `1`, and [`DiscretizeError::GradingOverflow`] if
+/// the geometric progression overflows.
+///
+/// # Example
+///
+/// ```
+/// use fasterhenry::{discretize_graded, Node, Segment};
+///
+/// // A 10 mm copper trace, 1 mm wide and 35 µm thick, with four filaments
+/// // across the thickness graded 3:1 — weights 1, 3, 3, 1.
+/// let trace = Segment::new(
+///     Node::new(0.0, 0.0, 0.0),
+///     Node::new(10e-3, 0.0, 0.0),
+///     1e-3,
+///     35e-6,
+///     5.8e7,
+/// );
+/// let filaments = discretize_graded(&trace, 1, 4, 3.0)?;
+/// assert_eq!(filaments.len(), 4);
+///
+/// // The surface filament is an eighth of the thickness, not a quarter.
+/// assert!((filaments[0].height() - 35e-6 / 8.0).abs() < 1e-18);
+/// assert!((filaments[1].height() - 3.0 * 35e-6 / 8.0).abs() < 1e-18);
+/// // …and the bundle still tiles the segment exactly.
+/// let total_area: f64 = filaments.iter().map(|f| f.area()).sum();
+/// assert!((total_area - trace.area()).abs() < 1e-12 * trace.area());
+/// # Ok::<(), fasterhenry::DiscretizeError>(())
+/// ```
+pub fn discretize_graded(
+    segment: &Segment,
+    nw: usize,
+    nh: usize,
+    ratio: f64,
+) -> Result<Vec<Filament>, DiscretizeError> {
+    if !(ratio.is_finite() && ratio >= 1.0) {
+        return Err(DiscretizeError::InvalidRatio { ratio });
+    }
+    // Bit-for-bit the uniform grid, and cheaper: no progression to build.
+    if ratio == 1.0 {
+        return discretize(segment, nw, nh);
+    }
+    if nw == 0 || nh == 0 {
+        return Err(DiscretizeError::ZeroSubdivision { nw, nh });
+    }
+    let filament_count = nw
+        .checked_mul(nh)
+        .ok_or(DiscretizeError::Overflow { nw, nh })?;
+    let basis = segment.basis()?;
+    let (a, b) = (segment.a.position(), segment.b.position());
+    let length = segment.length();
+
+    let across_width = graded_cells(segment.width, nw, ratio)?;
+    let across_height = graded_cells(segment.height, nh, ratio)?;
+
+    let mut filaments = Vec::with_capacity(filament_count);
+    for &(height_offset, filament_height) in &across_height {
+        let along_height = basis.height * height_offset;
+        for &(width_offset, filament_width) in &across_width {
+            let offset = basis.width * width_offset + along_height;
+            filaments.push(Filament::from_parts(
+                a + offset,
+                b + offset,
+                length,
+                basis,
+                filament_width,
+                filament_height,
+                segment.sigma,
+            ));
+        }
+    }
+    Ok(filaments)
+}
+
+/// `(centre offset from the middle of the interval, extent)` of every cell of
+/// a graded partition of `total` into `count` cells at `ratio`.
+fn graded_cells(total: f64, count: usize, ratio: f64) -> Result<Vec<(f64, f64)>, DiscretizeError> {
+    let weights = graded_weights(count, ratio)?;
+    let sum: f64 = weights.iter().sum();
+    let mut lower = 0.0;
+    Ok(weights
+        .into_iter()
+        .map(|weight| {
+            let centre = total * ((lower + 0.5 * weight) / sum - 0.5);
+            lower += weight;
+            (centre, total * weight / sum)
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -552,6 +766,213 @@ mod tests {
                 }
             ))
         ));
+    }
+
+    // -----------------------------------------------------------------
+    // Graded grids
+    // -----------------------------------------------------------------
+
+    /// A ratio of exactly 1 must reproduce the uniform grid *bit for bit* —
+    /// the backward-compatibility guarantee `nwinc`/`nhinc` decks rely on.
+    #[test]
+    fn unit_ratio_is_bit_identical_to_the_uniform_grid() {
+        let segment = skew_segment();
+        for (nw, nh) in [(1, 1), (1, 4), (3, 1), (3, 2), (5, 7)] {
+            assert_eq!(
+                discretize_graded(&segment, nw, nh, 1.0).unwrap(),
+                discretize(&segment, nw, nh).unwrap(),
+                "nw = {nw}, nh = {nh}"
+            );
+        }
+    }
+
+    #[test]
+    fn graded_filaments_tile_the_cross_section() {
+        let segment = skew_segment();
+        for (nw, nh, ratio) in [(4, 4, 10.0), (3, 5, 2.0), (1, 8, 1.5), (7, 1, 3.0)] {
+            let filaments = discretize_graded(&segment, nw, nh, ratio).unwrap();
+            assert_eq!(filaments.len(), nw * nh);
+            let total: f64 = filaments.iter().map(Filament::area).sum();
+            assert!(
+                (total - segment.area()).abs() < TOL * segment.area(),
+                "nw = {nw}, nh = {nh}, ratio = {ratio}"
+            );
+            // The width extents repeat every row and the heights every column.
+            for (index, f) in filaments.iter().enumerate() {
+                assert!((f.width() - filaments[index % nw].width()).abs() < TOL);
+                assert!((f.height() - filaments[(index / nw) * nw].height()).abs() < TOL);
+            }
+        }
+    }
+
+    /// Each filament is `ratio` times its neighbour one step nearer the
+    /// surface, and the outermost one matches [`graded_surface_extent`].
+    #[test]
+    fn graded_extents_follow_the_geometric_progression() {
+        let segment = skew_segment();
+        let (nw, nh, ratio) = (6, 5, 2.5);
+        let filaments = discretize_graded(&segment, nw, nh, ratio).unwrap();
+        let widths: Vec<f64> = filaments[..nw].iter().map(Filament::width).collect();
+        let heights: Vec<f64> = filaments.iter().step_by(nw).map(Filament::height).collect();
+
+        for (extents, total) in [(&widths, segment.width), (&heights, segment.height)] {
+            let count = extents.len();
+            let surface = graded_surface_extent(total, count, ratio).unwrap();
+            assert!((extents[0] - surface).abs() < TOL * surface);
+            assert!((extents[count - 1] - surface).abs() < TOL * surface);
+            for i in 0..count / 2 {
+                // Symmetric about the middle…
+                assert!((extents[i] - extents[count - 1 - i]).abs() < TOL * extents[i]);
+                // …and `ratio` times thicker one step inward.
+                if i + 1 < count / 2 {
+                    let grown = ratio * extents[i];
+                    assert!((extents[i + 1] - grown).abs() < TOL * grown);
+                }
+            }
+        }
+    }
+
+    /// The bundle stays centred on the segment's centreline, and the outer
+    /// filaments' outer faces sit exactly on the conductor's surfaces.
+    #[test]
+    fn graded_bundle_is_symmetric_and_fills_the_surfaces() {
+        // Axis-aligned so the offsets can be read off directly.
+        let segment = Segment::new(
+            Node::new(0.0, 0.0, 0.0),
+            Node::new(2.0, 0.0, 0.0),
+            0.6,
+            0.4,
+            COPPER,
+        );
+        for (nw, nh, ratio) in [(4, 4, 10.0), (5, 3, 2.0), (2, 6, 1.25)] {
+            let filaments = discretize_graded(&segment, nw, nh, ratio).unwrap();
+            let n = filaments.len() as f64;
+            let mean: Vector3<f64> =
+                filaments.iter().map(Filament::center).sum::<Vector3<f64>>() / n;
+            assert!(
+                (mean - segment.center()).norm() < TOL,
+                "{nw}×{nh} @ {ratio}"
+            );
+
+            let (mut min_y, mut max_y, mut min_z, mut max_z) =
+                (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+            for f in &filaments {
+                let c = f.center();
+                min_y = min_y.min(c.y - 0.5 * f.width());
+                max_y = max_y.max(c.y + 0.5 * f.width());
+                min_z = min_z.min(c.z - 0.5 * f.height());
+                max_z = max_z.max(c.z + 0.5 * f.height());
+            }
+            assert!((min_y + 0.3).abs() < TOL && (max_y - 0.3).abs() < TOL);
+            assert!((min_z + 0.2).abs() < TOL && (max_z - 0.2).abs() < TOL);
+        }
+    }
+
+    /// Hand-computed fixture: 4 filaments at 3:1 across a 0.8-wide segment
+    /// have weights 1, 3, 3, 1 summing to 8, so extents 0.1, 0.3, 0.3, 0.1
+    /// and centres −0.35, −0.15, +0.15, +0.35 from the centreline (+y here).
+    #[test]
+    fn graded_grid_matches_hand_computed_fixture() {
+        let segment = Segment::new(
+            Node::new(0.0, 0.0, 0.0),
+            Node::new(1.0, 0.0, 0.0),
+            0.8,
+            0.2,
+            COPPER,
+        );
+        let filaments = discretize_graded(&segment, 4, 1, 3.0).unwrap();
+        // Weights 1, 3, 3, 1 sum to 8 over a width of 0.8, so the cells are
+        // 0.1, 0.3, 0.3, 0.1 wide, centred at −0.35, −0.15, +0.15, +0.35.
+        let expected = [(-0.35, 0.1), (-0.15, 0.3), (0.15, 0.3), (0.35, 0.1)];
+        assert_eq!(filaments.len(), expected.len());
+        for (f, (y, width)) in filaments.iter().zip(expected) {
+            assert_vec_close(f.start(), [0.0, y, 0.0]);
+            assert_vec_close(f.end(), [1.0, y, 0.0]);
+            assert!((f.width() - width).abs() < TOL, "{} vs {width}", f.width());
+            assert!((f.height() - 0.2).abs() < TOL);
+        }
+    }
+
+    /// Grading commutes with rigid motion, exactly as the uniform grid does.
+    #[test]
+    fn grading_commutes_with_rigid_motion() {
+        let base = skew_segment();
+        let rotation =
+            Rotation3::from_axis_angle(&Unit::new_normalize(Vector3::new(0.4, -1.0, 0.7)), 1.234);
+        let shift = Vector3::new(-2.0, 0.5, 3.0);
+        let moved = Segment {
+            a: Node::from(rotation * base.a.position() + shift),
+            b: Node::from(rotation * base.b.position() + shift),
+            width_dir: base
+                .width_dir
+                .map(|dir| (rotation * Vector3::from(dir)).into()),
+            ..base
+        };
+        let before = discretize_graded(&base, 4, 3, 2.0).unwrap();
+        let after = discretize_graded(&moved, 4, 3, 2.0).unwrap();
+        assert_eq!(after.len(), 12);
+        for (f, g) in before.iter().zip(&after) {
+            assert!((rotation * f.start() + shift - g.start()).norm() < TOL);
+            assert!((rotation * f.end() + shift - g.end()).norm() < TOL);
+            assert!((f.width() - g.width()).abs() < TOL);
+            assert!((f.height() - g.height()).abs() < TOL);
+        }
+    }
+
+    #[test]
+    fn graded_surface_extent_beats_the_uniform_cell() {
+        // 16 uniform cells of a 1 mm thickness are 62.5 µm each; 6 cells at
+        // 4:1 put a 23.8 µm cell on each surface — a 2.6× finer surface
+        // resolution than the uniform grid at under half the count. The
+        // surface cell is the total over the weight sum 1+4+16+16+4+1 = 42.
+        assert!((graded_surface_extent(1e-3, 16, 1.0).unwrap() - 62.5e-6).abs() < 1e-18);
+        let graded = graded_surface_extent(1e-3, 6, 4.0).unwrap();
+        assert!((graded - 1e-3 / (1.0 + 4.0 + 16.0 + 16.0 + 4.0 + 1.0)).abs() < 1e-18);
+        assert!(graded < 0.4 * 62.5e-6);
+    }
+
+    #[test]
+    fn invalid_grading_is_rejected() {
+        let segment = skew_segment();
+        for ratio in [0.5, 0.0, -2.0, f64::INFINITY] {
+            assert_eq!(
+                discretize_graded(&segment, 2, 2, ratio),
+                Err(DiscretizeError::InvalidRatio { ratio })
+            );
+            assert_eq!(
+                graded_extents(1.0, 4, ratio),
+                Err(DiscretizeError::InvalidRatio { ratio })
+            );
+        }
+        // NaN is not `PartialEq` to itself, so check that one by shape.
+        assert!(matches!(
+            discretize_graded(&segment, 2, 2, f64::NAN),
+            Err(DiscretizeError::InvalidRatio { ratio }) if ratio.is_nan()
+        ));
+        for (nw, nh) in [(0, 1), (1, 0), (0, 0)] {
+            assert_eq!(
+                discretize_graded(&segment, nw, nh, 2.0),
+                Err(DiscretizeError::ZeroSubdivision { nw, nh })
+            );
+        }
+        assert_eq!(
+            discretize_graded(&segment, 2, 4096, 10.0),
+            Err(DiscretizeError::GradingOverflow {
+                ratio: 10.0,
+                count: 4096
+            })
+        );
+        assert_eq!(
+            graded_extents(1.0, 0, 2.0),
+            Err(DiscretizeError::ZeroSubdivision { nw: 0, nh: 0 })
+        );
+        assert_eq!(
+            discretize_graded(&segment, usize::MAX, 2, 2.0),
+            Err(DiscretizeError::Overflow {
+                nw: usize::MAX,
+                nh: 2
+            })
+        );
     }
 
     #[test]

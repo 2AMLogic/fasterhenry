@@ -21,6 +21,10 @@ unstable and may change in any release.
   and validation: trace-over-plane DC/grid checks plus the PyPEEC
   slot-differential gate (4.97 % measured, 5.5 % bound; CI regenerates
   the references and asserts the test did not skip).
+- Surface-graded filament grids and skin-depth-sized subdivision for the Rust
+  API. The existing uniform grid and `.inp` `nwinc`/`nhinc` path are unchanged.
+  A wide-trace validation reaches 1.2 % resistance error against the
+  one-dimensional skin-effect asymptote; see `docs/validation.md`.
 
 - Output formats for tool interop: `--zc-mat` writes a binary MAT v4
   `Zc.mat`-format file (`Zc_1 … Zc_K` complex matrices + `freqs`; exact

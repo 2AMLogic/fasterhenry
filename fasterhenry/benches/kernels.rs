@@ -95,5 +95,57 @@ fn bench_self(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_batches, bench_self);
+criterion_group!(benches, bench_batches, bench_self, bench_skin_accuracy);
 criterion_main!(benches);
+
+/// Cost/accuracy curve for the skin-effect resistance at t/δ = 10.
+/// The reference is a converged 128-layer uniform grid; each benchmark
+/// assembles and solves a fresh system, so the time includes kernel work.
+fn bench_skin_accuracy(c: &mut Criterion) {
+    use fasterhenry::{solve, Discretization, Geometry, Port, SegmentDef, MU0};
+    let mut geometry = Geometry::new();
+    let a = geometry.add_node(Node::new(0.0, 0.0, 0.0)).unwrap();
+    let b = geometry.add_node(Node::new(0.4, 0.0, 0.0)).unwrap();
+    geometry
+        .add_segment(SegmentDef::new(a, b, 40e-3, 200e-6, COPPER))
+        .unwrap();
+    let ports = [Port::new(a, b)];
+    let delta: f64 = 20e-6;
+    let frequency = 1.0 / (std::f64::consts::PI * MU0 * COPPER * delta * delta);
+    let reference = solve(
+        &geometry,
+        &ports,
+        &Discretization::uniform(1, 128),
+        &[frequency],
+    )
+    .unwrap()
+    .impedance_ohm[0][(0, 0)]
+        .re;
+    let mut group = c.benchmark_group("skin_resistance_accuracy");
+    group.sample_size(10);
+    for count in [4, 8, 12, 16] {
+        for (kind, grid) in [
+            ("uniform", Discretization::uniform(1, count)),
+            ("graded_2to1", Discretization::graded(1, count, 2.0)),
+        ] {
+            let resistance = solve(&geometry, &ports, &grid, &[frequency])
+                .unwrap()
+                .impedance_ohm[0][(0, 0)]
+                .re;
+            let error_pct = 100.0 * (resistance / reference - 1.0).abs();
+            println!("skin accuracy: {kind} {count} filaments, R error {error_pct:.3}%");
+            group.bench_with_input(BenchmarkId::new(kind, count), &grid, |b, grid| {
+                b.iter(|| {
+                    solve(
+                        black_box(&geometry),
+                        black_box(&ports),
+                        black_box(grid),
+                        black_box(&[frequency]),
+                    )
+                    .unwrap()
+                })
+            });
+        }
+    }
+    group.finish();
+}

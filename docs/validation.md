@@ -96,3 +96,28 @@ the gate in release mode (assert-not-skipped, like the spiral gate).
 The `--fixture plane` / `--fixture plane-solid` modes of
 `tools/pypeec_reference.py` regenerate the references
 (`--voxel-um 5`, ~10 s each locally).
+## Surface-graded filaments (issue #23, measured 2026-09-21)
+
+A 400 mm × 40 mm × 200 µm copper trace (`σ = 5.8e7 S/m`) uses one
+filament across its width and 14 across its thickness at a 2:1 inward
+ratio. Against the one-dimensional slab solution
+`Z_int = l k coth(kt/2)/(2 σ w)`, `k = (1+j)/δ`, its resistance errors
+at `t/δ = 5, 10, 20` are `+0.17 %, −1.03 %, −1.14 %`. The analytic
+formula models internal impedance; the solver's imaginary port impedance
+includes the much larger external inductance and is compared through
+frequency-dependent differences. Its extracted internal inductance is within
+14.3 % of the slab expression over `t/δ = 2 … 20`, including the high
+frequency `L_int ∝ δ` transition. The DC partial inductance agrees with the
+Rosa/Grover rectangular-bar closed form to better than `1e-4` relative.
+
+On a separate 200 µm square trace, graded 4 × 4 at 10:1 differs from
+uniform 16 × 16 by `0.097 %, 0.002 %, <0.001 %` in complex impedance at
+`δ/t = 1, 3, 10`, using 16 instead of 256 filaments. The Criterion
+`skin_resistance_accuracy` bench reports resistance error against a
+128-layer uniform reference together with assembly-and-solve timing for
+4, 8, 12 and 16 layers.
+
+The slab is a one-dimensional reference. It does not certify grids graded
+across the *width* of a finite trace; those need an independent two-dimensional
+reference. This limitation and near-singular kernel handling are tracked in
+issue #30.
