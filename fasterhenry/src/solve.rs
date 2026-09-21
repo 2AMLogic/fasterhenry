@@ -482,3 +482,52 @@ fn congruence(
     );
     DMatrix::from_fn(loops, loops, |i, j| upper[i.min(j) * loops + i.max(j)])
 }
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::*;
+    use crate::geometry::{Geometry, Node, NodeId, SegmentDef};
+    use crate::mesh::Port;
+
+    /// Trace in parallel with a via–plane–via return path: the topology
+    /// that caught the loop-partition bug. Plain resistors at DC; the
+    /// answer is the parallel combination, independent of the forest.
+    #[test]
+    fn bridge_topology_dc_parallel() {
+        let sigma = 5.8e7;
+        let (w, t) = (0.2e-3, 35e-6);
+        let mut g = Geometry::new();
+        // Node/segment order matters for the forest: plane first (the
+        // ground-plane builder's order), trace second, vias last.
+        let n1 = NodeId(g.add_node(Node::new(2.5e-3, 0.0, -t / 2.0)).unwrap().0);
+        let n2 = NodeId(g.add_node(Node::new(7.5e-3, 0.0, -t / 2.0)).unwrap().0);
+        let a = NodeId(g.add_node(Node::new(2.5e-3, 0.0, 0.5e-3)).unwrap().0);
+        let b = NodeId(g.add_node(Node::new(7.5e-3, 0.0, 0.5e-3)).unwrap().0);
+        g.add_segment(SegmentDef::new(n1, n2, 2.0e-3, t, sigma))
+            .unwrap(); // plane bar
+        g.add_segment(SegmentDef::new(a, b, w, t, sigma)).unwrap(); // trace
+        g.add_segment(SegmentDef::new(a, n1, w, t, sigma)).unwrap(); // via a
+        g.add_segment(SegmentDef::new(b, n2, w, t, sigma)).unwrap(); // via b
+        let ports = vec![Port::new(a, b)];
+        let d = Discretization::PerSegment(vec![Subdivision::SINGLE; 4]);
+        let system = MeshSystem::assemble(&g, &ports, &d).unwrap();
+        println!(
+            "r_ee {}\nr_ep {}\nr_pp {}",
+            system.r_ee, system.r_ep, system.r_pp
+        );
+        let r_trace = 5.0e-3 / (sigma * w * t);
+        let r_path = 2.0 * 0.5175e-3 / (sigma * w * t) + 5.0e-3 / (sigma * 2.0e-3 * t);
+        let parallel = r_trace * r_path / (r_trace + r_path);
+        let z = system.impedance(0.0).unwrap();
+        println!(
+            "Z = {:.9e}, parallel {parallel:.9e}, trace {r_trace:.9e}",
+            z[(0, 0)].re
+        );
+        assert!(
+            (z[(0, 0)].re - parallel).abs() < 1e-6 * parallel,
+            "bridge DC {} vs parallel {}",
+            z[(0, 0)].re,
+            parallel
+        );
+    }
+}

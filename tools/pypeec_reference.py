@@ -57,6 +57,66 @@ SIGMA = 5.8e7  # copper, S/m
 FREQ_AC = 1.0e3  # low-frequency solve for L (skin depth 66 µm >> cross-section)
 
 
+# The plane-with-hole fixture: 1.2 x 0.8 x 0.02 mm copper sheet with a
+# 0.2 x 0.64 mm slot, current driven across the short ends (around the
+# slot). Everything in metres.
+PLANE_LO = [0.0, 0.0]
+PLANE_HI = [1.2e-3, 0.8e-3]
+PLANE_T = 20e-6
+PLANE_HOLE = ([0.5e-3, 0.0], [0.7e-3, 0.64e-3])
+
+
+def build_plane_geometry(voxel_m: float, slotted: bool = True) -> dict:
+    (x0, y0), (x1, y1) = PLANE_LO, PLANE_HI
+    if slotted:
+        (h0x, h0y), (h1x, h1y) = PLANE_HOLE
+    else:
+        (h0x, h0y), (h1x, h1y) = ([-1.0, -1.0], [-1.0, -1.0])  # no hole
+    nx = int(round((x1 - x0) / voxel_m))
+    ny = int(round((y1 - y0) / voxel_m))
+    nz = max(1, int(round(PLANE_T / voxel_m)))
+    d = (voxel_m, voxel_m, PLANE_T / nz)
+    c = ((x0 + x1) / 2, (y0 + y1) / 2, PLANE_T / 2)
+
+    idx = {"src": [], "sink": [], "wire": []}
+    pad = 0.6 * voxel_m  # single-column contacts, matching the fh cell-node port
+    for j in range(ny):
+        for i in range(nx):
+            x = x0 + (i + 0.5) * voxel_m
+            y = y0 + (j + 0.5) * voxel_m
+            if not (h0x < x < h1x and h0y < y < h1y):
+                if x - x0 <= pad:
+                    idx["src"].append(i + nx * j + nx * ny * 0)
+                elif x1 - x <= pad:
+                    idx["sink"].append(i + nx * j + nx * ny * (nz - 1))
+                else:
+                    idx["wire"].append(i + nx * j)
+                    # every z layer carries the wire
+                    for k in range(1, nz):
+                        idx["wire"].append(i + nx * j + nx * ny * k)
+    # src/sink pads span all layers too.
+    src_flat = [v - nx * ny * 0 for v in idx["src"]]
+    sink_flat = [v - nx * ny * (nz - 1) for v in idx["sink"]]
+    idx["src"] = [v + nx * ny * k for v in src_flat for k in range(nz)]
+    idx["sink"] = [v + nx * ny * k for v in sink_flat for k in range(nz)]
+    return {
+        "mesh_type": "voxel",
+        "data_voxelize": {"param": {"n": [nx, ny, nz], "d": list(d), "c": list(c)},
+                          "domain_index": idx},
+        "data_point": {"check_cloud": False, "filter_cloud": False, "pts_cloud": []},
+        "data_resampling": {"use_reduce": False, "use_resample": False,
+                            "resampling_factor": [1, 1, 1]},
+        "data_conflict": {"resolve_rules": False, "resolve_random": False,
+                          "conflict_rules": []},
+        "data_integrity": {
+            "check_integrity": True,
+            "domain_connected": {"conductor": {"domain_group": [["src", "wire", "sink"]],
+                                               "connected": True}},
+            "domain_adjacent": {},
+        },
+    }
+
+
 def build_geometry(voxel_um: float) -> dict:
     segments = square_spiral_segments(2, 60.0, 15.0)
     w = W_UM
@@ -262,10 +322,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="tools/pypeec_reference.json")
     parser.add_argument("--voxel-um", type=float, default=1.0)
+    parser.add_argument("--fixture", choices=["spiral", "plane", "plane-solid"], default="spiral")
     args = parser.parse_args()
 
     started = time.time()
-    geometry = build_geometry(args.voxel_um)
+    geometry = (
+        build_plane_geometry(args.voxel_um * 1e-6, True)
+        if args.fixture == "plane"
+        else build_plane_geometry(args.voxel_um * 1e-6, False)
+        if args.fixture == "plane-solid"
+        else build_geometry(args.voxel_um)
+    )
     data_voxel = mesher.run(geometry)
     n_voxel = sum(len(v) for v in geometry["data_voxelize"]["domain_index"].values())
     print(f"voxels: {n_voxel} conductor voxels in grid {geometry['data_voxelize']['param']['n']}")
@@ -277,7 +344,7 @@ def main() -> None:
 
     result = {
         "pypeec_version": getattr(pypeec, "__version__", "unknown"),
-        "fixture": "2-turn square spiral, 60 um start side, 15 um pitch, 2x2 um copper",
+        "fixture": args.fixture,
         "voxel_size_um": args.voxel_um,
         "conductor_voxels": n_voxel,
         "freq_ac_hz": FREQ_AC,

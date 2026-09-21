@@ -150,3 +150,93 @@ fn missing_ports_and_frequencies_are_clear_errors() {
     problem.frequencies_hz.clear();
     assert!(run(&problem, None).unwrap_err().contains("no frequencies"));
 }
+
+use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
+use fasterhenry::mesh::Port;
+use fasterhenry::solve::{Discretization, Subdivision};
+
+/// The deck path and the library-API path build identical trace-over-plane
+/// systems: same plane mesh, same snapped vias, same Z — bit for bit.
+#[test]
+fn plane_deck_matches_the_api_fixture() {
+    use fasterhenry::plane::GroundPlane;
+    use fasterhenry::solve::solve;
+
+    let deck = read_inputs_from_text(
+        "\
+.units mm
+.default sigma=5.8e4
+Gp 0 -3 0 10 3 0 0.035 nx=20 ny=6
+n1 x=1 y=0 z=0.5
+n2 x=9 y=0 z=0.5
+n3 x=1 y=0 z=0
+n4 x=9 y=0 z=0
+e1 n1 n2 w=0.2 h=0.035 nwinc=2
+e2 n1 n3 w=0.2 h=0.035
+e3 n2 n4 w=0.2 h=0.035
+.external n1 n2
+.freq fmin=1e9 fmax=1e9 ndec=1
+.end
+",
+    )
+    .expect("deck parses");
+
+    // The same system through the library API directly.
+    // Values computed exactly as the deck computes them (mm * 1e-3,
+    // sigma / unit): a 1-ulp difference anywhere breaks bit equality.
+    let (w, t, sigma) = (0.2 * 1e-3, 0.035 * 1e-3, 5.8e4 / 1e-3);
+    let mut api = Geometry::new();
+    let plane = GroundPlane {
+        lo: [0.0, -3.0e-3],
+        hi: [10.0e-3, 3.0e-3],
+        z_top: 0.0,
+        thickness: t,
+        nx: 20,
+        ny: 6,
+        sigma,
+        holes: Vec::new(),
+    };
+    let centres = plane.build_into(&mut api).unwrap();
+    // Positions computed exactly as the deck computes them (mm * 1e-3):
+    // a 1-ulp difference flips the snap tie at x = 9 mm.
+    let (xa, xb, zt) = (1.0 * 1e-3, 9.0 * 1e-3, 0.5 * 1e-3);
+    let snap_a = plane.attach(&centres, [xa, 0.0, 0.0]).unwrap();
+    let snap_b = plane.attach(&centres, [xb, 0.0, 0.0]).unwrap();
+    let a = NodeId(api.add_node(Node::new(xa, 0.0, zt)).unwrap().0);
+    let b = NodeId(api.add_node(Node::new(xb, 0.0, zt)).unwrap().0);
+    // Deck order: trace (e1), then the vias (e2, e3).
+    api.add_segment(SegmentDef::new(a, b, w, t, sigma)).unwrap();
+    for (top, bottom) in [(a, snap_a), (b, snap_b)] {
+        api.add_segment(SegmentDef::new(top, bottom, w, t, sigma))
+            .unwrap();
+    }
+    let mut subdivisions = vec![Subdivision::new(1, 1); api.segment_count()];
+    subdivisions[api.segment_count() - 3] = Subdivision::new(2, 1);
+    let api_result = solve(
+        &api,
+        &[Port::new(a, b)],
+        &Discretization::PerSegment(subdivisions),
+        &[1e9],
+    )
+    .unwrap();
+
+    let deck_result = run(&deck, None).unwrap();
+    assert_eq!(deck_result.frequencies_hz, api_result.frequencies_hz);
+    let z_deck = deck_result.impedance_ohm[0][(0, 0)];
+    let z_api = api_result.impedance_ohm[0][(0, 0)];
+    assert_eq!(z_deck, z_api, "deck and API paths must agree bit for bit");
+    let counts = &deck_result.provenance.counts;
+    assert_eq!(counts.segments, 20 * 6 * 2 - 20 - 6 + 3, "plane bars + 3");
+    assert_eq!(
+        counts.nodes,
+        20 * 6 + 2,
+        "cells + trace nodes; via nodes snapped away"
+    );
+}
+
+/// Parse helper for inline deck text (the file-based one needs a path).
+fn read_inputs_from_text(text: &str) -> Result<fasterhenry_cli::Problem, String> {
+    fasterhenry_cli::inp::parse(text)
+        .map(fasterhenry_cli::Problem::from)
+        .map_err(|error| error.to_string())
+}
