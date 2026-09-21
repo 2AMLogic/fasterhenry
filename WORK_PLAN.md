@@ -10,14 +10,18 @@ Prioritized roadmap of upcoming work, maintained by the Guide role.
 
 ## Ready
 
-M0 is complete (merged 2026-09-20/21 overnight session). The M1
-FastHenry-parity set, filed and ready in implementation order:
+M0 is complete (2026-09-20/21). M1 underway: **#21 outputs** (PR #26:
+MAT v4 + SPICE, ngspice/scipy-verified) and **#22 ground planes** (PR
+#29: G/.hole + PyPEEC slot-differential gate) are merged; the
+FastHenry head-to-head landed in `docs/benchmarks.md` (sub-0.1 % engine
+agreement on shared fixtures; dense wall-clock wins through 20k
+filaments). Remaining M1, in priority order:
 
-- **#21**: binary `Zc.mat` (MAT v4) + SPICE subcircuit export
-- **#22**: ground planes (`G`) with holes
 - **#23**: skin-depth-adaptive filament subdivision
-- **#24**: precorrected-FFT acceleration
+- **#24**: precorrected-FFT acceleration (14x per-thread gap to close)
 - **#25**: coupling truncation (`.couples`-style)
+- **#27**: committed benchmark suite + the FH contact-dialect plane
+  comparison
 
 ## In Progress
 
