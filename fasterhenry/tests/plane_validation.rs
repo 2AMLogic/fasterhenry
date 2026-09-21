@@ -1,26 +1,28 @@
-//! Ground-plane validation (issue #22): a signal trace returning through
-//! a plane, against method-of-images references.
+//! Ground-plane validation (issue #22): independent PyPEEC slot-differential
+//! gates, plus trace-over-plane convergence and coarse sanity checks.
 //!
-//! # Fixture
+//! # Trace-over-plane diagnostic
 //!
 //! A copper trace (0.2 mm × 35 µm) runs 8 mm at height `h = 0.5 mm` above
 //! a 10 mm × 6 mm × 35 µm plane; a via at each end drops onto the plane,
 //! snapped to the nearest live cell node. The port closes the loop across
 //! the trace.
 //!
-//! # Physics being validated
+//! The return current's lateral distribution is solved by the mesh. We
+//! check low-frequency grid convergence, LF/RF inductance ordering, and
+//! DC resistance bounds. The RF inductance is also reported against a
+//! rectangle-image estimate plus the two vias' Rosa self terms, with a
+//! coarse 45 % sanity bound. This composite fixture's vias, snap offsets,
+//! finite plane, and single-filament plane bars prevent a demonstrated
+//! 5–10 % image-oracle accuracy claim.
 //!
-//! The return current's lateral distribution is solved by the mesh, and
-//! its frequency behaviour is the point:
+//! # Independent plane-validation gate
 //!
-//! * at low frequency `R >> ωL` and the return spreads across the whole
-//!   plane — a large, grid-converged loop inductance (checked for
-//!   convergence, not against an image formula, which does not apply);
-//! * at high frequency `ωL >> R` and proximity crowds the return under
-//!   the trace, approaching the method-of-images answer for a perfect
-//!   plane. The oracle there: the rectangle-cross-section image pair
-//!   (wire-over-plane, **not** the twin-lead — the loop spans `h`, not
-//!   `2h`) plus the two vias' Rosa self terms. Stated tolerance 10 %.
+//! A separate slotted-versus-solid plane fixture compares the slot's
+//! inductance and resistance increments against independent PyPEEC voxel
+//! references, within 5.5 % and 15 % respectively. CI generates both
+//! references and runs this gate in release mode; without references the
+//! local test skips that comparison.
 
 use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
 use fasterhenry::mesh::Port;
@@ -80,11 +82,11 @@ fn loop_inductance(nx: usize, ny: usize, frequency: f64) -> f64 {
     result.impedance_ohm[0][(0, 0)].im / (std::f64::consts::TAU * frequency)
 }
 
-/// Wire-over-plane rectangle-image oracle: the loop spans the height `h`
+/// Wire-over-plane rectangle-image estimate: the loop spans the height `h`
 /// (return on the plane surface), so the pair distance in the cross-term
 /// runs over `[2h, 2h + 2t]`; the self term uses the rectangle's
 /// geometric mean distance `0.2235 (w + t)`. Plus both vias' Rosa terms.
-fn image_oracle() -> f64 {
+fn image_estimate() -> f64 {
     // <ln R>_cross by 16x16 midpoint quadrature over (dx, dz-offset).
     let mut integral = 0.0;
     const N: usize = 16;
@@ -99,9 +101,9 @@ fn image_oracle() -> f64 {
     let gmd = 0.2235 * (TRACE_W + T);
     let l_prime = MU0 / (2.0 * std::f64::consts::PI) * (cross - gmd.ln());
 
-    // The two vias: Rosa self terms (over an image-terminated return; the
-    // via's own image sits in the plane, so the plain Rosa term is the
-    // right order for this 10 % class oracle).
+    // Approximate the two vias with Rosa self terms. These do not resolve
+    // the snapped via geometry or its coupling to the finite plane and
+    // trace, so the composite estimate has no demonstrated 10 % bound.
     let a_eq = (TRACE_W * T / std::f64::consts::PI).sqrt();
     let via = |length: f64| {
         MU0 / (2.0 * std::f64::consts::PI) * length * ((2.0 * length / a_eq).ln() - 0.75)
@@ -110,20 +112,19 @@ fn image_oracle() -> f64 {
 }
 
 #[test]
-fn trace_over_plane_matches_the_image_impedance_at_rf() {
-    let oracle = image_oracle();
+fn trace_over_plane_rf_image_estimate_is_a_coarse_sanity_check() {
+    let oracle = image_estimate();
     let measured = loop_inductance(20, 6, 1e9);
     let relative = (measured - oracle).abs() / oracle;
     println!(
-        "RF: L = {:.4} nH vs image+via oracle {:.4} nH (rel {relative:.4})",
+        "RF: L = {:.4} nH vs image+via estimate {:.4} nH (rel {relative:.4})",
         measured * 1e9,
         oracle * 1e9
     );
-    // The image pair is an idealization this composite fixture (vias, snap
-    // offsets, finite plane, single-filament plane bars) does not meet at
-    // 10 %; the gate for this criterion is the PyPEEC voxel comparison of
-    // the same fixture (next increment). Reported, not asserted, until then.
-    assert!(relative < 0.45, "gross image-oracle deviation {relative}");
+    // Retain a coarse regression check and the diagnostic above. Accuracy
+    // is independently gated by the separate PyPEEC slot differential,
+    // not by a 5–10 % image-oracle bound for this composite fixture.
+    assert!(relative < 0.45, "gross image-estimate deviation {relative}");
 }
 
 #[test]
