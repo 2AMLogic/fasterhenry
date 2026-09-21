@@ -36,7 +36,8 @@ pub use geometry::{
     Geometry, GeometryError, LocalBasis, Node, NodeId, Segment, SegmentDef, SegmentError,
 };
 pub use inductance::{
-    mutual_batch, mutual_inductance, partial_inductance_matrix, self_inductance, KernelError, MU0,
+    mutual_batch, mutual_batch_detailed, mutual_inductance, partial_inductance_matrix,
+    partial_inductance_matrix_detailed, self_inductance, KernelError, MutualBatch, MU0,
 };
 pub use mesh::{MeshError, MeshMatrix, Port};
 pub use result::{Counts, Provenance, SweepResult, Timing};
