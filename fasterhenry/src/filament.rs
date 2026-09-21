@@ -23,6 +23,8 @@ use thiserror::Error;
 
 use crate::geometry::{LocalBasis, Segment, SegmentError};
 
+mod grading;
+
 /// A straight current filament of rectangular cross-section.
 ///
 /// A filament always carries a consistent orthonormal [`LocalBasis`], so it is
@@ -174,6 +176,23 @@ pub enum DiscretizeError {
         ratio: f64,
         /// The requested filament count along the offending axis.
         count: usize,
+    },
+    /// A graded cell is too thin for the kernel's conditioning envelope or
+    /// for its centre and faces to remain distinct at the supplied coordinates.
+    #[error("unusable graded grid {nw} x {nh} at ratio {ratio}: {axis} cell extent {extent:e} m requires at least {minimum:e} m for kernel conditioning and coordinate resolution")]
+    UnusableGrading {
+        /// Cross-section axis that failed validation (`width` or `height`).
+        axis: &'static str,
+        /// Selected width count, including automatic sizing.
+        nw: usize,
+        /// Selected height count, including automatic sizing.
+        nh: usize,
+        /// Selected grading ratio.
+        ratio: f64,
+        /// Smallest cell extent on the offending axis, in metres.
+        extent: f64,
+        /// Scale-dependent minimum permitted extent, in metres.
+        minimum: f64,
     },
 }
 
@@ -356,13 +375,33 @@ pub fn discretize(
 /// exactly, share its length, [`LocalBasis`] and conductivity, are symmetric
 /// about the centreline, and are ordered with the width index fastest —
 /// filament `(i, j)` at position `j · nw + i`. `ratio == 1.0` delegates to
-/// [`discretize`], so the uniform grid is reproduced bit for bit.
+/// [`discretize`] after validation, reproducing a supported uniform grid bit
+/// for bit.
+///
+/// # Numerical limits
+///
+/// Each cell extent must be at least `1e-7 * max(length, width, height)`.
+/// This conservatively bounds dimension ratios by the longitudinal `1e7`
+/// envelope exercised by the [inductance kernels](crate::inductance), and
+/// keeps even the smallest cell well above the aligned kernel's `1e-12`
+/// relative boundary-snapping scale. This is a conditioning guard, not an
+/// accuracy or mesh-convergence guarantee for every cross-section aspect.
+///
+/// It must also be at least `32 * f64::EPSILON * coordinate_scale`, where
+/// `coordinate_scale` is the absolute coordinate envelope of the segment
+/// (including its cross-section) projected onto that cell's axis. The
+/// reserve covers offset additions and subsequent coordinate subtraction;
+/// centres and both faces must remain distinct. Consequently the permitted
+/// ratio/count depends on the shape and its placement, with no fixed
+/// minimum size in metres. Recentring can remedy coordinate-resolution
+/// errors; reducing the count or ratio can remedy excessive grading.
 ///
 /// # Errors
 ///
 /// As [`discretize`], plus [`DiscretizeError::InvalidRatio`] unless `ratio`
 /// is finite and at least `1`, and [`DiscretizeError::GradingOverflow`] if
-/// the geometric progression overflows.
+/// the geometric progression overflows. [`DiscretizeError::UnusableGrading`]
+/// rejects cells outside the numerical limits before kernel evaluation.
 ///
 /// # Example
 ///
@@ -398,10 +437,6 @@ pub fn discretize_graded(
     if !(ratio.is_finite() && ratio >= 1.0) {
         return Err(DiscretizeError::InvalidRatio { ratio });
     }
-    // Bit-for-bit the uniform grid, and cheaper: no progression to build.
-    if ratio == 1.0 {
-        return discretize(segment, nw, nh);
-    }
     if nw == 0 || nh == 0 {
         return Err(DiscretizeError::ZeroSubdivision { nw, nh });
     }
@@ -414,6 +449,16 @@ pub fn discretize_graded(
 
     let across_width = graded_cells(segment.width, nw, ratio)?;
     let across_height = graded_cells(segment.height, nh, ratio)?;
+    grading::validate(
+        segment,
+        &basis,
+        &across_width,
+        &across_height,
+        (nw, nh, ratio),
+    )?;
+    if ratio == 1.0 {
+        return discretize(segment, nw, nh);
+    }
 
     let mut filaments = Vec::with_capacity(filament_count);
     for &(height_offset, filament_height) in &across_height {
@@ -445,7 +490,7 @@ fn graded_cells(total: f64, count: usize, ratio: f64) -> Result<Vec<(f64, f64)>,
         .map(|weight| {
             let centre = total * ((lower + 0.5 * weight) / sum - 0.5);
             lower += weight;
-            (centre, total * weight / sum)
+            (centre, total * (weight / sum))
         })
         .collect())
 }

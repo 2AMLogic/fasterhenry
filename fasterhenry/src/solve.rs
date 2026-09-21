@@ -66,7 +66,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::dense::lu_solve;
-use crate::filament::{discretize_graded, graded_surface_extent, DiscretizeError, Filament};
+use crate::filament::{
+    discretize, discretize_graded, graded_surface_extent, DiscretizeError, Filament,
+};
 use crate::geometry::Geometry;
 use crate::inductance::{partial_inductance_matrix, KernelError, MU0};
 use crate::mesh::{MeshError, MeshMatrix, Port};
@@ -99,7 +101,9 @@ impl Subdivision {
 /// each filament is `ratio` times the extent of its neighbour one step
 /// nearer the surface (see [`crate::filament::discretize_graded`]).
 ///
-/// `ratio == 1.0` is the uniform grid of the same counts, bit for bit.
+/// Supported grids at `ratio == 1.0` equal the uniform grid bit for bit.
+/// Assembly rejects grids outside [`discretize_graded`]'s scale-aware
+/// numerical limits, reporting the segment, axis, counts and ratio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Grading {
     /// Filaments across the width.
@@ -144,6 +148,12 @@ impl Grading {
 /// `max_per_axis` caps the result, so a very high frequency degrades to a
 /// merely-fine grid instead of an unaffordable one. At `f = 0` the skin
 /// depth is infinite and every segment is a single filament.
+///
+/// The cap controls cost, not numerical safety. After counts are selected,
+/// assembly applies [`discretize_graded`]'s scale-aware limits and returns
+/// [`SolveError::Discretize`] with the segment, axis and selected grid if it
+/// is unusable. It does not silently replace the selected grid with a coarser
+/// one when the requested resolution is numerically unsafe.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SkinDepthGrading {
     /// The frequency whose skin depth the grid must resolve, in hertz.
@@ -211,7 +221,7 @@ impl SkinDepthGrading {
     /// [`validate`](Self::validate) has passed.
     fn count_for(&self, extent: f64, sigma: f64) -> usize {
         let target = self.target_skin_depths * skin_depth(self.frequency_hz, sigma);
-        if !(target.is_finite() && target > 0.0) || extent <= target {
+        if target.is_infinite() || extent <= target {
             return 1;
         }
         for count in 2..=self.max_per_axis {
@@ -402,7 +412,8 @@ impl MeshSystem {
     ///
     /// # Errors
     ///
-    /// * [`SolveError::Discretize`] for a zero `nw` or `nh`;
+    /// * [`SolveError::Discretize`] for a zero `nw` or `nh`, or graded cells
+    ///   outside [`discretize_graded`]'s numerical limits;
     /// * [`SolveError::InvalidGrading`] for an out-of-range grading
     ///   parameter;
     /// * [`SolveError::Mesh`] for ports that do not fit the geometry (none
@@ -422,13 +433,16 @@ impl MeshSystem {
         let mut filaments = Vec::new();
         let mut per_segment = Vec::with_capacity(grids.len());
         for (index, (segment, grid)) in geometry.segments().zip(&grids).enumerate() {
-            let bundle =
-                discretize_graded(&segment, grid.nw, grid.nh, grid.ratio).map_err(|source| {
-                    SolveError::Discretize {
-                        segment: index,
-                        source,
-                    }
-                })?;
+            let bundle = match discretization {
+                Discretization::Uniform(_) | Discretization::PerSegment(_) => {
+                    discretize(&segment, grid.nw, grid.nh)
+                }
+                _ => discretize_graded(&segment, grid.nw, grid.nh, grid.ratio),
+            }
+            .map_err(|source| SolveError::Discretize {
+                segment: index,
+                source,
+            })?;
             per_segment.push(bundle.len());
             filaments.extend(bundle);
         }
