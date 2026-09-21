@@ -66,9 +66,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::dense::lu_solve;
-use crate::filament::{discretize, DiscretizeError, Filament};
+use crate::filament::{discretize_graded, graded_surface_extent, DiscretizeError, Filament};
 use crate::geometry::Geometry;
-use crate::inductance::{partial_inductance_matrix, KernelError};
+use crate::inductance::{partial_inductance_matrix, KernelError, MU0};
 use crate::mesh::{MeshError, MeshMatrix, Port};
 use crate::result::{Counts, Provenance, SweepResult, Timing};
 
@@ -95,14 +95,149 @@ impl Subdivision {
     pub const SINGLE: Self = Self::new(1, 1);
 }
 
+/// An `nw × nh` grid graded geometrically toward the conductor surfaces:
+/// each filament is `ratio` times the extent of its neighbour one step
+/// nearer the surface (see [`crate::filament::discretize_graded`]).
+///
+/// `ratio == 1.0` is the uniform grid of the same counts, bit for bit.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Grading {
+    /// Filaments across the width.
+    pub nw: usize,
+    /// Filaments across the height.
+    pub nh: usize,
+    /// Ratio of adjacent filament extents, coarsening inward; at least 1.
+    pub ratio: f64,
+}
+
+impl Grading {
+    /// `nw × nh` filaments graded inward by `ratio`.
+    pub const fn new(nw: usize, nh: usize, ratio: f64) -> Self {
+        Self { nw, nh, ratio }
+    }
+
+    fn validate(&self) -> Result<(), SolveError> {
+        if self.ratio.is_finite() && self.ratio >= 1.0 {
+            Ok(())
+        } else {
+            Err(SolveError::InvalidGrading {
+                reason: format!(
+                    "the grading ratio must be finite and at least 1, got {}",
+                    self.ratio
+                ),
+            })
+        }
+    }
+}
+
+/// A graded grid whose filament counts are chosen per segment from the skin
+/// depth at a frequency of interest.
+///
+/// For each segment and each cross-section axis, the count is the smallest
+/// one whose *surface* filament is at most `target_skin_depths · δ` thick,
+/// where `δ = 1/√(π·f·μ0·σ)` is the skin depth of that segment's material at
+/// `frequency_hz` ([`skin_depth`]). Because grading buys resolution
+/// geometrically, that count grows only logarithmically as the frequency
+/// rises, where a uniform grid's grows as `√f`.
+///
+/// `max_per_axis` caps the result, so a very high frequency degrades to a
+/// merely-fine grid instead of an unaffordable one. At `f = 0` the skin
+/// depth is infinite and every segment is a single filament.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkinDepthGrading {
+    /// The frequency whose skin depth the grid must resolve, in hertz.
+    pub frequency_hz: f64,
+    /// Thickness of the surface filaments, in skin depths. Values below 1
+    /// resolve the profile within the skin; `0.5` is a reasonable default.
+    pub target_skin_depths: f64,
+    /// Ratio of adjacent filament extents, coarsening inward; at least 1.
+    pub ratio: f64,
+    /// Upper bound on the filament count along each axis.
+    pub max_per_axis: usize,
+}
+
+impl SkinDepthGrading {
+    /// Cap used by [`SkinDepthGrading::new`]: 32 filaments per axis, i.e. up
+    /// to 1024 per segment.
+    pub const DEFAULT_MAX_PER_AXIS: usize = 32;
+
+    /// Surface filaments `target_skin_depths` skin depths thick at
+    /// `frequency_hz`, graded inward by `ratio`, capped at
+    /// [`DEFAULT_MAX_PER_AXIS`](Self::DEFAULT_MAX_PER_AXIS).
+    pub const fn new(frequency_hz: f64, target_skin_depths: f64, ratio: f64) -> Self {
+        Self {
+            frequency_hz,
+            target_skin_depths,
+            ratio,
+            max_per_axis: Self::DEFAULT_MAX_PER_AXIS,
+        }
+    }
+
+    /// The same, with an explicit cap on the filaments per axis.
+    pub const fn with_max_per_axis(mut self, max_per_axis: usize) -> Self {
+        self.max_per_axis = max_per_axis;
+        self
+    }
+
+    fn validate(&self) -> Result<(), SolveError> {
+        let invalid = |reason: String| Err(SolveError::InvalidGrading { reason });
+        if !(self.ratio.is_finite() && self.ratio >= 1.0) {
+            return invalid(format!(
+                "the grading ratio must be finite and at least 1, got {}",
+                self.ratio
+            ));
+        }
+        if !(self.target_skin_depths.is_finite() && self.target_skin_depths > 0.0) {
+            return invalid(format!(
+                "target_skin_depths must be finite and positive, got {}",
+                self.target_skin_depths
+            ));
+        }
+        if !(self.frequency_hz.is_finite() && self.frequency_hz >= 0.0) {
+            return invalid(format!(
+                "frequency_hz must be finite and non-negative, got {}",
+                self.frequency_hz
+            ));
+        }
+        if self.max_per_axis == 0 {
+            return invalid("max_per_axis must be at least 1".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Smallest filament count whose surface cell is within the target, for a
+    /// cross-section extent of `extent` metres in a material of conductivity
+    /// `sigma`. Assumes [`validate`](Self::validate) has passed.
+    fn count_for(&self, extent: f64, sigma: f64) -> usize {
+        let target = self.target_skin_depths * skin_depth(self.frequency_hz, sigma);
+        if !(target.is_finite() && target > 0.0) || extent <= target {
+            return 1;
+        }
+        for count in 2..=self.max_per_axis {
+            match graded_surface_extent(extent, count, self.ratio) {
+                Ok(surface) if surface <= target => return count,
+                // The progression overflowed: no larger count can help.
+                Err(_) => return count - 1,
+                Ok(_) => {}
+            }
+        }
+        self.max_per_axis
+    }
+}
+
 /// How the segments of a geometry are cut into filaments.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Discretization {
-    /// The same subdivision for every segment.
+    /// The same uniform subdivision for every segment.
     Uniform(Subdivision),
-    /// One subdivision per segment, in segment order.
+    /// One uniform subdivision per segment, in segment order.
     PerSegment(Vec<Subdivision>),
+    /// The same surface-graded grid for every segment.
+    Graded(Grading),
+    /// A surface-graded grid whose counts follow the skin depth at a
+    /// frequency of interest, segment by segment.
+    SkinDepth(SkinDepthGrading),
 }
 
 impl Discretization {
@@ -111,16 +246,88 @@ impl Discretization {
         Self::Uniform(Subdivision::new(nw, nh))
     }
 
-    fn resolve(&self, segment_count: usize) -> Result<Vec<Subdivision>, SolveError> {
+    /// The same `nw × nh` grid for every segment, graded inward by `ratio`.
+    pub const fn graded(nw: usize, nh: usize, ratio: f64) -> Self {
+        Self::Graded(Grading::new(nw, nh, ratio))
+    }
+
+    /// Filament counts chosen per segment so that the surface filaments are
+    /// `target_skin_depths` skin depths thick at `frequency_hz`, graded
+    /// inward by `ratio`. See [`SkinDepthGrading`].
+    pub const fn skin_depth(frequency_hz: f64, target_skin_depths: f64, ratio: f64) -> Self {
+        Self::SkinDepth(SkinDepthGrading::new(
+            frequency_hz,
+            target_skin_depths,
+            ratio,
+        ))
+    }
+
+    fn resolve(&self, geometry: &Geometry) -> Result<Vec<SegmentGrid>, SolveError> {
+        let segment_count = geometry.segment_count();
         match self {
-            Self::Uniform(subdivision) => Ok(vec![*subdivision; segment_count]),
-            Self::PerSegment(list) if list.len() == segment_count => Ok(list.clone()),
+            Self::Uniform(subdivision) => Ok(vec![SegmentGrid::from(*subdivision); segment_count]),
+            Self::PerSegment(list) if list.len() == segment_count => {
+                Ok(list.iter().copied().map(SegmentGrid::from).collect())
+            }
             Self::PerSegment(list) => Err(SolveError::Mesh(MeshError::SegmentCountMismatch {
                 expected: segment_count,
                 got: list.len(),
             })),
+            Self::Graded(grading) => {
+                grading.validate()?;
+                Ok(vec![SegmentGrid::from(*grading); segment_count])
+            }
+            Self::SkinDepth(grading) => {
+                grading.validate()?;
+                Ok(geometry
+                    .segments()
+                    .map(|segment| SegmentGrid {
+                        nw: grading.count_for(segment.width, segment.sigma),
+                        nh: grading.count_for(segment.height, segment.sigma),
+                        ratio: grading.ratio,
+                    })
+                    .collect())
+            }
         }
     }
+}
+
+/// The grid one segment is actually cut on, once the [`Discretization`] has
+/// been resolved against the geometry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SegmentGrid {
+    nw: usize,
+    nh: usize,
+    ratio: f64,
+}
+
+impl From<Subdivision> for SegmentGrid {
+    fn from(subdivision: Subdivision) -> Self {
+        Self {
+            nw: subdivision.nw,
+            nh: subdivision.nh,
+            ratio: 1.0,
+        }
+    }
+}
+
+impl From<Grading> for SegmentGrid {
+    fn from(grading: Grading) -> Self {
+        Self {
+            nw: grading.nw,
+            nh: grading.nh,
+            ratio: grading.ratio,
+        }
+    }
+}
+
+/// Skin depth `δ = 1/√(π·f·μ0·σ)` in metres, for a frequency `f` in hertz and
+/// a conductivity `sigma` in S/m — the `1/e` depth of the exponential decay
+/// of a field diffusing into a good conductor.
+///
+/// Infinite at `f = 0`, where the current fills the conductor.
+pub fn skin_depth(frequency_hz: f64, sigma: f64) -> f64 {
+    1.0 / (std::f64::consts::PI * frequency_hz * MU0 * sigma).sqrt()
 }
 
 /// Why an impedance extraction failed.
@@ -141,6 +348,12 @@ pub enum SolveError {
     /// The ports or the discretization do not fit the geometry.
     #[error(transparent)]
     Mesh(#[from] MeshError),
+    /// A [`Grading`] or [`SkinDepthGrading`] parameter is out of range.
+    #[error("invalid grading: {reason}")]
+    InvalidGrading {
+        /// Which parameter was wrong, and what it was.
+        reason: String,
+    },
     /// A frequency is negative or not finite.
     #[error("frequency {index} is {value} Hz; frequencies must be finite and non-negative")]
     InvalidFrequency {
@@ -189,6 +402,8 @@ impl MeshSystem {
     /// # Errors
     ///
     /// * [`SolveError::Discretize`] for a zero `nw` or `nh`;
+    /// * [`SolveError::InvalidGrading`] for an out-of-range grading
+    ///   parameter;
     /// * [`SolveError::Mesh`] for ports that do not fit the geometry (none
     ///   given, unknown or repeated node, terminals on different conductors)
     ///   or a per-segment discretization of the wrong length;
@@ -201,13 +416,13 @@ impl MeshSystem {
         discretization: &Discretization,
     ) -> Result<Self, SolveError> {
         let start = Instant::now();
-        let subdivisions = discretization.resolve(geometry.segment_count())?;
+        let grids = discretization.resolve(geometry)?;
 
         let mut filaments = Vec::new();
-        let mut per_segment = Vec::with_capacity(subdivisions.len());
-        for (index, (segment, subdivision)) in geometry.segments().zip(&subdivisions).enumerate() {
+        let mut per_segment = Vec::with_capacity(grids.len());
+        for (index, (segment, grid)) in geometry.segments().zip(&grids).enumerate() {
             let bundle =
-                discretize(&segment, subdivision.nw, subdivision.nh).map_err(|source| {
+                discretize_graded(&segment, grid.nw, grid.nh, grid.ratio).map_err(|source| {
                     SolveError::Discretize {
                         segment: index,
                         source,

@@ -11,7 +11,9 @@
 //! # Pipeline
 //!
 //! A [`Geometry`] of nodes and segments is cut into [`Filament`]s
-//! ([`discretize`]); their resistances and partial inductances
+//! ([`discretize`], or [`discretize_graded`] for a skin-depth-aware grid
+//! graded toward the conductor surfaces); their resistances and partial
+//! inductances
 //! ([`mod@inductance`]) form the branch impedance `R + jωL`; a loop basis
 //! ([`mesh`]) turns that into the mesh system, which [`solve()`] reduces to
 //! the impedance matrix `Z(ω)` seen at user-defined [`Port`]s over a list of
@@ -29,7 +31,7 @@ pub mod plane;
 pub mod result;
 pub mod solve;
 
-pub use filament::{discretize, DiscretizeError, Filament};
+pub use filament::{discretize, discretize_graded, DiscretizeError, Filament};
 pub use geometry::{
     Geometry, GeometryError, LocalBasis, Node, NodeId, Segment, SegmentDef, SegmentError,
 };
@@ -38,7 +40,10 @@ pub use inductance::{
 };
 pub use mesh::{MeshError, MeshMatrix, Port};
 pub use result::{Counts, Provenance, SweepResult, Timing};
-pub use solve::{filament_resistance, solve, Discretization, MeshSystem, SolveError, Subdivision};
+pub use solve::{
+    filament_resistance, skin_depth, solve, Discretization, Grading, MeshSystem, SkinDepthGrading,
+    SolveError, Subdivision,
+};
 
 /// Crate version, for CLI `--version` and JSON output provenance.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
