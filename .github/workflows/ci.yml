@@ -74,6 +74,28 @@ jobs:
             echo "::error::spiral_validation skipped although the reference was generated"
             exit 1
           fi
+      # The MAT v4 export round-trips through scipy.io.loadmat with values
+      # identical to the JSON output (structure check lives in the Rust tests).
+      - name: output formats (scipy loadmat vs JSON)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          cargo run -q -p fasterhenry-cli -- run fasterhenry-cli/tests/data/spiral.inp \
+            --freq 1e6 1e9 1 --json target/spiral.json --zc-mat target/spiral.mat
+          python3 - << 'PYEOF'
+          import json
+          from scipy.io import loadmat
+          result = json.load(open('target/spiral.json'))
+          mat = loadmat('target/spiral.mat')
+          assert mat['freqs'].flatten().tolist() == result['frequencies_hz']
+          for k, z in enumerate(result['impedance_ohm']):
+              for i, row in enumerate(z):
+                  for j, entry in enumerate(row):
+                      got = mat[f'Zc_{k + 1}'][i, j]
+                      assert abs(got.real - entry['re']) <= 1e-12 * abs(entry['re']) + 1e-30
+                      assert abs(got.imag - entry['im']) <= 1e-12 * abs(entry['im']) + 1e-30
+          print('scipy.io.loadmat round-trip: exact')
+          PYEOF
 
   package:
     name: Package (cargo publish --dry-run)
