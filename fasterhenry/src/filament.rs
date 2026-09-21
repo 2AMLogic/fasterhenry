@@ -870,7 +870,7 @@ mod tests {
 
     /// Hand-computed fixture: 4 filaments at 3:1 across a 0.8-wide segment
     /// have weights 1, 3, 3, 1 summing to 8, so extents 0.1, 0.3, 0.3, 0.1
-    /// and centres −0.35, −0.2, +0.2, +0.35 from the centreline (+y here).
+    /// and centres −0.35, −0.15, +0.15, +0.35 from the centreline (+y here).
     #[test]
     fn graded_grid_matches_hand_computed_fixture() {
         let segment = Segment::new(

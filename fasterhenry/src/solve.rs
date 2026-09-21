@@ -136,7 +136,8 @@ impl Grading {
 /// For each segment and each cross-section axis, the count is the smallest
 /// one whose *surface* filament is at most `target_skin_depths · δ` thick,
 /// where `δ = 1/√(π·f·μ0·σ)` is the skin depth of that segment's material at
-/// `frequency_hz` ([`skin_depth`]). Because grading buys resolution
+/// `frequency_hz` ([`skin_depth`]). The count stops at `max_per_axis` even if
+/// the surface filament remains thicker than the target. Because grading buys resolution
 /// geometrically, that count grows only logarithmically as the frequency
 /// rises, where a uniform grid's grows as `√f`.
 ///
@@ -205,9 +206,9 @@ impl SkinDepthGrading {
         Ok(())
     }
 
-    /// Smallest filament count whose surface cell is within the target, for a
-    /// cross-section extent of `extent` metres in a material of conductivity
-    /// `sigma`. Assumes [`validate`](Self::validate) has passed.
+    /// Smallest filament count whose surface cell is within the target, or
+    /// `max_per_axis` when the cap is reached first. Assumes
+    /// [`validate`](Self::validate) has passed.
     fn count_for(&self, extent: f64, sigma: f64) -> usize {
         let target = self.target_skin_depths * skin_depth(self.frequency_hz, sigma);
         if !(target.is_finite() && target > 0.0) || extent <= target {
@@ -251,9 +252,9 @@ impl Discretization {
         Self::Graded(Grading::new(nw, nh, ratio))
     }
 
-    /// Filament counts chosen per segment so that the surface filaments are
-    /// `target_skin_depths` skin depths thick at `frequency_hz`, graded
-    /// inward by `ratio`. See [`SkinDepthGrading`].
+    /// Filament counts chosen per segment to put surface filaments within
+    /// `target_skin_depths` skin depths at `frequency_hz`, graded inward by
+    /// `ratio`, subject to the per-axis cap. See [`SkinDepthGrading`].
     pub const fn skin_depth(frequency_hz: f64, target_skin_depths: f64, ratio: f64) -> Self {
         Self::SkinDepth(SkinDepthGrading::new(
             frequency_hz,
