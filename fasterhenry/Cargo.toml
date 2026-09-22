@@ -36,3 +36,11 @@ serde_json = { workspace = true }
 [[bench]]
 name = "kernels"
 harness = false
+
+[[bench]]
+name = "assembly"
+harness = false
+
+[[bench]]
+name = "solve"
+harness = false

@@ -47,15 +47,18 @@ static binary on arm64 and x86-64.
 
 ## Performance
 
-Measured on one machine (Apple M3 Ultra, 28 threads, `--release`, host
-under background load; indicative, not a benchmark-suite claim) — the
-`perf_smoke` CI test re-checks the headline number on every run:
-
-| workload | wall time |
-|---|---|
-| 2 000-filament dense sweep (kernels 0.22 s + assembly 0.24 s + LU solve 0.14 s) | **0.39 s** |
-| blocked complex LU, order 2 000 (vs 1.94 s for the plain `nalgebra` path) | **0.14 s** |
-| ~45 000-filament dense solve (192 × 128 ground-plane mesh) | ~5 min |
+The committed, regenerated numbers live in
+[`docs/benchmarks.md`](docs/benchmarks.md#committed-criterion-bench-suite):
+a `cargo bench` (criterion) sweep of assembly- and solve-stage throughput
+against filament count (`fasterhenry/benches/assembly.rs`,
+`fasterhenry/benches/solve.rs`; kernel-level throughput is
+`fasterhenry/benches/kernels.rs`), regenerated on demand by
+`.github/workflows/bench.yml` on a pinned `ubuntu-latest` runner —
+parsed straight from criterion's own JSON output, not hand-typed off
+whichever machine ran it last. The `perf_smoke` CI test backs the same
+posture with a hard budget, on every run: a 2 000-filament dense sweep
+must solve within 10 s on that same pinned runner class
+(`fasterhenry/tests/perf_smoke.rs`).
 
 The dense path is parallel across all cores and SIMD-batched in the
 kernels, so it is dramatically faster than a single-threaded 1994-era
@@ -64,8 +67,9 @@ solver on modern hardware — for problems that fit the dense regime
 yet accelerated: beyond that, a multipole/FFT method wins, and precorrected-FFT
 acceleration is tracked as the next milestone (#24).
 
-Measured head-to-head against the original FastHenry (same machine,
-self-authored decks; method and caveats in [`docs/benchmarks.md`](docs/benchmarks.md)):
+Measured head-to-head against the original FastHenry (operator-run,
+one machine, self-authored decks; method, hardware and caveats in
+[`docs/benchmarks.md`](docs/benchmarks.md)):
 fasterhenry's dense path is faster on wall clock at every size up to
 ~20 000 filaments (3× at small sizes, ~1.2× at 20 k, where FastHenry's
 multipole stays 14× ahead per thread — our edge is parallelism today,
