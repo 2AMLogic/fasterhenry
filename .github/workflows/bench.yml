@@ -1,0 +1,73 @@
+name: Bench
+
+# Manual, not on every push/PR: even with FASTERHENRY_BENCH_MAX_FILAMENTS
+# capping the sweep (see below), a criterion run of the assembly + solve
+# suites is real CI minutes, and the table it produces is a documentation
+# artifact, not a correctness gate. workflow_dispatch keeps regeneration
+# fully scripted (no hand-edited numbers) while an operator controls when
+# it runs — mirroring the operator-gated posture of the FastHenry
+# head-to-head already in docs/benchmarks.md. A tag-push trigger was
+# considered and rejected: committing generated output back to `main` from
+# a tag's detached-HEAD checkout has no natural target ref to push to.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: bench
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    name: Criterion bench suite -> docs/benchmarks.md table (PR)
+    # Pinned runner class: the table's numbers are only comparable release
+    # to release if the hardware is fixed, matching the pinned-budget
+    # convention in fasterhenry/tests/perf_smoke.rs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Table-formatting unit tests
+        run: python3 -m unittest test_bench_table -v
+        working-directory: tools
+      - name: cargo bench (assembly + solve stages)
+        env:
+          # ubuntu-latest is a shared, modest-core runner: the full sweep's
+          # ~19,600-filament point is minutes per criterion sample even at
+          # the sample-count floor the bench files set. Cap it here to keep
+          # this job inside its time budget; a local `cargo bench` (no
+          # override) always runs the full sweep documented in
+          # fasterhenry/benches/support.rs.
+          FASTERHENRY_BENCH_MAX_FILAMENTS: "5000"
+        run: |
+          set -euo pipefail
+          cargo bench -p fasterhenry --bench assembly
+          cargo bench -p fasterhenry --bench solve
+      - name: Regenerate the committed table in docs/benchmarks.md
+        run: python3 tools/bench_table.py --runner ubuntu-latest
+      - name: Open a PR with the regenerated table, if it changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- docs/benchmarks.md; then
+            echo "docs/benchmarks.md unchanged; nothing to do"
+            exit 0
+          fi
+          date="$(date -u +%Y-%m-%d)"
+          branch="bench/table-$date-$GITHUB_RUN_ID"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add docs/benchmarks.md
+          git commit -m "chore(bench): regenerate committed bench table ($date)"
+          git push origin "$branch"
+          gh pr create --title "chore(bench): regenerate committed bench table ($date)" \
+            --body "Automated: workflow run [$GITHUB_RUN_ID](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) regenerated the criterion sweep table in docs/benchmarks.md on ubuntu-latest (FASTERHENRY_BENCH_MAX_FILAMENTS=5000; see tools/bench_table.py and .github/workflows/bench.yml). Review the numbers before merging." \
+            --base main \
+            --head "$branch"

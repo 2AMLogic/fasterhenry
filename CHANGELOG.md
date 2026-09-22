@@ -13,6 +13,15 @@ unstable and may change in any release.
 
 ### Added
 
+- Committed criterion bench suite: `fasterhenry/benches/assembly.rs` and
+  `fasterhenry/benches/solve.rs` measure `MeshSystem::assemble` and
+  `MeshSystem::sweep` throughput against a fixed filament-count sweep
+  (48–19 600, matching the scale of `docs/benchmarks.md`'s head-to-head
+  table), alongside the existing kernel-level `benches/kernels.rs`. A new
+  `workflow_dispatch` CI job (`.github/workflows/bench.yml`) runs the
+  suite on a pinned `ubuntu-latest` runner and regenerates a dated results
+  table in `docs/benchmarks.md` via `tools/bench_table.py`, parsed from
+  criterion's own JSON output rather than hand-typed.
 - Coupling truncation (`.couples`): tag segments with `group=<name>` and
   declare which groups are magnetically coupled; the mutual inductance of
   every other pair is truncated to zero and — the point of the knob — never
