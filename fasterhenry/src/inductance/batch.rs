@@ -20,6 +20,132 @@ pub enum Execution {
     Parallel,
 }
 
+/// Which filament pairs an assembly evaluates, and which it truncates to
+/// zero.
+///
+/// Each filament carries a group index; a symmetric table says which pairs of
+/// groups are coupled. A pair whose groups are not coupled is never handed to
+/// a kernel — the saving is in evaluations skipped, not in entries zeroed
+/// afterwards. Every group is always coupled to itself, so self and
+/// intra-group terms always survive.
+///
+/// See [`crate::coupling`] for building one from a [`Geometry`] and for when
+/// the truncation is physically safe.
+///
+/// [`Geometry`]: crate::geometry::Geometry
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairMask {
+    /// Group index of each filament.
+    group: Vec<usize>,
+    /// `groups × groups`, row-major, symmetric, diagonal true.
+    coupled: Vec<bool>,
+    groups: usize,
+}
+
+impl PairMask {
+    /// The mask that keeps every pair of `filaments` filaments — today's
+    /// behaviour, and what [`partial_inductance_matrix`] does.
+    pub fn all(filaments: usize) -> Self {
+        Self {
+            group: vec![0; filaments],
+            coupled: vec![true],
+            groups: 1,
+        }
+    }
+
+    /// A mask from a per-filament group index and a predicate on group
+    /// indices.
+    ///
+    /// The predicate is symmetrized (`a` and `b` are coupled if it accepts
+    /// either order) and the diagonal is forced true, so a caller cannot
+    /// accidentally truncate a filament against itself or its own group.
+    /// Group indices at or above `groups`, and filament indices beyond
+    /// `group`'s length, are treated as coupled: an incompletely specified
+    /// mask loses accuracy, never silently drops a term it was never told
+    /// about.
+    pub fn from_groups(
+        group: Vec<usize>,
+        groups: usize,
+        coupled: impl Fn(usize, usize) -> bool,
+    ) -> Self {
+        let mut table = vec![false; groups * groups];
+        for a in 0..groups {
+            for b in a..groups {
+                let keep = a == b || coupled(a, b) || coupled(b, a);
+                table[a * groups + b] = keep;
+                table[b * groups + a] = keep;
+            }
+        }
+        Self {
+            group,
+            coupled: table,
+            groups,
+        }
+    }
+
+    /// Number of filaments the mask describes.
+    pub fn len(&self) -> usize {
+        self.group.len()
+    }
+
+    /// Whether the mask describes no filaments at all.
+    pub fn is_empty(&self) -> bool {
+        self.group.is_empty()
+    }
+
+    /// Number of groups.
+    pub fn groups(&self) -> usize {
+        self.groups
+    }
+
+    /// Whether the partial inductance of filaments `i` and `j` is evaluated.
+    pub fn keeps(&self, i: usize, j: usize) -> bool {
+        match (self.group.get(i), self.group.get(j)) {
+            (Some(&a), Some(&b)) => self
+                .coupled
+                .get(a * self.groups + b)
+                .copied()
+                .unwrap_or(true),
+            _ => true,
+        }
+    }
+
+    /// Whether every pair is kept, so that masking costs nothing.
+    pub fn keeps_everything(&self) -> bool {
+        self.coupled.iter().all(|&keep| keep)
+    }
+
+    /// Unordered pairs (including the `n` self terms) the mask keeps, out of
+    /// the [`total_pairs`](Self::total_pairs) a full assembly evaluates.
+    pub fn kept_pairs(&self) -> usize {
+        // Counted as "every pair, less the cross-group pairs dropped": a
+        // filament whose group index is out of range is coupled to
+        // everything (see `keeps`) and so is never subtracted.
+        let mut sizes = vec![0usize; self.groups];
+        for &g in &self.group {
+            if let Some(slot) = sizes.get_mut(g) {
+                *slot += 1;
+            }
+        }
+        let mut dropped = 0usize;
+        for a in 0..self.groups {
+            for b in (a + 1)..self.groups {
+                if !self.coupled[a * self.groups + b] {
+                    dropped += sizes[a] * sizes[b];
+                }
+            }
+        }
+        self.total_pairs() - dropped
+    }
+
+    /// Unordered pairs a full assembly of the same filaments evaluates,
+    /// `n·(n+1)/2`.
+    pub fn total_pairs(&self) -> usize {
+        let n = self.group.len();
+        n * (n + 1) / 2
+    }
+}
+
 /// Partial-inductance values together with entries whose accuracy criterion
 /// was not met. See [`Mutual::resolved`] for the reduced-accuracy regime.
 #[derive(Clone, Debug, PartialEq)]
@@ -189,6 +315,71 @@ pub fn partial_inductance_matrix_detailed(
         }),
         unresolved_pairs,
     })
+}
+
+/// [`partial_inductance_matrix`] with the pairs a [`PairMask`] rejects
+/// truncated to zero — and, more to the point, never evaluated.
+///
+/// Entries the mask keeps are bit-for-bit those of
+/// [`partial_inductance_matrix`]; entries it rejects are exactly `0.0`. With
+/// [`PairMask::all`] the two functions agree everywhere.
+///
+/// The result is symmetric, so it is still a valid branch-inductance matrix —
+/// but truncation is a physical approximation, not a free lunch: see
+/// [`crate::coupling`] for when it is safe.
+///
+/// # Errors
+///
+/// As [`partial_inductance_matrix`], for the pairs actually evaluated. A pair
+/// the mask rejects can no longer report an error.
+pub fn partial_inductance_matrix_masked(
+    filaments: &[Filament],
+    mask: &PairMask,
+) -> Result<DMatrix<f64>, KernelError> {
+    partial_inductance_matrix_masked_with(filaments, mask, |a, b| {
+        evaluate(a, b, true).map(|m| m.value)
+    })
+}
+
+/// [`partial_inductance_matrix_masked`] with a caller-supplied kernel.
+///
+/// `kernel` is called exactly once per unordered pair the mask keeps — which
+/// is [`PairMask::kept_pairs`] times — and never for a pair it rejects. That
+/// makes the truncation measurable: pass a counting wrapper around
+/// [`mutual_inductance`](super::mutual_inductance) and compare against
+/// [`PairMask::total_pairs`].
+///
+/// # Errors
+///
+/// The first error `kernel` returns, in row-major order of the upper
+/// triangle, attributed to that pair.
+pub fn partial_inductance_matrix_masked_with<K>(
+    filaments: &[Filament],
+    mask: &PairMask,
+    kernel: K,
+) -> Result<DMatrix<f64>, KernelError>
+where
+    K: Fn(&Filament, &Filament) -> Result<f64, KernelError> + Sync,
+{
+    let n = filaments.len();
+    let upper: Vec<Vec<f64>> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            (i..n)
+                .map(|j| {
+                    if mask.keeps(i, j) {
+                        kernel(&filaments[i], &filaments[j]).map_err(|e| e.at(i, j))
+                    } else {
+                        Ok(0.0)
+                    }
+                })
+                .collect()
+        })
+        .collect::<Result<_, KernelError>>()?;
+    Ok(DMatrix::from_fn(n, n, |i, j| {
+        let (lo, hi) = (i.min(j), i.max(j));
+        upper[lo][hi - lo]
+    }))
 }
 
 fn evaluate_upper<T: Send>(

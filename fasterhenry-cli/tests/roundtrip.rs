@@ -127,6 +127,7 @@ fn spice_subcircuit_stamps_r_and_l() {
             Port::new(NodeId(2), NodeId(3)),
         ],
         discretization: Discretization::Uniform(Subdivision::new(2, 2)),
+        coupling: fasterhenry::Coupling::all_pairs(),
         frequencies_hz: vec![],
     };
     let result = run(&coupled, Some(vec![1e6])).unwrap();
@@ -239,4 +240,142 @@ fn read_inputs_from_text(text: &str) -> Result<fasterhenry_cli::Problem, String>
     fasterhenry_cli::inp::parse(text)
         .map(fasterhenry_cli::Problem::from)
         .map_err(|error| error.to_string())
+}
+
+/// Two 10 mm traces 200 mm apart in y — twenty times their own extent — one
+/// port each, tagged `left` and `right`. `couples` is spliced in as a deck
+/// line, so `""` is the deck that declares nothing.
+fn two_trace_deck(couples: &str) -> String {
+    format!(
+        "\
+.units mm
+.default sigma=5.8e4 z=0 w=0.2 h=0.035
+na1 x=0 y=0
+na2 x=10 y=0
+nb1 x=0 y=200
+nb2 x=10 y=200
+ea na1 na2 group=left
+eb nb1 nb2 group=right
+.external na1 na2 A
+.external nb1 nb2 B
+{couples}
+.freq fmin=1e9 fmax=1e9 ndec=1
+.end
+"
+    )
+}
+
+/// The three deck states of the knob: absent and `.couples all` are the same
+/// all-pairs assembly, bit for bit; a declared clique is too; only an
+/// undeclared pair is truncated.
+#[test]
+fn couples_directive_truncates_only_undeclared_pairs() {
+    let default = read_inputs_from_text(&two_trace_deck("")).expect("deck parses");
+    assert!(
+        default.coupling.is_all_pairs(),
+        "a deck with no .couples line must keep today's all-pairs behaviour"
+    );
+    let full = run(&default, None).unwrap();
+
+    // `.couples all` is the explicit spelling of the same default.
+    let all = read_inputs_from_text(&two_trace_deck(".couples all")).expect("deck parses");
+    assert!(all.coupling.is_all_pairs());
+    assert_eq!(
+        run(&all, None).unwrap().without_timing(),
+        full.without_timing(),
+        "'.couples all' must reproduce the untruncated sweep"
+    );
+
+    // Declaring the pair keeps it, so the sweep is again the full one.
+    let declared =
+        read_inputs_from_text(&two_trace_deck(".couples left right")).expect("deck parses");
+    assert!(!declared.coupling.is_all_pairs());
+    assert!(declared.coupling.couples("left", "right"));
+    assert_eq!(
+        run(&declared, None).unwrap().without_timing(),
+        full.without_timing(),
+        "a declared pair must be computed in full"
+    );
+
+    // Naming one group alone isolates it: the mutual term is dropped, and at
+    // twenty extents apart the self impedances barely notice.
+    let isolated = read_inputs_from_text(&two_trace_deck(".couples left")).expect("deck parses");
+    assert!(!isolated.coupling.couples("left", "right"));
+    let (truncated, warnings) = fasterhenry_cli::run_reporting(&isolated, None).unwrap();
+    assert!(warnings.is_empty(), "20x apart must not warn: {warnings:?}");
+
+    let (z_full, z_truncated) = (&full.impedance_ohm[0], &truncated.impedance_ohm[0]);
+    assert!(z_full[(0, 1)].norm() > 0.0);
+    assert_eq!(z_truncated[(0, 1)].norm(), 0.0);
+    for i in 0..2 {
+        let moved = (z_full[(i, i)] - z_truncated[(i, i)]).norm() / z_full[(i, i)].norm();
+        assert!(moved < 1e-3, "port {i} self impedance moved by {moved:.3e}");
+    }
+}
+
+/// Near-by groups still truncate, but the run says so.
+#[test]
+fn truncating_close_groups_warns() {
+    let deck = read_inputs_from_text(
+        "\
+.units mm
+.default sigma=5.8e4 z=0 w=0.2 h=0.035
+na1 x=0 y=0
+na2 x=10 y=0
+nb1 x=0 y=1
+nb2 x=10 y=1
+ea na1 na2 group=left
+eb nb1 nb2 group=right
+.external na1 na2 A
+.external nb1 nb2 B
+.couples left
+.freq fmin=1e9 fmax=1e9 ndec=1
+.end
+",
+    )
+    .expect("deck parses");
+    let (_, warnings) = fasterhenry_cli::run_reporting(&deck, None).unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("'left'"), "{}", warnings[0]);
+    assert!(warnings[0].contains("'right'"), "{}", warnings[0]);
+}
+
+/// The deck-level mistakes the directive can make.
+#[test]
+fn malformed_couples_directives_are_rejected() {
+    for (line, expected) in [
+        (".couples typo", "typo"),
+        (".couples all left", "no group names"),
+        (".couples left left", "twice"),
+        (".couples", "expected .couples"),
+    ] {
+        let error = read_inputs_from_text(&two_trace_deck(line))
+            .expect_err("expected '{line}' to be rejected");
+        assert!(
+            error.contains(expected),
+            "'{line}' should mention '{expected}': {error}"
+        );
+    }
+    // `all` and a named clique in one deck contradict each other.
+    let error = read_inputs_from_text(&two_trace_deck(".couples all\n.couples left right"))
+        .expect_err("conflicting declarations");
+    assert!(error.contains("conflicting"), "{error}");
+}
+
+/// A `group=` tag never changes the geometry, so a tagged deck with no
+/// `.couples` line solves exactly as the untagged one does.
+#[test]
+fn group_tags_alone_change_nothing() {
+    let tagged = read_inputs_from_text(&two_trace_deck("")).unwrap();
+    let untagged = read_inputs_from_text(
+        &two_trace_deck("")
+            .replace(" group=left", "")
+            .replace(" group=right", ""),
+    )
+    .unwrap();
+    assert_eq!(tagged.geometry, untagged.geometry);
+    assert_eq!(
+        run(&tagged, None).unwrap().without_timing(),
+        run(&untagged, None).unwrap().without_timing()
+    );
 }

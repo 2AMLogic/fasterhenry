@@ -65,12 +65,15 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::coupling::{Coupling, CouplingError, TruncationWarning};
 use crate::dense::lu_solve;
 use crate::filament::{
     discretize, discretize_graded, graded_surface_extent, DiscretizeError, Filament,
 };
 use crate::geometry::Geometry;
-use crate::inductance::{partial_inductance_matrix, KernelError, MU0};
+use crate::inductance::{
+    partial_inductance_matrix, partial_inductance_matrix_masked, KernelError, MU0,
+};
 use crate::mesh::{MeshError, MeshMatrix, Port};
 use crate::result::{Counts, Provenance, SweepResult, Timing};
 
@@ -365,6 +368,9 @@ pub enum SolveError {
         /// Which parameter was wrong, and what it was.
         reason: String,
     },
+    /// The [`Coupling`] does not fit the geometry.
+    #[error(transparent)]
+    Coupling(#[from] CouplingError),
     /// A frequency is negative or not finite.
     #[error("frequency {index} is {value} Hz; frequencies must be finite and non-negative")]
     InvalidFrequency {
@@ -401,6 +407,7 @@ pub struct MeshSystem {
     l_ep: DMatrix<f64>,
     l_pp: DMatrix<f64>,
     counts: Counts,
+    truncation_warnings: Vec<TruncationWarning>,
     inductance_seconds: f64,
     assembly_seconds: f64,
 }
@@ -427,7 +434,34 @@ impl MeshSystem {
         ports: &[Port],
         discretization: &Discretization,
     ) -> Result<Self, SolveError> {
+        Self::assemble_with_coupling(geometry, ports, discretization, &Coupling::all_pairs())
+    }
+
+    /// [`assemble`](Self::assemble) with the mutual inductance of uncoupled
+    /// conductor groups truncated to zero.
+    ///
+    /// Pairs of filaments whose segments sit in two groups the [`Coupling`]
+    /// does not couple are never handed to a kernel, which is where the
+    /// saving is. [`Coupling::all_pairs`] — what [`assemble`](Self::assemble)
+    /// passes — truncates nothing and costs nothing. Groups that are close
+    /// enough for the approximation to be doubtful are reported by
+    /// [`truncation_warnings`](Self::truncation_warnings); see
+    /// [`crate::coupling`] for when it is safe.
+    ///
+    /// # Errors
+    ///
+    /// As [`assemble`](Self::assemble), plus [`SolveError::Coupling`] when
+    /// the coupling does not fit the geometry.
+    pub fn assemble_with_coupling(
+        geometry: &Geometry,
+        ports: &[Port],
+        discretization: &Discretization,
+        coupling: &Coupling,
+    ) -> Result<Self, SolveError> {
         let start = Instant::now();
+        // Validate the coupling against the geometry before paying for
+        // anything, so a typo in a group name costs nothing.
+        let truncation_warnings = coupling.truncation_warnings(geometry)?;
         let grids = discretization.resolve(geometry)?;
 
         let mut filaments = Vec::new();
@@ -452,7 +486,11 @@ impl MeshSystem {
         let resistances: Vec<f64> = filaments.iter().map(filament_resistance).collect();
 
         let inductance_start = Instant::now();
-        let inductance = partial_inductance_matrix(&filaments)?;
+        let inductance = if coupling.is_all_pairs() {
+            partial_inductance_matrix(&filaments)?
+        } else {
+            partial_inductance_matrix_masked(&filaments, &coupling.pair_mask(&per_segment)?)?
+        };
         let inductance_seconds = inductance_start.elapsed().as_secs_f64();
 
         let branches = filaments.len();
@@ -489,6 +527,7 @@ impl MeshSystem {
             l_pp: block(&l_mesh, internal, internal, port_count, port_count),
             mesh,
             counts,
+            truncation_warnings,
             inductance_seconds,
             assembly_seconds: start.elapsed().as_secs_f64(),
         })
@@ -518,6 +557,14 @@ impl MeshSystem {
     /// Problem size: nodes, segments, filaments, meshes, ports.
     pub fn counts(&self) -> Counts {
         self.counts
+    }
+
+    /// Truncated group pairs that are too close for the approximation to be
+    /// obviously justified — empty unless
+    /// [`assemble_with_coupling`](Self::assemble_with_coupling) truncated
+    /// something. Front ends should show these to the user.
+    pub fn truncation_warnings(&self) -> &[TruncationWarning] {
+        &self.truncation_warnings
     }
 
     /// The port impedance matrix `Z(ω)`, in ohms, at `frequency` hertz

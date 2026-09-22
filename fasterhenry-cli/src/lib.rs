@@ -14,7 +14,7 @@ pub use problem::Problem;
 
 use std::path::Path;
 
-use fasterhenry::{solve, SweepResult};
+use fasterhenry::{MeshSystem, SweepResult};
 
 /// Reads a problem from a file: `.inp`/`.fh` decks by extension, anything
 /// else as a JSON problem document.
@@ -30,9 +30,24 @@ pub fn read_inputs(path: &Path) -> Result<Problem, String> {
     }
 }
 
-/// Runs the sweep. `frequency_override`, when given, replaces the problem's
-/// frequencies (the CLI's `--freq fmin fmax ndec`).
+/// Runs the sweep, discarding any coupling-truncation warnings. See
+/// [`run_reporting`] to receive them.
 pub fn run(problem: &Problem, frequency_override: Option<Vec<f64>>) -> Result<SweepResult, String> {
+    run_reporting(problem, frequency_override).map(|(result, _)| result)
+}
+
+/// Runs the sweep and returns it together with the assembly's
+/// coupling-truncation warnings — the group pairs whose mutual inductance
+/// `.couples` dropped even though they are closer than one extent apart, in
+/// the order [`fasterhenry::MeshSystem::truncation_warnings`] reports them.
+/// The list is empty unless the problem truncates something.
+///
+/// `frequency_override`, when given, replaces the problem's frequencies (the
+/// CLI's `--freq fmin fmax ndec`).
+pub fn run_reporting(
+    problem: &Problem,
+    frequency_override: Option<Vec<f64>>,
+) -> Result<(SweepResult, Vec<String>), String> {
     let frequencies = frequency_override.unwrap_or_else(|| problem.frequencies_hz.clone());
     if frequencies.is_empty() {
         return Err(
@@ -43,13 +58,22 @@ pub fn run(problem: &Problem, frequency_override: Option<Vec<f64>>) -> Result<Sw
     if problem.ports.is_empty() {
         return Err("no ports: give .external in the deck or ports in the document".to_string());
     }
-    solve(
+    let system = MeshSystem::assemble_with_coupling(
         &problem.geometry,
         &problem.ports,
         &problem.discretization,
-        &frequencies,
+        &problem.coupling,
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    let warnings = system
+        .truncation_warnings()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let result = system
+        .sweep(&frequencies)
+        .map_err(|error| error.to_string())?;
+    Ok((result, warnings))
 }
 
 #[cfg(test)]
