@@ -2,6 +2,7 @@
 //! frequency sweep that [`crate::run`] needs — independent of whether it was
 //! read from a `.inp` deck or a JSON document directly.
 
+use fasterhenry::coupling::Coupling;
 use fasterhenry::geometry::Geometry;
 use fasterhenry::mesh::Port;
 use fasterhenry::solve::Discretization;
@@ -26,6 +27,10 @@ pub struct Problem {
     pub ports: Vec<Port>,
     /// How each segment is cut into filaments.
     pub discretization: Discretization,
+    /// Which conductor groups are magnetically coupled. Absent — the default
+    /// — couples every pair, so an older document reads unchanged.
+    #[serde(default, skip_serializing_if = "Coupling::is_trivial")]
+    pub coupling: Coupling,
     /// The frequency sweep, in hertz.
     pub frequencies_hz: Vec<f64>,
 }
@@ -36,6 +41,7 @@ impl From<Deck> for Problem {
             geometry: deck.geometry,
             ports: deck.ports,
             discretization: deck.discretization,
+            coupling: deck.coupling,
             frequencies_hz: deck.frequencies,
         }
     }
@@ -57,6 +63,7 @@ mod tests {
             .unwrap(),
             ports: vec![Port::new(NodeId(0), NodeId(1)).named("trace")],
             discretization: Discretization::Uniform(Subdivision::new(3, 2)),
+            coupling: Coupling::all_pairs(),
             frequencies_hz: vec![0.0, 1e6],
         }
     }
@@ -67,6 +74,21 @@ mod tests {
         let text = serde_json::to_string(&problem).unwrap();
         let parsed: Problem = serde_json::from_str(&text).unwrap();
         assert_eq!(problem, parsed);
+    }
+
+    /// A truncating coupling survives the document; the default one is left
+    /// out of it entirely, so documents written before the knob existed read
+    /// back identically.
+    #[test]
+    fn coupling_round_trips_and_the_default_is_omitted() {
+        let text = serde_json::to_string(&sample()).unwrap();
+        assert!(!text.contains("coupling"), "{text}");
+
+        let mut problem = sample();
+        problem.coupling = Coupling::truncated(vec!["board".to_owned()]);
+        let text = serde_json::to_string(&problem).unwrap();
+        assert!(text.contains("coupling"), "{text}");
+        assert_eq!(serde_json::from_str::<Problem>(&text).unwrap(), problem);
     }
 
     #[test]

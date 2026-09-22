@@ -16,12 +16,13 @@
 //! | `.units um\|mm\|cm\|m\|mil` | Length unit for every coordinate and dimension |
 //! | `.default <field>=<v> …` | Defaults for later lines: `x`, `y`, `z`, `w`, `h`, `nwinc`, `nhinc`, `sigma` |
 //! | `N<name> [x]=<v> [y]=<v> [z]=<v>` | Node; each coordinate falls back to its `.default` |
-//! | `E<name> N<a> N<b> [field]=<v> …` | Segment between two nodes; fields as for `.default` minus `x`/`y`/`z` |
+//! | `E<name> N<a> N<b> [field]=<v> …` | Segment between two nodes; fields as for `.default` minus `x`/`y`/`z`, plus `group=<name>` |
 //! | `.external N<+> N<-> [name]` | A port: current in at `N<+>`, out at `N<->`, labelled `name` (extension; default `<+>/<->`) |
 //! | `.freq fmin=<v> fmax=<v> ndec=<n>` | Frequency sweep in hertz (see below) |
 //! | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=]` | Ground plane: extent, top surface `z`, thickness `t` down, `nx × ny` cells |
 //! | `.hole G<name> x1 y1 x2 y2` | Rectangular hole in that plane's footprint |
 //! | `.equiv N<a> N<b>` | Electrically join two nodes into one |
+//! | `.couples all \| <group> <group> …` | Which segment groups couple; default (no line) is all pairs |
 //! | `.end` | End of deck (required) |
 //!
 //! Lines beginning with `*` are comments; a line beginning with `+`
@@ -47,6 +48,18 @@
 //! * **`.equiv a b`** makes `b` an alias of `a`: every reference — declared
 //!   before or after the directive — resolves to `a`, and `b`'s node does
 //!   not appear in the resulting geometry.
+//! * **`.couples` truncates, and defaults to truncating nothing.** Without a
+//!   `.couples` line — and with `.couples all` — every pair of conductors is
+//!   coupled, exactly as before. A `.couples g1 g2 …` line switches the deck
+//!   into truncating mode and declares the listed groups mutually coupled (a
+//!   clique: every listed group with every other). Every other pair of groups
+//!   has its mutual inductance dropped without ever being computed. Segments
+//!   take their group from `group=<name>` on the `E` line (case-sensitive,
+//!   like node names); untagged segments and ground planes share one default
+//!   group. Naming a group no segment carries is an error, not a no-op.
+//!   Truncation is a physical approximation — see the `fasterhenry::coupling`
+//!   module documentation for when it is safe; groups closer than their own
+//!   extent are reported on stderr.
 //! * **Planes connect by landing**: a segment or port endpoint that lies
 //!   within a plane's footprint and depth is snapped to the nearest live
 //!   cell-centre node, wiring the segment into the plane mesh. Declare the
@@ -57,6 +70,7 @@
 
 use std::collections::HashMap;
 
+use fasterhenry::coupling::Coupling;
 use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
 use fasterhenry::mesh::Port;
 use fasterhenry::plane::{GroundPlane, Hole};
@@ -74,6 +88,9 @@ pub struct Deck {
     /// Filament subdivisions ([`Discretization::Uniform`] when every segment
     /// agrees, [`Discretization::PerSegment`] as soon as one differs).
     pub discretization: Discretization,
+    /// Segment groups from `group=` and the couplings from `.couples`;
+    /// [`Coupling::all_pairs`] for a deck that declares neither.
+    pub coupling: Coupling,
     /// Frequencies in hertz from `.freq`.
     pub frequencies: Vec<f64>,
 }
@@ -292,6 +309,17 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     let mut positions: Vec<[f64; 3]> = Vec::new();
     let mut segment_defs: Vec<(usize, usize, f64, f64, f64)> = Vec::new();
     let mut subdivisions: Vec<Subdivision> = Vec::new();
+    let mut segment_groups: Vec<String> = Vec::new();
+    // `.couples`: the declared cross-group pairs, the line of the first
+    // directive (for error reporting), and whether `all` was declared.
+    let mut couples: Vec<[String; 2]> = Vec::new();
+    // Every group name any `.couples` line mentions, with the line it was
+    // mentioned on, so a name no segment carries is an error even when it was
+    // named alone and so appears in no pair.
+    let mut couples_names: Vec<(usize, String)> = Vec::new();
+    let mut couples_line: Option<usize> = None;
+    let mut couples_all = false;
+    let mut named_couples = false;
     let mut ports: Vec<Port> = Vec::new();
     let mut frequencies: Vec<f64> = Vec::new();
     let mut planes: Vec<PlaneSpec> = Vec::new();
@@ -378,6 +406,57 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         ));
                     }
                     names.aliases.insert(b, a);
+                }
+                "couples" => {
+                    if tokens.len() < 2 {
+                        return Err(err(
+                            number,
+                            "expected .couples all | .couples <group> <group> …",
+                        ));
+                    }
+                    let first = *couples_line.get_or_insert(number);
+                    let conflict = || {
+                        err(
+                            number,
+                            format!(
+                                "conflicting .couples declarations (the first is on line {first}): 'all' cannot be combined with named groups"
+                            ),
+                        )
+                    };
+                    if tokens[1].eq_ignore_ascii_case("all") {
+                        if tokens.len() != 2 {
+                            return Err(err(
+                                number,
+                                "'.couples all' takes no group names (it couples everything)",
+                            ));
+                        }
+                        if named_couples {
+                            return Err(conflict());
+                        }
+                        couples_all = true;
+                        continue;
+                    }
+                    if couples_all {
+                        return Err(conflict());
+                    }
+                    named_couples = true;
+                    // Every listed group couples to every other listed one.
+                    for (index, a) in tokens[1..].iter().enumerate() {
+                        for b in &tokens[index + 2..] {
+                            if a == b {
+                                return Err(err(
+                                    number,
+                                    format!("'.couples' lists group '{a}' twice"),
+                                ));
+                            }
+                            couples.push([(*a).to_string(), (*b).to_string()]);
+                        }
+                        // A single name is a legal (and meaningful)
+                        // declaration: it isolates that group without
+                        // coupling it to anything. Remembered separately so
+                        // that it, too, is checked against the segments.
+                        couples_names.push((number, (*a).to_string()));
+                    }
                 }
                 "hole" => {
                     if tokens.len() != 6 {
@@ -470,8 +549,15 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                 let mut nwinc = defaults.nwinc;
                 let mut nhinc = defaults.nhinc;
                 let mut sigma = defaults.sigma;
+                let mut group = String::new();
                 for token in &tokens[3..] {
                     let (key, raw_value) = parse_field(token, number)?;
+                    if key == "group" {
+                        // A name, not a number, and case-sensitive like the
+                        // node names — so it is taken before parse_value.
+                        group = raw_value;
+                        continue;
+                    }
                     let value = parse_value(&key, &raw_value, factor, number)?;
                     match key.as_str() {
                         "w" => w = Some(value.abs()),
@@ -494,7 +580,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         other => {
                             return Err(err(
                                 number,
-                                format!("unknown field '{other}' (supported: w, h, nwinc, nhinc, sigma)"),
+                                format!("unknown field '{other}' (supported: w, h, nwinc, nhinc, sigma, group)"),
                             ));
                         }
                     }
@@ -522,6 +608,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                 };
                 segment_defs.push((a, b, w, h, sigma));
                 subdivisions.push(Subdivision::new(nwinc.unwrap_or(1), nhinc.unwrap_or(1)));
+                segment_groups.push(group);
             }
             Some('g') => {
                 if unit.is_none() {
@@ -756,11 +843,40 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
         }
     };
 
+    // Ground-plane bars come first in the geometry and carry no group tag,
+    // so they share the default group with any untagged segment.
+    let coupling = if named_couples {
+        let mut groups = vec![String::new(); plane_bars];
+        groups.extend(segment_groups);
+        // A name no segment carries is a typo, not a silent no-op — and a
+        // name declared on its own reaches no pair, so it is checked here
+        // rather than by `Coupling::validate` below.
+        for (line, name) in &couples_names {
+            if !groups.iter().any(|group| group == name) {
+                return Err(err(
+                    *line,
+                    format!("'.couples' names group '{name}', which no segment carries"),
+                ));
+            }
+        }
+        let mut coupling = Coupling::truncated(groups);
+        for [a, b] in couples {
+            coupling = coupling.coupled(a, b);
+        }
+        coupling
+            .validate(geometry.segment_count())
+            .map_err(|error| err(couples_line.unwrap_or(0), error.to_string()))?;
+        coupling
+    } else {
+        Coupling::all_pairs()
+    };
+
     Ok(Deck {
         title,
         geometry,
         ports,
         discretization,
+        coupling,
         frequencies,
     })
 }

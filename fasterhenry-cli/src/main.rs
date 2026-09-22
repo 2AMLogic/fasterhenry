@@ -6,7 +6,7 @@
 use clap::Parser;
 use fasterhenry_cli::cli::{Cli, Command};
 use fasterhenry_cli::spice::write_spice_subckt;
-use fasterhenry_cli::{read_inputs, run};
+use fasterhenry_cli::{read_inputs, run_reporting};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -24,7 +24,13 @@ fn main() -> anyhow::Result<()> {
                 Some(values) => Some(decade_frequencies(values[0], values[1], values[2])?),
                 None => None,
             };
-            let result = run(&problem, override_frequencies).map_err(|m| anyhow::anyhow!("{m}"))?;
+            let (result, warnings) = run_reporting(&problem, override_frequencies)
+                .map_err(|m| anyhow::anyhow!("{m}"))?;
+            // Truncation is a physical approximation; say so on stderr, so it
+            // never hides inside the JSON on stdout.
+            for warning in &warnings {
+                eprintln!("warning: {warning}");
+            }
             let serialized = serde_json::to_string_pretty(&result)?;
 
             match json {

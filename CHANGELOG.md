@@ -13,6 +13,16 @@ unstable and may change in any release.
 
 ### Added
 
+- Coupling truncation (`.couples`): tag segments with `group=<name>` and
+  declare which groups are magnetically coupled; the mutual inductance of
+  every other pair is truncated to zero and — the point of the knob — never
+  evaluated. `fasterhenry::coupling` is the library API (`Coupling`,
+  `MeshSystem::assemble_with_coupling`, `PairMask`), and documents when the
+  approximation is safe: closed loops more than about ten of their own
+  extents apart cost under a part in a thousand, since the leading term falls
+  as `(a/d)³`. Truncated groups closer than one extent are reported on
+  stderr. A deck with no `.couples` line, and `.couples all`, keep today's
+  all-pairs assembly bit for bit.
 - Ground planes (`G` directive with `.hole`): thick rectangular sheets
   discretized into a cell-centre bar mesh on the same kernels/mesh/solve
   machinery; segment and port endpoints landing in a plane's footprint
