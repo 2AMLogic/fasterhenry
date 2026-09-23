@@ -115,6 +115,25 @@ jobs:
             echo "::error::plane_validation skipped although the references were generated"
             exit 1
           fi
+      # The width-graded skin-effect gate (issue #32): an independent 2-D
+      # cross-section solve (numpy only; the venv above has it) against
+      # uniform and width-graded filament grids, release mode. Passing is
+      # asserted positively: all four reference-backed tests must print their
+      # PASSED marker, so a skip on any path cannot look like a pass.
+      - name: validation reference (2-D cross-section) + assert all gates ran
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          /tmp/pypeec-venv/bin/python tools/cross_section_reference.py \
+            --out "$GITHUB_WORKSPACE/target/cross_section_reference.json"
+          FASTERHENRY_CROSS_SECTION_REFERENCE="$GITHUB_WORKSPACE/target/cross_section_reference.json" \
+            cargo test --release -p fasterhenry --test width_graded_skin_validation -- --nocapture 2>&1 \
+            | tee target/cross-section-validation.log
+          passed="$(grep -c "CROSS-SECTION GATE PASSED" target/cross-section-validation.log || true)"
+          if [ "$passed" -ne 4 ]; then
+            echo "::error::width_graded_skin_validation: $passed of 4 reference gates ran"
+            exit 1
+          fi
 
   package:
     name: Package (cargo publish --dry-run)

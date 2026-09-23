@@ -13,6 +13,17 @@ unstable and may change in any release.
 
 ### Added
 
+- Width-graded skin-effect validation against an independent 2-D reference
+  (issue #32): `tools/cross_section_reference.py` solves the finite-width
+  cross-section of an isolated rectangular trace (Richardson-extrapolated,
+  second-order convergence enforced) and
+  `fasterhenry/tests/width_graded_skin_validation.rs` compares uniform,
+  width-graded and skin-depth-adaptive grids against it at `t/δ = 0.3 … 10`,
+  asserting a refinement-based accuracy bound for `R'` and the internal
+  inductance change `ΔL'`. It shows width grading is the accurate grid; a
+  width-uniform 36 × 10 grid reads `R'` 28 % low at `t/δ = 10`. Results and
+  the supported regime are recorded in `docs/validation.md`; CI regenerates
+  the reference and requires every gate to report `PASSED`.
 - Committed criterion bench suite: `fasterhenry/benches/assembly.rs` and
   `fasterhenry/benches/solve.rs` measure `MeshSystem::assemble` and
   `MeshSystem::sweep` throughput against a fixed filament-count sweep
