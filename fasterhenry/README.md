@@ -35,7 +35,8 @@ the papers, not from any existing program's source.
 ## Stack
 
 Rust (stable), `nalgebra` + `simba`/`wide` for portable SIMD, `rayon` for
-parallel matrix fill, `num-complex`. No BLAS/LAPACK, no C dependencies, and
+parallel matrix fill, `num-complex`, and `rustfft` (pure Rust) for the
+precorrected-FFT operator. No BLAS/LAPACK, no C dependencies, and
 `#![forbid(unsafe_code)]`.
 
 ## License

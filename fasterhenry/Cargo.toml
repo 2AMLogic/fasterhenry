@@ -26,6 +26,7 @@ simba = { workspace = true }
 wide = { workspace = true }
 rayon = { workspace = true }
 num-complex = { workspace = true }
+rustfft = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
@@ -43,4 +44,8 @@ harness = false
 
 [[bench]]
 name = "solve"
+harness = false
+
+[[bench]]
+name = "pfft"
 harness = false

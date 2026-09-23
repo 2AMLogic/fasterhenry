@@ -13,6 +13,21 @@ unstable and may change in any release.
 
 ### Added
 
+- Matrix-free partial-inductance operator by the precorrected FFT
+  (issue #42, phase 1 of #24): `fasterhenry::pfft::PfftOperator` evaluates
+  `L·x` without assembling `L` — filaments projected onto a uniform grid by
+  Lagrange interpolation, the far field convolved with `1/r` by zero-padded
+  (and pruned) 3-D FFT, and near pairs precorrected to the exact kernel
+  value. Grid spacing, near-field radius and interpolation order are named
+  `PfftParams`, with the accuracy-versus-cost trade-off measured and
+  documented; the defaults agree with the dense product to about `2e-7`
+  relative, and `fasterhenry/tests/pfft.rs` checks `1e-6` on random sets,
+  the spiral and coupled-structure fixtures, and flat, line-like and
+  single-cell geometries. Memory and time per product grow linearly with
+  the filament count (criterion bench `fasterhenry/benches/pfft.rs`,
+  1 000–10 000 filaments). The solver is unchanged; iterative solution on
+  the operator is issue #43. New dependency: `rustfft` (pure Rust, MIT OR
+  Apache-2.0).
 - Width-graded skin-effect validation against an independent 2-D reference
   (issue #32): `tools/cross_section_reference.py` solves the finite-width
   cross-section of an isolated rectangular trace (Richardson-extrapolated,

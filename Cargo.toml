@@ -20,6 +20,9 @@ simba = { version = "0.9", features = ["wide"] }
 wide = "0.7"
 rayon = "1"
 num-complex = "0.4"
+# Pure-Rust FFT (MIT OR Apache-2.0, no C dependencies) for the pFFT
+# far-field convolution.
+rustfft = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"

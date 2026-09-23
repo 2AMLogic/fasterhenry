@@ -42,8 +42,9 @@ from the papers and from this repository's own code. Reading the FastHenry
 ## Stack
 
 Rust (stable), `nalgebra` + `simba`/`wide` for portable SIMD, `rayon` for
-parallel matrix fill, `num-complex`. No BLAS/LAPACK, no C dependencies: one
-static binary on arm64 and x86-64.
+parallel matrix fill, `num-complex`, and `rustfft` (pure Rust, MIT OR
+Apache-2.0) for the precorrected-FFT operator. No BLAS/LAPACK, no C
+dependencies: one static binary on arm64 and x86-64.
 
 ## Performance
 

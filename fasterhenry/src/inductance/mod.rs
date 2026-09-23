@@ -51,9 +51,9 @@ mod aligned;
 mod bar;
 mod batch;
 pub mod closed_form;
-mod gauss;
+pub(crate) mod gauss;
 mod lines;
-mod neumann;
+pub(crate) mod neumann;
 
 use std::cmp::Ordering;
 
