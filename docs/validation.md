@@ -127,6 +127,129 @@ uniform 16 × 16 by `0.097 %, 0.002 %, <0.001 %` in complex impedance at
 4, 8, 12 and 16 layers.
 
 The slab is a one-dimensional reference. It does not certify grids graded
-across the *width* of a finite trace; those need an independent two-dimensional
-reference. This limitation and near-singular kernel handling are tracked in
-issue #30.
+across the *width* of a finite trace; those are validated against the
+independent two-dimensional reference in the next section. Near-singular
+kernel handling is tracked in issue #30.
+
+## Width-graded filaments (issue #32, measured 2026-09-22)
+
+The slab above has no edges, so it cannot tell whether a grid graded across
+the *width* resolves the current crowding into a finite trace's edges. That
+needs a two-dimensional oracle. The infinite-width slab is not used as one
+here.
+
+### Reference: `tools/cross_section_reference.py`
+
+The reference is a finite-width cross-section solve that shares no code with
+the crate. It needs only numpy.
+
+- **Geometry and material.** An infinitely long, straight, isolated copper
+  bar, 5 mm × 200 µm (`w/t = 25`), `σ = 5.8e7 S/m`, `µ = µ0`. Nothing else
+  is present: no ground plane and no return conductor.
+- **Drive.** A total current `I` along the bar, with a uniform voltage drop
+  per unit length `V'`. The output is the internal impedance per unit length,
+  `z' = V'/I`.
+- **Equations.** The exact magneto-quasi-static problem, neglecting
+  displacement current as FastHenry does: `J/σ + jωA = V'` inside the
+  conductor, with `A = −(µ0/2π) ∬ J ln|r − r'|`. That is the diffusion
+  equation `∇²J = jωµ0σJ` inside plus the open-space exterior field, so no
+  outer boundary is imposed.
+- **Discretization.** Piecewise-constant `J` on a tensor mesh of one symmetry
+  quadrant, with Galerkin cell averages of `ln r`. Near cell pairs use the
+  closed-form fourth antiderivative (self-tested against Gauss quadrature and
+  against Maxwell's geometric mean distance of a square, `0.44705 a`). Far
+  pairs use a second-order moment expansion. Faces follow a blended sine map
+  toward the edges and faces, deliberately not fasterhenry's geometric
+  progression. Each mesh's uniform-current inductance matches the whole
+  rectangle's closed form to `< 1e-8`.
+- **Convergence.** Four doubled meshes, from 16 × 4 to 128 × 32 cells per
+  quadrant (16 384 cells in total). Every quantity is Richardson-extrapolated.
+  The generator refuses to write a reference unless the observed order over
+  the last three levels is between 1.6 and 2.5; it measured 1.99–2.07. The
+  recorded uncertainty is the whole last refinement step, about 3× the
+  applied correction.
+- **Quantities.** `R'(f)` and `ΔL'(f) = X'(f)/ω − L'_DC`. `ΔL'` is the
+  frequency-dependent drop of the internal inductance from its
+  uniform-current value. Both are independent of the arbitrary reference
+  length of the 2-D log kernel.
+
+To regenerate it (about 35 s of CPU):
+
+```bash
+python3 tools/cross_section_reference.py --out target/cross_section_reference.json
+```
+
+| `t/δ` | f | `R'` (Ω/m) | ± | `ΔL'` (H/m) | ± |
+|---|---|---|---|---|---|
+| 0.3 | 9.826 kHz | 1.752614e-2 | <0.001 % | −1.184873e-9 | 0.033 % |
+| 1 | 109.2 kHz | 2.316251e-2 | 0.004 % | −1.707837e-8 | 0.010 % |
+| 3 | 982.6 kHz | 4.212494e-2 | 0.073 % | −2.490836e-8 | 0.022 % |
+| 10 | 10.92 MHz | 1.421672e-1 | 0.490 % | −2.923833e-8 | 0.045 % |
+
+(`R'_DC = 1.7241e-2 Ω/m`.)
+
+### Comparison: `fasterhenry/tests/width_graded_skin_validation.rs`
+
+The 3-D solve produces the same per-unit-length quantity from a 1-segment
+trace by differencing two lengths: `z' = (Z(200 mm) − Z(100 mm)) / 100 mm`.
+The common `l ln l` and end-correction parts of the partial inductances
+cancel in that difference. Doubling the lengths moves `R'` by at most
+0.008 % and `ΔL'` by at most 0.042 %; a reference-free test asserts that
+this stays below 0.1 %. `L'_DC` is read from the same grid at 1 Hz.
+
+Signed errors against the reference, in %:
+
+| grid | `t/δ` = 0.3: `R'` / `ΔL'` | 1 | 3 | 10 |
+|---|---|---|---|---|
+| `uniform(36, 10)` | −0.01 / +0.49 | −0.46 / +0.39 | −8.70 / +2.14 | **−28.24** / +5.66 |
+| `graded(36, 10, 1.2)` | −0.01 / +1.00 | −0.01 / +0.12 | −0.56 / +0.18 | −4.00 / +0.35 |
+| `graded(18, 5, 1.44)` | −0.02 / +3.74 | +0.00 / +0.39 | −2.24 / +0.59 | −17.98 / +1.42 |
+| `graded(72, 20, 1.0954)` | −0.00 / +0.29 | −0.01 / +0.06 | −0.15 / +0.07 | −0.98 / +0.11 |
+| `graded(36, 10, 1.5)` | −0.02 / +3.89 | +0.11 / +0.28 | −0.23 / +0.19 | −0.23 / +0.14 |
+| `SkinDepthGrading(f, 0.5, 2)` (7, 20, 52, 112 filaments) | −0.11 / **+13.39** | −0.10 / +1.34 | −2.31 / +0.88 | +0.27 / +0.30 |
+
+**The `nw ≥ 4`, ratio `≥ 1.2` case from the issue.** At 36 × 10, width
+grading at 1.2 raises `R'` at `t/δ = 10` by a factor of 1.34 over the uniform
+grid. That matches the 6.65 mΩ vs 5.00 mΩ (1.33) first reported. The
+reference shows the **uniform** grid is the inaccurate one: its 139 µm edge
+cells cannot resolve the edge crowding, so it reads `R'` 28 % low. The graded
+grid is 4 % low. Width grading therefore needs no fix.
+
+**Convergence-based accuracy bound (asserted).** The refinement family
+`graded(18, 5, 1.44) → (36, 10, 1.2) → (72, 20, √1.2)` halves every cell while
+keeping the grading profile fixed. At every frequency, the test asserts three
+things for both quantities:
+
+- Each refinement shrinks every error larger than the reference's resolution.
+- The remaining error is at most the change from the previous level. So a
+  user can bound the error of a width-graded grid without any reference, by
+  refining once and taking the change.
+- On the finest grid, `R'` is within 1.5 % (measured ≤ 0.98 %) and `ΔL'` is
+  within 0.5 % (measured ≤ 0.29 %).
+
+**Supported regime (documented and asserted).** Grading is not free:
+
+- **Steep width grading at weak skin effect.** A steep width ratio coarsens
+  the middle of the trace. At `t/δ = 0.3`, the current redistributes smoothly
+  across the whole width, and `graded(36, 10, 1.5)`, with 0.83 mm (w/6)
+  middle cells, reads `ΔL'` 3.9 % high. From `t/δ = 1` up, and on `R'`
+  everywhere, it is within 0.3 %. Where `δ > t`, use a mild width ratio
+  (≤ 1.2 at this cell count) or refine.
+- **The skin-depth-adaptive grid.** `SkinDepthGrading` sizes cells against
+  `δ` alone. At `t/δ = 0.3` it gives 7 filaments and `ΔL'` is 13 % high. That
+  is a small absolute error, because the internal inductance there is ~0.1 %
+  of the trace's total. It holds `R'` within 2.4 % at every frequency, and
+  `ΔL'` within 1.4 % from `t/δ = 1`.
+
+Both limits are asserted as bounds, so a change in them is noticed.
+
+**CI.** CI regenerates the reference on `ubuntu-latest` and runs the
+comparison in release mode. The step fails unless all four reference-backed
+tests print their `CROSS-SECTION GATE PASSED` line. It counts that positive
+marker instead of only grepping for `SKIPPED`. Without a reference, the
+ordinary workspace test prints `SKIPPED` and returns before any solve.
+
+```bash
+FASTERHENRY_CROSS_SECTION_REFERENCE=target/cross_section_reference.json \
+  cargo test --release -p fasterhenry --test width_graded_skin_validation -- --nocapture
+```
