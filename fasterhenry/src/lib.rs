@@ -22,6 +22,10 @@
 //! [`coupling`] is the optional sparsity lever on that pipeline: name groups
 //! of segments, declare which pairs of them are coupled, and the mutual
 //! inductance of the rest is never computed. The default couples everything.
+//!
+//! [`pfft`] is the scaling lever: a matrix-free [`PfftOperator`] that
+//! evaluates `L·x` by the precorrected FFT method, in near-linear time and
+//! memory, without assembling `L`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -32,6 +36,7 @@ pub mod filament;
 pub mod geometry;
 pub mod inductance;
 pub mod mesh;
+pub mod pfft;
 pub mod plane;
 pub mod result;
 pub mod solve;
@@ -48,6 +53,7 @@ pub use inductance::{
     MU0,
 };
 pub use mesh::{MeshError, MeshMatrix, Port};
+pub use pfft::{GridSpacing, PfftError, PfftOperator, PfftParams, PfftStats};
 pub use result::{Counts, Provenance, SweepResult, Timing};
 pub use solve::{
     filament_resistance, skin_depth, solve, Discretization, Grading, MeshSystem, SkinDepthGrading,
