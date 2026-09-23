@@ -362,6 +362,39 @@ fn malformed_couples_directives_are_rejected() {
     assert!(error.contains("conflicting"), "{error}");
 }
 
+/// Three traces, `a`--`b` and `b`--`c` declared coupled on two separate
+/// `.couples` lines but `a`--`c` left undeclared: `a` and `c` are reachable
+/// only through `b`, so the "is coupled to" relation is not transitive and
+/// the deck must be rejected at parse time.
+#[test]
+fn non_transitive_couples_lines_are_rejected() {
+    let deck = "\
+.units mm
+.default sigma=5.8e4 z=0 w=0.2 h=0.035
+na1 x=0 y=0
+na2 x=10 y=0
+nb1 x=0 y=200
+nb2 x=10 y=200
+nc1 x=0 y=400
+nc2 x=10 y=400
+ea na1 na2 group=a
+eb nb1 nb2 group=b
+ec nc1 nc2 group=c
+.external na1 na2 A
+.external nb1 nb2 B
+.external nc1 nc2 C
+.couples a b
+.couples b c
+.freq fmin=1e9 fmax=1e9 ndec=1
+.end
+";
+    let error = read_inputs_from_text(deck).expect_err("non-transitive .couples must be rejected");
+    assert!(
+        error.contains("'a'") && error.contains("'c'"),
+        "error should name the ungrouped pair 'a'/'c': {error}"
+    );
+}
+
 /// A `group=` tag never changes the geometry, so a tagged deck with no
 /// `.couples` line solves exactly as the untagged one does.
 #[test]
