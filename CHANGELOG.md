@@ -106,6 +106,16 @@ unstable and may change in any release.
   changelog.
 - CI packaging job: `cargo publish --dry-run` for the library and a
   package-contents check for both crates.
+- Non-transitive `.couples` declarations are rejected (issue #46): when two
+  declared groups are reachable only through a third — `.couples a b` plus
+  `.couples b c` with no `a`–`c` — `Coupling::resolve` returns the new
+  `CouplingError::NonTransitiveCoupling`, naming the undeclared pair. Such a
+  relation can make the truncated `L` indefinite, and every previously
+  accepted deck of this shape was silently solving an unphysical system;
+  there is no regime where the shape is intended (declare the whole clique,
+  or use the `.couples a b c` shorthand). Decks with no `.couples` line and
+  `.couples all` are unaffected, as are fully declared cliques and isolated
+  pairs.
 
 ### Changed
 
