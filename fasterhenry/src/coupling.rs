@@ -111,6 +111,20 @@ pub enum CouplingError {
         /// Group tags in the coupling.
         got: usize,
     },
+    /// Two groups are reachable through other declared couplings, but are not
+    /// declared coupled directly — the "is coupled to" relation is not
+    /// transitive, and `L` may fail to be positive semidefinite. See the
+    /// module docs for why the whole clique should be declared.
+    #[error(
+        "coupling is not transitive: groups '{a}' and '{b}' are only reachable through a third \
+         group, but are not declared coupled directly — declare the whole clique",
+        a = groups[0],
+        b = groups[1]
+    )]
+    NonTransitiveCoupling {
+        /// The two groups connected only indirectly.
+        groups: [String; 2],
+    },
 }
 
 /// A truncated pair of groups that are too close for the approximation to be
@@ -360,12 +374,63 @@ impl Coupling {
         } else {
             couples.fill(true);
         }
+        check_transitive(&couples, &names)?;
         Ok(Resolved {
             of_segment,
             names,
             couples,
         })
     }
+}
+
+/// Rejects a declared "is coupled to" relation that is not transitive: some
+/// pair of groups reachable only through a third group, but not declared
+/// coupled directly.
+///
+/// For a symmetric relation, "transitive closure" and "connected component"
+/// coincide, so this computes connected components of the declared-pairs
+/// graph via union-find, then checks that each component with more than one
+/// group is a complete subgraph — every pair within it directly declared.
+fn check_transitive(couples: &[bool], names: &[String]) -> Result<(), CouplingError> {
+    let groups = names.len();
+    if groups < 3 {
+        // Fewer than three groups: no third group to be reachable through,
+        // so the relation is trivially transitive.
+        return Ok(());
+    }
+
+    let mut parent: Vec<usize> = (0..groups).collect();
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        if parent[x] != x {
+            parent[x] = find(parent, parent[x]);
+        }
+        parent[x]
+    }
+
+    for a in 0..groups {
+        for b in (a + 1)..groups {
+            if couples[a * groups + b] {
+                let (root_a, root_b) = (find(&mut parent, a), find(&mut parent, b));
+                if root_a != root_b {
+                    parent[root_a] = root_b;
+                }
+            }
+        }
+    }
+
+    for a in 0..groups {
+        for b in (a + 1)..groups {
+            if couples[a * groups + b] {
+                continue;
+            }
+            if find(&mut parent, a) == find(&mut parent, b) {
+                return Err(CouplingError::NonTransitiveCoupling {
+                    groups: [names[a].clone(), names[b].clone()],
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A [`Coupling`] resolved against a segment count.
@@ -534,6 +599,34 @@ mod tests {
                 got: 3
             })
         );
+    }
+
+    #[test]
+    fn non_transitive_declarations_are_rejected() {
+        // a--b and b--c declared, but not a--c: b's two neighbors are
+        // reachable through b but not declared coupled to each other.
+        let coupling = Coupling::truncated(groups(&["a", "b", "c"]))
+            .coupled("a", "b")
+            .coupled("b", "c");
+        assert_eq!(
+            coupling.validate(3),
+            Err(CouplingError::NonTransitiveCoupling {
+                groups: ["a".to_owned(), "c".to_owned()]
+            })
+        );
+        assert!(coupling.pair_mask(&[1, 1, 1]).is_err());
+
+        // The same three groups, fully declared as a clique, validate.
+        let clique = Coupling::truncated(groups(&["a", "b", "c"]))
+            .coupled("a", "b")
+            .coupled("b", "c")
+            .coupled("a", "c");
+        assert_eq!(clique.validate(3), Ok(()));
+
+        // A single isolated pair, with a third untouched group, also
+        // validates: there is no third group reachable through anything.
+        let isolated_pair = Coupling::truncated(groups(&["a", "b", "c"])).coupled("a", "b");
+        assert_eq!(isolated_pair.validate(3), Ok(()));
     }
 
     #[test]
