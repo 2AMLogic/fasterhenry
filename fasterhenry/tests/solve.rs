@@ -18,8 +18,8 @@ use std::f64::consts::TAU;
 
 use fasterhenry::{
     mutual_inductance, partial_inductance_matrix, self_inductance, solve, Discretization, Filament,
-    Geometry, MeshError, MeshSystem, Node, NodeId, Port, SegmentDef, SolveError, Subdivision,
-    SweepResult,
+    Geometry, GmresParams, GridSpacing, IterativeParams, IterativeSystem, MeshError, MeshSystem,
+    Node, NodeId, PfftParams, Port, SegmentDef, SolveError, Subdivision, SweepResult,
 };
 use nalgebra::DMatrix;
 use num_complex::Complex;
@@ -715,4 +715,211 @@ fn filament_resistance_is_length_over_sigma_area() {
         assert_eq!(r, fasterhenry::filament_resistance(filament));
         assert_close(r, 7e-3 / (COPPER * 0.1e-3 * 0.05e-3), 1e-14, "R filament");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Iterative path: GMRES on the pFFT operator against the dense solve
+// ---------------------------------------------------------------------------
+
+/// Tolerance of the iterative path against the dense one (issue #43).
+const ITERATIVE_TOLERANCE: f64 = 1e-4;
+
+fn assert_iterative_matches_dense(
+    what: &str,
+    dense: &MeshSystem,
+    iterative: &IterativeSystem,
+    frequencies: &[f64],
+) {
+    for &frequency in frequencies {
+        let expected = dense.impedance(frequency).unwrap();
+        let solution = iterative.solve(frequency).unwrap();
+        let difference = max_relative_difference(&solution.impedance, &expected);
+        let iterations: Vec<usize> = solution.gmres.iter().map(|o| o.iterations).collect();
+        println!("{what} at {frequency:e} Hz: difference {difference:e}, GMRES iterations {iterations:?}");
+        assert!(
+            difference < ITERATIVE_TOLERANCE,
+            "{what} at {frequency} Hz: iterative and dense differ by {difference:e}"
+        );
+        for (port, outcome) in solution.gmres.iter().enumerate() {
+            assert!(outcome.converged, "{what}, port {port}: {outcome:?}");
+        }
+    }
+}
+
+#[test]
+fn iterative_path_matches_the_dense_path_on_the_coupled_structure() {
+    let (geometry, ports, discretization) = coupled_structure();
+    let dense = MeshSystem::assemble(&geometry, &ports, &discretization).unwrap();
+    let frequencies = [0.0, 1e3, 1e6, 1e9, 1e10];
+    let iterative = IterativeSystem::assemble(
+        &geometry,
+        &ports,
+        &discretization,
+        &IterativeParams::default(),
+    )
+    .unwrap();
+    assert_eq!(iterative.counts(), dense.counts());
+    assert_iterative_matches_dense("default grid", &dense, &iterative, &frequencies);
+
+    // A fine grid puts most filament pairs on the FFT far field.
+    let fine = IterativeParams {
+        pfft: PfftParams {
+            grid_spacing: GridSpacing::Fixed(0.1e-3),
+            ..PfftParams::default()
+        },
+        ..IterativeParams::default()
+    };
+    let iterative = IterativeSystem::assemble(&geometry, &ports, &discretization, &fine).unwrap();
+    let stats = iterative.operator_stats();
+    let n = stats.filaments;
+    assert!(
+        stats.near_entries < n * n / 2,
+        "{} of {} pairs are near: the far field is barely exercised",
+        stats.near_entries,
+        n * n
+    );
+    assert_iterative_matches_dense("0.1 mm grid", &dense, &iterative, &[1e6, 1e10]);
+}
+
+#[test]
+fn iterative_dc_is_real_and_matches_the_dense_path() {
+    let (geometry, ports, discretization) = coupled_structure();
+    let dense = MeshSystem::assemble(&geometry, &ports, &discretization).unwrap();
+    let iterative = IterativeSystem::assemble(
+        &geometry,
+        &ports,
+        &discretization,
+        &IterativeParams::default(),
+    )
+    .unwrap();
+    let z = iterative.impedance(0.0).unwrap();
+    assert!(z.iter().all(|e| e.im == 0.0), "imaginary part at DC: {z}");
+    let expected = dense.impedance(0.0).unwrap();
+    // No pFFT approximation enters at DC: only the GMRES tolerance.
+    assert!(max_relative_difference(&z, &expected) < 1e-8);
+    // Galvanically separate ports stay exactly uncoupled.
+    assert_eq!(z[(0, 1)], C64::ZERO);
+    assert_eq!(z[(0, 2)], C64::ZERO);
+}
+
+#[test]
+fn iterative_path_handles_floating_conductors_without_ports() {
+    let trace = [[0.0, 0.0, 0.0], [5e-3, 0.0, 0.0]];
+    let single = Discretization::uniform(1, 1);
+    let params = IterativeParams::default();
+
+    // An open floating bar adds no loop at all: nothing to solve.
+    let mut points = trace.to_vec();
+    points.extend([[0.0, 0.5e-3, 0.0], [5e-3, 0.5e-3, 0.0]]);
+    let with_bar = geometry(&points, &[(0, 1, 0.2e-3, 0.1e-3), (2, 3, 0.2e-3, 0.1e-3)]);
+    let iterative = IterativeSystem::assemble(&with_bar, &[port(0, 1)], &single, &params).unwrap();
+    assert_eq!(iterative.counts().internal_meshes, 0);
+    let dense = MeshSystem::assemble(&with_bar, &[port(0, 1)], &single).unwrap();
+    for frequency in [0.0, 1e9] {
+        let solution = iterative.solve(frequency).unwrap();
+        assert!(solution.gmres.is_empty());
+        let difference =
+            max_relative_difference(&solution.impedance, &dense.impedance(frequency).unwrap());
+        assert!(difference < 1e-9, "{difference:e} at {frequency} Hz");
+    }
+
+    // A floating closed ring, finely cut, is internal loops only: eddy
+    // currents, a never-singular Z_ee, and the dense answer.
+    let mut points = trace.to_vec();
+    points.extend([
+        [0.0, 0.4e-3, 0.0],
+        [5e-3, 0.4e-3, 0.0],
+        [5e-3, 2e-3, 0.0],
+        [0.0, 2e-3, 0.0],
+    ]);
+    let with_ring = geometry(
+        &points,
+        &[
+            (0, 1, 0.2e-3, 0.1e-3),
+            (2, 3, 0.2e-3, 0.1e-3),
+            (3, 4, 0.2e-3, 0.1e-3),
+            (4, 5, 0.2e-3, 0.1e-3),
+            (5, 2, 0.2e-3, 0.1e-3),
+        ],
+    );
+    let fine = Discretization::uniform(3, 2);
+    let dense = MeshSystem::assemble(&with_ring, &[port(0, 1)], &fine).unwrap();
+    let iterative = IterativeSystem::assemble(&with_ring, &[port(0, 1)], &fine, &params).unwrap();
+    assert_eq!(iterative.counts().internal_meshes, 5 * 5 + 1);
+    assert_iterative_matches_dense("trace and ring", &dense, &iterative, &[0.0, 1e6, 1e9]);
+}
+
+#[test]
+fn iterative_sweep_is_deterministic_and_equals_pointwise_evaluation() {
+    let (geometry, ports, discretization) = coupled_structure();
+    let params = IterativeParams::default();
+    let system = IterativeSystem::assemble(&geometry, &ports, &discretization, &params).unwrap();
+    let frequencies = [1e9, 0.0, 1e9];
+    let result = system.sweep(&frequencies).unwrap();
+    assert_eq!(result.frequencies_hz, frequencies);
+    assert_eq!(result.ports, ports);
+    for (z, &f) in result.impedance_ohm.iter().zip(&frequencies) {
+        assert_eq!(z, &system.impedance(f).unwrap());
+    }
+    assert_eq!(result.impedance_ohm[0], result.impedance_ohm[2]);
+    // Reciprocity holds exactly: the result is symmetrized.
+    for z in &result.impedance_ohm {
+        assert_eq!(z, &z.transpose());
+    }
+    // A second, independently assembled system gives the same bits.
+    let again = IterativeSystem::assemble(&geometry, &ports, &discretization, &params).unwrap();
+    assert_eq!(
+        again.sweep(&frequencies).unwrap().without_timing(),
+        result.without_timing()
+    );
+}
+
+#[test]
+fn iterative_errors_are_reported() {
+    let (geometry, ports, discretization) = coupled_structure();
+    let starved = IterativeParams {
+        gmres: GmresParams {
+            tolerance: 1e-12,
+            restart: 2,
+            max_iterations: 2,
+        },
+        ..IterativeParams::default()
+    };
+    let system = IterativeSystem::assemble(&geometry, &ports, &discretization, &starved).unwrap();
+    match system.impedance(1e6) {
+        Err(SolveError::NotConverged {
+            frequency,
+            port,
+            iterations,
+            relative_residual,
+        }) => {
+            assert_eq!(frequency, 1e6);
+            assert_eq!(port, 0);
+            assert_eq!(iterations, 2);
+            assert!(relative_residual > 1e-12);
+        }
+        other => panic!("expected NotConverged, got {other:?}"),
+    }
+    assert_eq!(
+        system.impedance(-1.0),
+        Err(SolveError::InvalidFrequency {
+            index: 0,
+            value: -1.0
+        })
+    );
+    assert!(matches!(
+        system.sweep(&[1e3, f64::NAN]),
+        Err(SolveError::InvalidFrequency { index: 1, .. })
+    ));
+    let bad = IterativeParams {
+        pfft: PfftParams {
+            interpolation_order: 0,
+            ..PfftParams::default()
+        },
+        ..IterativeParams::default()
+    };
+    assert!(matches!(
+        IterativeSystem::assemble(&geometry, &ports, &discretization, &bad),
+        Err(SolveError::Pfft(_))
+    ));
 }

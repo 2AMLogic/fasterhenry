@@ -81,8 +81,9 @@
 //!
 //! # Scope
 //!
-//! This is the operator alone. The solver still assembles `L` densely;
-//! iterative solution on top of this operator is a separate step.
+//! This is the operator alone. [`IterativeSystem`](crate::IterativeSystem)
+//! solves for the port impedance with GMRES on top of it; the default
+//! [`MeshSystem`](crate::MeshSystem) still assembles `L` densely.
 
 mod fft;
 mod grid;

@@ -25,7 +25,10 @@
 //!
 //! [`pfft`] is the scaling lever: a matrix-free [`PfftOperator`] that
 //! evaluates `L·x` by the precorrected FFT method, in near-linear time and
-//! memory, without assembling `L`.
+//! memory, without assembling `L`. [`IterativeSystem`] builds on it: the
+//! same port impedance matrix as [`MeshSystem`], solved by [`mod@gmres`] on
+//! that operator instead of by dense LU. The dense [`MeshSystem`] remains
+//! the default.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -34,7 +37,9 @@ pub mod coupling;
 pub mod dense;
 pub mod filament;
 pub mod geometry;
+pub mod gmres;
 pub mod inductance;
+pub mod iterative;
 pub mod mesh;
 pub mod pfft;
 pub mod plane;
@@ -46,12 +51,14 @@ pub use filament::{discretize, discretize_graded, DiscretizeError, Filament};
 pub use geometry::{
     Geometry, GeometryError, LocalBasis, Node, NodeId, Segment, SegmentDef, SegmentError,
 };
+pub use gmres::{GmresOutcome, GmresParams};
 pub use inductance::{
     mutual_batch, mutual_batch_detailed, mutual_inductance, partial_inductance_matrix,
     partial_inductance_matrix_detailed, partial_inductance_matrix_masked,
     partial_inductance_matrix_masked_with, self_inductance, KernelError, MutualBatch, PairMask,
     MU0,
 };
+pub use iterative::{IterativeParams, IterativeSolution, IterativeSystem};
 pub use mesh::{MeshError, MeshMatrix, Port};
 pub use pfft::{GridSpacing, PfftError, PfftOperator, PfftParams, PfftStats};
 pub use result::{Counts, Provenance, SweepResult, Timing};
