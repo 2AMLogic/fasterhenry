@@ -261,7 +261,6 @@ dependencies = [
  "rustfft",
  "serde",
  "serde_json",
- "simba",
  "thiserror",
  "wide",
 ]
