@@ -36,6 +36,11 @@
 //! second inversion. When there are no internal loops — every segment a
 //! single filament, no closed rings — `Z(ω) = Z_pp` and nothing is solved.
 //!
+//! [`IterativeSystem`](crate::IterativeSystem) is the matrix-free
+//! alternative for large problems: the same Schur complement, with
+//! `Z_ee⁻¹·Z_ep` solved by GMRES on the precorrected-FFT operator instead of
+//! by dense LU. [`MeshSystem`] remains the default.
+//!
 //! `Z_ee` is never singular for a valid geometry: `R` is positive definite and
 //! `L` positive semidefinite, so the Hermitian part of `M_e (R + jωL) M_eᵀ` is
 //! positive definite for independent loops, at every `ω ≥ 0`. In particular a
@@ -75,11 +80,12 @@ use crate::inductance::{
     partial_inductance_matrix, partial_inductance_matrix_masked, KernelError, MU0,
 };
 use crate::mesh::{MeshError, MeshMatrix, Port};
+use crate::pfft::PfftError;
 use crate::result::{Counts, Provenance, SweepResult, Timing};
 
 /// Working memory the frequency sweep may spend on concurrent factorizations
 /// before it reduces the number of frequencies solved at once.
-const SWEEP_MEMORY_BUDGET_BYTES: usize = 2 << 30;
+pub(crate) const SWEEP_MEMORY_BUDGET_BYTES: usize = 2 << 30;
 
 /// Number of filaments across a segment's width (`nw`) and height (`nh`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -387,6 +393,27 @@ pub enum SolveError {
         /// The frequency, in hertz.
         frequency: f64,
     },
+    /// The precorrected-FFT operator of an
+    /// [`IterativeSystem`](crate::iterative::IterativeSystem) could not be
+    /// built.
+    #[error(transparent)]
+    Pfft(#[from] PfftError),
+    /// GMRES did not reach its tolerance within its iteration budget in an
+    /// [`IterativeSystem`](crate::iterative::IterativeSystem) solve.
+    #[error(
+        "GMRES did not converge at {frequency} Hz for port {port}: relative residual \
+         {relative_residual:e} after {iterations} iterations"
+    )]
+    NotConverged {
+        /// The frequency, in hertz.
+        frequency: f64,
+        /// Index of the port whose right-hand side failed to converge.
+        port: usize,
+        /// Products with `Z_ee` spent.
+        iterations: usize,
+        /// The relative residual reached.
+        relative_residual: f64,
+    },
 }
 
 /// The assembled, frequency-independent mesh system of a geometry and its
@@ -462,24 +489,7 @@ impl MeshSystem {
         // Validate the coupling against the geometry before paying for
         // anything, so a typo in a group name costs nothing.
         let truncation_warnings = coupling.truncation_warnings(geometry)?;
-        let grids = discretization.resolve(geometry)?;
-
-        let mut filaments = Vec::new();
-        let mut per_segment = Vec::with_capacity(grids.len());
-        for (index, (segment, grid)) in geometry.segments().zip(&grids).enumerate() {
-            let bundle = match discretization {
-                Discretization::Uniform(_) | Discretization::PerSegment(_) => {
-                    discretize(&segment, grid.nw, grid.nh)
-                }
-                _ => discretize_graded(&segment, grid.nw, grid.nh, grid.ratio),
-            }
-            .map_err(|source| SolveError::Discretize {
-                segment: index,
-                source,
-            })?;
-            per_segment.push(bundle.len());
-            filaments.extend(bundle);
-        }
+        let (filaments, per_segment) = discretize_geometry(geometry, discretization)?;
         // Validate the ports before paying for the inductance matrix.
         let mesh = MeshMatrix::build(geometry, &per_segment, ports)?;
 
@@ -701,7 +711,33 @@ pub fn filament_resistance(filament: &Filament) -> f64 {
     filament.length() / (filament.sigma() * filament.area())
 }
 
-fn check_frequency(index: usize, value: f64) -> Result<(), SolveError> {
+/// Every segment of `geometry` cut into filaments, segment by segment, with
+/// the number of filaments of each segment.
+pub(crate) fn discretize_geometry(
+    geometry: &Geometry,
+    discretization: &Discretization,
+) -> Result<(Vec<Filament>, Vec<usize>), SolveError> {
+    let grids = discretization.resolve(geometry)?;
+    let mut filaments = Vec::new();
+    let mut per_segment = Vec::with_capacity(grids.len());
+    for (index, (segment, grid)) in geometry.segments().zip(&grids).enumerate() {
+        let bundle = match discretization {
+            Discretization::Uniform(_) | Discretization::PerSegment(_) => {
+                discretize(&segment, grid.nw, grid.nh)
+            }
+            _ => discretize_graded(&segment, grid.nw, grid.nh, grid.ratio),
+        }
+        .map_err(|source| SolveError::Discretize {
+            segment: index,
+            source,
+        })?;
+        per_segment.push(bundle.len());
+        filaments.extend(bundle);
+    }
+    Ok((filaments, per_segment))
+}
+
+pub(crate) fn check_frequency(index: usize, value: f64) -> Result<(), SolveError> {
     if value.is_finite() && value >= 0.0 {
         Ok(())
     } else {

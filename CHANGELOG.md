@@ -13,6 +13,22 @@ unstable and may change in any release.
 
 ### Added
 
+- Iterative port-impedance solve on the pFFT operator (issue #43, phase 2
+  of #24): `fasterhenry::IterativeSystem` computes the same `Z(ω)` as
+  `MeshSystem` without forming `L` or the dense internal-loop block
+  `Z_ee`. The action of `Z_ee = M_e (R + jωL) M_eᵀ` is two sparse
+  loop-basis products around two real `PfftOperator` products, and
+  `Z_ee⁻¹·Z_ep` is solved by a hand-rolled restarted, right-preconditioned
+  GMRES (`fasterhenry::gmres`, real or complex arithmetic, Givens-rotation
+  least squares) with a Jacobi preconditioner — one solve per port. DC is
+  solved in real arithmetic without the operator, so its imaginary part is
+  exactly zero. `IterativeParams` bundles the pFFT and GMRES parameters;
+  a GMRES solve that misses its tolerance is reported as
+  `SolveError::NotConverged`, and an operator that cannot be built as
+  `SolveError::Pfft`. Matches the dense path to better than `1e-7`
+  relative on the spiral and coupled-structure fixtures (tested at `1e-4`,
+  including a floating ring and DC). The dense `MeshSystem` stays the
+  default; the size threshold between the two is issue #44.
 - Matrix-free partial-inductance operator by the precorrected FFT
   (issue #42, phase 1 of #24): `fasterhenry::pfft::PfftOperator` evaluates
   `L·x` without assembling `L` — filaments projected onto a uniform grid by

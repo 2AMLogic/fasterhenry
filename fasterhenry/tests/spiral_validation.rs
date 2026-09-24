@@ -34,8 +34,8 @@
 
 use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
 use fasterhenry::mesh::Port;
-use fasterhenry::solve::{solve, Discretization, Subdivision};
-use fasterhenry::SweepResult;
+use fasterhenry::solve::{solve, Discretization, MeshSystem, Subdivision};
+use fasterhenry::{GridSpacing, IterativeParams, IterativeSystem, PfftParams, SweepResult};
 use std::path::PathBuf;
 
 const UM: f64 = 1e-6;
@@ -262,4 +262,39 @@ fn spiral_inductance_against_references() {
     // The production result must carry the full provenance chain.
     assert_eq!(result.ports.len(), 1);
     assert_eq!(result.provenance.counts.ports, 1);
+}
+
+/// The iterative path (GMRES on the pFFT operator, issue #43) reproduces the
+/// dense solve on this fixture to 1e-4 relative, on the default pFFT grid
+/// and on a fine one that puts most filament pairs on the FFT far field.
+#[test]
+fn iterative_path_matches_the_dense_path_on_the_spiral() {
+    let (geometry, ports, discretization) = spiral_system();
+    let dense = MeshSystem::assemble(&geometry, &ports, &discretization).unwrap();
+    let fine = PfftParams {
+        grid_spacing: GridSpacing::Fixed(2e-6),
+        ..PfftParams::default()
+    };
+    for pfft in [PfftParams::default(), fine] {
+        let params = IterativeParams {
+            pfft,
+            ..IterativeParams::default()
+        };
+        let iterative =
+            IterativeSystem::assemble(&geometry, &ports, &discretization, &params).unwrap();
+        for frequency in [0.0, FREQ_HZ, 1e9, 1e11] {
+            let expected = dense.impedance(frequency).unwrap();
+            let solution = iterative.solve(frequency).unwrap();
+            let difference = (&solution.impedance - &expected).norm() / expected.norm();
+            println!(
+                "{:?} at {frequency:e} Hz: difference {difference:e}, GMRES {:?}",
+                pfft.grid_spacing, solution.gmres
+            );
+            assert!(
+                difference < 1e-4,
+                "{:?} at {frequency} Hz: iterative and dense differ by {difference:e}",
+                pfft.grid_spacing
+            );
+        }
+    }
 }
