@@ -16,7 +16,6 @@ rust-version = "1.85"
 # `workspace.package.version`, so bump the two together.
 fasterhenry = { path = "fasterhenry", version = "0.0.1" }
 nalgebra = { version = "0.34", features = ["serde-serialize"] }
-simba = { version = "0.9", features = ["wide"] }
 wide = "0.7"
 rayon = "1"
 num-complex = "0.4"
