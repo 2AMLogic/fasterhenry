@@ -65,10 +65,13 @@
 //! at least one filament, so the dense solve cost is cubic in the mesh. A
 //! 30 × 30 plane is ~1 740 bars — comfortably in the dense regime; larger
 //! planes are the FFT issue's motivation. Grading is what keeps a
-//! contact-resolving plane in that regime: on a 1.2 mm plane, resolving
-//! two 0.1 mm landings at 12.5 µm costs 26 × 22 cells graded at `r = 1.6`
-//! against 96 × 64 uniform — 1 096 bars instead of 12 128, and the two
-//! agree to 0.6 % (`fasterhenry/tests/plane_validation.rs`).
+//! contact-resolving plane in that regime: on a 1.2 × 0.8 mm plane,
+//! resolving two 0.125 mm landings at 25 µm costs **580 bars** graded at
+//! `r = 2` from a 100 µm background, against **2 992** for the uniform
+//! 25 µm plane — and the two agree to 0.10 % on inductance and 0.80 % on
+//! resistance (measured, `fasterhenry/tests/plane_validation.rs`;
+//! `docs/validation.md` § *Graded contact regions*). The unrefined 100 µm
+//! background is 12.5 % off on the same fixture.
 //!
 //! # Connection
 //!
@@ -426,6 +429,18 @@ fn axis_edges(
             _ => merged.push(band),
         }
     }
+    // The bands' own cells are counted *before* anything is laid out: a
+    // region asking for more of them than the axis may hold has to be an
+    // error, not an allocation (`Band::cells` is derived from a
+    // caller-supplied count, so it can be arbitrarily large).
+    let band_cells = merged
+        .iter()
+        .try_fold(0usize, |total, band| total.checked_add(band.cells));
+    if band_cells.is_none_or(|total| total > MAX_AXIS_CELLS) {
+        return Err(PlaneError::MeshTooLarge {
+            limit: MAX_AXIS_CELLS,
+        });
+    }
     let mut edges = vec![lo];
     let mut cursor = lo;
     for (index, band) in merged.iter().enumerate() {
@@ -444,6 +459,13 @@ fn axis_edges(
         }
         *edges.last_mut().expect("the band has at least one cell") = band.end;
         cursor = band.end;
+        // Several bands, each individually affordable, must not add up to
+        // an unaffordable axis either.
+        if edges.len() > MAX_AXIS_CELLS {
+            return Err(PlaneError::MeshTooLarge {
+                limit: MAX_AXIS_CELLS,
+            });
+        }
     }
     let last = merged.last().expect("at least one band");
     push_gap(
@@ -1022,6 +1044,48 @@ mod tests {
         // than filling memory.
         assert_eq!(
             bad(ContactRegion::centred([5e-3, 3e-3], 1e-9, 100, 1.0)),
+            PlaneError::MeshTooLarge {
+                limit: MAX_AXIS_CELLS
+            }
+        );
+        // ...and so is a region whose *own* cells exceed the limit,
+        // counted before the band is laid out rather than after (a cell
+        // count this large would otherwise allocate the axis first). The
+        // `usize::MAX` case makes the fine cell underflow to zero, which
+        // is why the count, not the extent, is what is checked.
+        for cells in [MAX_AXIS_CELLS + 1, usize::MAX] {
+            assert_eq!(
+                bad(ContactRegion::new(
+                    [4e-3, 2e-3],
+                    [6e-3, 4e-3],
+                    [cells, 4],
+                    1.5
+                )),
+                PlaneError::MeshTooLarge {
+                    limit: MAX_AXIS_CELLS
+                },
+                "{cells} cells across the region"
+            );
+        }
+    }
+
+    /// Many individually-affordable regions must not add up to an
+    /// unaffordable axis either.
+    #[test]
+    fn many_contacts_hit_the_axis_cell_limit_together() {
+        let contacts: Vec<ContactRegion> = (0..40)
+            .map(|k| {
+                let x = 0.1e-3 + k as f64 * 0.24e-3;
+                ContactRegion::new([x, 2e-3], [x + 0.1e-3, 4e-3], [5_000, 4], 1.5)
+            })
+            .collect();
+        assert_eq!(
+            GroundPlane {
+                contacts,
+                ..test_plane()
+            }
+            .mesh()
+            .unwrap_err(),
             PlaneError::MeshTooLarge {
                 limit: MAX_AXIS_CELLS
             }
