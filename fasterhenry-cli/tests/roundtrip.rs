@@ -236,6 +236,124 @@ e3 n2 n4 w=0.2 h=0.035
     );
 }
 
+/// A `.contact` region grades the deck's plane exactly as the library API
+/// does: same graded mesh, same snapped vias, same Z — bit for bit.
+#[test]
+fn contact_region_deck_matches_the_api_fixture() {
+    use fasterhenry::plane::{ContactRegion, GroundPlane};
+    use fasterhenry::solve::solve;
+
+    let deck = read_inputs_from_text(
+        "\
+.units mm
+.default sigma=5.8e4
+Gp 0 -3 0 10 3 0 0.035 nx=10 ny=4
+.contact Gp 0.75 -0.25 1.25 0.25 nx=2 ny=2 ratio=2
+.contact Gp 8.75 -0.25 9.25 0.25 nx=2 ny=2 ratio=2
+n1 x=1 y=0 z=0.5
+n2 x=9 y=0 z=0.5
+n3 x=1 y=0 z=0
+n4 x=9 y=0 z=0
+e1 n1 n2 w=0.2 h=0.035
+e2 n1 n3 w=0.2 h=0.035
+e3 n2 n4 w=0.2 h=0.035
+.external n1 n2
+.freq fmin=1e9 fmax=1e9 ndec=1
+.end
+",
+    )
+    .expect("deck parses");
+
+    // The same plane through the library API. Every coordinate is written
+    // exactly as the deck computes it (mm * 1e-3): a 1-ulp difference
+    // moves a cell edge and breaks bit equality.
+    let (w, t, sigma) = (0.2 * 1e-3, 0.035 * 1e-3, 5.8e4 / 1e-3);
+    let mut api = Geometry::new();
+    let plane = GroundPlane {
+        lo: [0.0, -3.0 * 1e-3],
+        hi: [10.0 * 1e-3, 3.0 * 1e-3],
+        z_top: 0.0,
+        thickness: t,
+        nx: 10,
+        ny: 4,
+        sigma,
+        holes: Vec::new(),
+        contacts: vec![
+            ContactRegion::new(
+                [0.75 * 1e-3, -0.25 * 1e-3],
+                [1.25 * 1e-3, 0.25 * 1e-3],
+                [2, 2],
+                2.0,
+            ),
+            ContactRegion::new(
+                [8.75 * 1e-3, -0.25 * 1e-3],
+                [9.25 * 1e-3, 0.25 * 1e-3],
+                [2, 2],
+                2.0,
+            ),
+        ],
+    };
+    let mesh = plane.mesh().unwrap();
+    let centres = plane.build_into(&mut api).unwrap();
+    let (xa, xb, zt) = (1.0 * 1e-3, 9.0 * 1e-3, 0.5 * 1e-3);
+    let snap_a = plane.attach(&centres, [xa, 0.0, 0.0]).unwrap();
+    let snap_b = plane.attach(&centres, [xb, 0.0, 0.0]).unwrap();
+    let a = NodeId(api.add_node(Node::new(xa, 0.0, zt)).unwrap().0);
+    let b = NodeId(api.add_node(Node::new(xb, 0.0, zt)).unwrap().0);
+    api.add_segment(SegmentDef::new(a, b, w, t, sigma)).unwrap();
+    for (top, bottom) in [(a, snap_a), (b, snap_b)] {
+        api.add_segment(SegmentDef::new(top, bottom, w, t, sigma))
+            .unwrap();
+    }
+    let api_result = solve(
+        &api,
+        &[Port::new(a, b)],
+        &Discretization::Uniform(Subdivision::SINGLE),
+        &[1e9],
+    )
+    .unwrap();
+
+    let deck_result = run(&deck, None).unwrap();
+    assert_eq!(
+        deck_result.impedance_ohm[0][(0, 0)],
+        api_result.impedance_ohm[0][(0, 0)],
+        "deck and API paths must agree bit for bit"
+    );
+    let counts = &deck_result.provenance.counts;
+    assert_eq!(counts.segments, mesh.bars() + 3, "graded plane bars + 3");
+    assert_eq!(counts.nodes, mesh.nx() * mesh.ny() + 2);
+
+    // The grading is real: 0.25 mm cells under the landings against a
+    // 1 mm background cell, and the via snaps within half a fine cell.
+    let finest = (0..mesh.nx()).map(|i| mesh.dx(i)).fold(f64::MAX, f64::min);
+    let coarsest = (0..mesh.nx()).map(|i| mesh.dx(i)).fold(0.0, f64::max);
+    assert!((finest - 0.25 * 1e-3).abs() < 1e-12, "finest cell {finest}");
+    assert!(
+        coarsest > 3.0 * finest && coarsest <= 1e-3 + 1e-12,
+        "far field {coarsest} relaxes to the 1 mm background cell"
+    );
+    let landing = api.nodes()[snap_a.0];
+    assert!((landing.x - xa).abs() <= 0.125e-3 + 1e-12);
+    assert!((landing.y).abs() <= 0.125e-3 + 1e-12);
+
+    // A region naming a plane that was never declared is an error, like
+    // the `.hole` path it follows.
+    let error = read_inputs_from_text(
+        "\
+.units mm
+.default sigma=5.8e4
+Gp 0 0 0 10 6 0 0.035 nx=5 ny=3
+.contact Gq 4 2 6 4
+.end
+",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("'.contact' names unknown ground plane 'Gq'"),
+        "{error}"
+    );
+}
+
 /// Parse helper for inline deck text (the file-based one needs a path).
 fn read_inputs_from_text(text: &str) -> Result<fasterhenry_cli::Problem, String> {
     fasterhenry_cli::inp::parse(text)
