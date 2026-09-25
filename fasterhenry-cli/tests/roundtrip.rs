@@ -196,6 +196,7 @@ e3 n2 n4 w=0.2 h=0.035
         ny: 6,
         sigma,
         holes: Vec::new(),
+        contacts: Vec::new(),
     };
     let centres = plane.build_into(&mut api).unwrap();
     // Positions computed exactly as the deck computes them (mm * 1e-3):

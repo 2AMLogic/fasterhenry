@@ -47,6 +47,7 @@ fn trace_over_plane(nx: usize, ny: usize) -> (Geometry, Vec<Port>, Discretizatio
         ny,
         sigma: SIGMA,
         holes: Vec::new(),
+        contacts: Vec::new(),
     };
     let centres = plane.build_into(&mut geometry).unwrap();
     let segments_before = geometry.segment_count();
@@ -197,6 +198,7 @@ fn slotted_plane(nx: usize, ny: usize, slotted: bool) -> (Geometry, Vec<Port>, D
         ny,
         sigma: SIGMA,
         holes,
+        contacts: Vec::new(),
     };
     let centres = plane.build_into(&mut geometry).unwrap();
     let west = plane.attach(&centres, [1e-9, 0.4e-3, 10e-6]).unwrap();

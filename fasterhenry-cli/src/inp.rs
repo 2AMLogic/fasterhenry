@@ -679,6 +679,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                             )
                         })?,
                         holes: Vec::new(),
+                        contacts: Vec::new(),
                     },
                 });
             }
