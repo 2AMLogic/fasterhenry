@@ -23,7 +23,9 @@
 //! inductance and resistance increments against independent PyPEEC voxel
 //! references, within 5.5 % and 15 % respectively. CI generates both
 //! references and runs this gate in release mode; without references the
-//! local test skips that comparison.
+//! local test skips that comparison. Success is announced on stdout with
+//! `SLOT GATE PASSED`, which CI counts — see the note on positive markers
+//! below.
 //!
 //! # Graded contact regions (issue #36)
 //!
@@ -42,9 +44,22 @@
 //! Both are **release-mode** gates: the fully-fine reference is 2 992
 //! filaments, seconds optimized and minutes unoptimized, so in a debug
 //! build the first one skips itself. Each announces success on stdout with
-//! `CONTACT GATE PASSED`, and CI asserts it counted **two** of them — a
-//! positive assertion, because a skip prints to stderr and so cannot be
-//! seen by the `grep SKIPPED` next to it (that gap is #59).
+//! `CONTACT GATE PASSED`, and CI asserts it counted **two** of them.
+//!
+//! # Why every gate here prints a positive marker (issue #59)
+//!
+//! Every skip path in this file reports itself with `eprintln!`, i.e. on
+//! **stderr**. A CI step that pipes only stdout into its log (`cargo test
+//! … | tee log`) and then greps that log for `SKIPPED` is therefore
+//! grepping text the message never entered: the check cannot fail, so a
+//! silently-skipped gate looks exactly like a passing one. That is what
+//! happened to the slot gate for the whole of its life before #59.
+//!
+//! The fix is a marker printed on **stdout** only after a comparison has
+//! actually completed — `SLOT GATE PASSED` here, `CONTACT GATE PASSED`
+//! for the two contact gates — whose occurrences CI counts against an
+//! exact expected number. A skip then shows up as a missing marker
+//! regardless of how the step routes stderr.
 
 use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
 use fasterhenry::mesh::Port;
@@ -57,6 +72,9 @@ const T: f64 = 35e-6;
 const H: f64 = 0.5e-3;
 const L: f64 = 8.0e-3;
 const MU0: f64 = 2.0 * std::f64::consts::TAU * 1e-7;
+/// Printed only once the slot differential has been compared against its
+/// PyPEEC references and passed; CI counts it (issue #59).
+const SLOT_PASSED: &str = "SLOT GATE PASSED";
 
 fn trace_over_plane(nx: usize, ny: usize) -> (Geometry, Vec<Port>, Discretization) {
     let mut geometry = Geometry::new();
@@ -314,6 +332,7 @@ fn slot_differential_against_pypec() {
                 "PyPEEC slot-differential deviation {relative}"
             );
             assert!((dr - pypeec_dr).abs() / pypeec_dr < 0.15);
+            println!("{SLOT_PASSED} (slotted-vs-solid differential vs PyPEEC)");
         }
         None => {
             eprintln!(

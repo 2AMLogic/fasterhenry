@@ -12,6 +12,31 @@ cargo test -p fasterhenry --test spiral_validation -- --nocapture
 CI reruns the same steps on the Linux legs (the reference is regenerated
 there, never committed) and asserts the test did not take its skip path.
 
+### How CI asserts a gate actually ran
+
+Every PyPEEC- or reference-backed gate in this document prints a **positive
+marker on stdout** once its comparison has completed and passed —
+`SPIRAL GATE PASSED`, `SLOT GATE PASSED`, `CONTACT GATE PASSED`,
+`CROSS-SECTION GATE PASSED` — and the CI step counts occurrences of that
+marker against an exact expected number. Two details make that necessary
+rather than decorative (#59):
+
+- **The reference path passed to a test must be absolute.** `cargo test`
+  runs an integration test with its *package* directory as the cwd, so a
+  workspace-relative `target/pypeec_plane.json` resolves under
+  `fasterhenry/` and never exists. CI passes
+  `"$GITHUB_WORKSPACE/target/..."` for every `FASTERHENRY_*_REFERENCE`
+  variable.
+- **Skip reasons go to stderr.** They are `eprintln!`, so a step that pipes
+  only stdout into its log (`cargo test … | tee log`) and then greps for
+  `SKIPPED` searches text the message never entered — a check that cannot
+  fail. CI folds stderr in with `2>&1 | tee` *and* counts the positive
+  marker, so a skip fails the step under either mechanism.
+
+Between them, the relative path and the invisible skip meant the spiral and
+slot gates took their "reference absent" path on every CI run from their
+introduction until #59, while the job stayed green.
+
 ## Fixture
 
 The 2-turn square spiral klayout-tools validates its MoM PEEC against
@@ -100,11 +125,25 @@ Convergence, measured: fasterhenry's ΔL is 0.184 / 0.174 / 0.172 nH at
 from 5 µm to 2.5 µm voxels. The ~4 % residual at full convergence is the
 two discretizations' method bias; the bound leaves headroom rather than
 encoding today's number. CI regenerates both PyPEEC references and runs
-the gate in release mode (assert-not-skipped, like the spiral gate).
+the gate in release mode, asserting it printed its `SLOT GATE PASSED`
+marker exactly once (the positive assertion described above).
 
 The `--fixture plane` / `--fixture plane-solid` modes of
 `tools/pypeec_reference.py` regenerate the references
 (`--voxel-um 5`, ~10 s each locally).
+
+The gate is the most expensive one in CI: the differential is two 96 × 64
+solves plus a 48 × 32 pair for the grid-sensitivity check — 12 128 plane
+bars on the reference grid — and it is essentially single-threaded. On the
+first two runs that actually executed it (2026-09-25) the whole plane step —
+four PyPEEC reference generations plus the gate — took **2 min 33 s** on run
+36162393794 and **4 min 32 s** on run 36163545213, with the `ubuntu-latest`
+leg at 9 min and 16 min respectively. That ~1.8x spread is hosted-runner
+variance, not the gate: every step of the slower run scaled alike, and both
+runs agree exactly on the physics (`fh dL 0.173660 nH`). The `rust` job's
+`timeout-minutes` is sized against the slower observation. For reference the
+same gate costs 4 min 16 s wall and 2.5 GB peak RSS on a loaded 8-core
+workstation.
 
 ### Graded contact regions (issue #36, measured 2026-09-25)
 
@@ -151,8 +190,8 @@ mesh, so the comparison measures physics rather than the mesh. The
 Both contact gates are **release-mode**: the fully-fine reference is 2 992
 filaments, ~12 s optimized and ~10 min unoptimized, so the first skips
 itself in a debug build. Each prints `CONTACT GATE PASSED` on success and
-CI asserts it counted two — a positive assertion, since a skip goes to
-stderr where the neighbouring `grep SKIPPED` cannot see it (#59).
+CI asserts it counted two — the same positive assertion every gate here now
+carries (see "How CI asserts a gate actually ran" above).
 
 ## Surface-graded filaments (issue #23, measured 2026-09-21)
 
