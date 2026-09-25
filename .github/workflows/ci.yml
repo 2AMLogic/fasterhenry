@@ -33,13 +33,14 @@ jobs:
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # 30 was sized when the two PyPEEC steps below were silently skipping
-    # (#59). Turning the slot differential on adds a real 96x64 solve pair:
-    # measured 4 min 22 s wall / 2.5 GB peak RSS, single-threaded, on an
-    # 8-core Linux box under load. The ubuntu-latest leg was ~14 min, so
-    # ~20 min is the new expectation; 45 leaves the same kind of headroom 30
-    # used to.
-    timeout-minutes: 45
+    # Stays 30 even though #59 turned the two PyPEEC steps below from
+    # silent skips into real solves: measured on run 36162393794, the whole
+    # plane step (four pypeec reference generations plus the 96x64 slot
+    # differential) is 2 min 33 s and the ubuntu-latest leg 9 min. The same
+    # gate costs 4 min 16 s on a loaded 8-core box, so a hosted runner has
+    # ample margin here; 30 keeps this a useful hang detector rather than
+    # over-provisioning it 3x.
+    timeout-minutes: 30
     env:
       # One pin for the validation venv: the cache key, the install and the
       # post-install check below all read it, so they cannot drift apart.
