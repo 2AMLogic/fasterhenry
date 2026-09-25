@@ -13,6 +13,24 @@ unstable and may change in any release.
 
 ### Added
 
+- Graded contact regions in the ground-plane mesh (issue #36):
+  `fasterhenry::plane::ContactRegion` refines a plane locally under a via
+  landing — inside the rectangle the mesh is uniform at a declared fine
+  cell, outside it each cell grows by a geometric `ratio` until it reaches
+  the plane's background cell. `GroundPlane::mesh` returns the resulting
+  `PlaneMesh` (per-axis cell edges) instead of a single uniform
+  `(dx, dy)`; grading is applied per axis so the mesh stays a conforming
+  tensor-product grid with no hanging nodes, regions compose with `Hole`s
+  and with each other (overlapping regions merge at the finer cell and
+  gentler ratio), and a region straddling the footprint edge is clipped
+  while keeping its resolution. A plane declared without regions meshes
+  bit-identically to before. Decks get a matching `.contact G<name> x1 y1
+  x2 y2 [nx=] [ny=] [ratio=]` directive, following `.hole`'s
+  plane-name lookup. Measured on a contact-dominated fixture: the graded
+  mesh matches a fully uniform 25 µm plane to 0.10 % on L and 0.80 % on R
+  using 580 filaments instead of 2 992 (5.2×), and its landing-separation
+  differential matches an independent PyPEEC voxel reference to 0.12 %
+  (`fasterhenry/tests/plane_validation.rs`, `docs/validation.md`).
 - Iterative port-impedance solve on the pFFT operator (issue #43, phase 2
   of #24): `fasterhenry::IterativeSystem` computes the same `Z(ω)` as
   `MeshSystem` without forming `L` or the dense internal-loop block
@@ -135,6 +153,11 @@ unstable and may change in any release.
 
 ### Changed
 
+- `fasterhenry::plane::GroundPlane` gained a `contacts: Vec<ContactRegion>`
+  field (issue #36). It is `Default`-able and empty means "uniform, exactly
+  as before", but a struct-literal construction that lists every field now
+  has to name it (`contacts: Vec::new()`) — the only source-breaking part
+  of that issue.
 - `PfftOperator::new` set-up: the near-field precorrection's local box
   potential (`near::grid_interactions`, issue #51's profiling found it about
   7-8× the cost of the exact kernel evaluation it is paired with, and about
