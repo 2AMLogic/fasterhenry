@@ -79,6 +79,70 @@
 //! down and the projection up; such filaments are best cut into shorter
 //! pieces first.
 //!
+//! # Set-up cost
+//!
+//! [`new`](PfftOperator::new) is `O(n)` (issue #42), but its constant is
+//! high next to one [`apply`](PfftOperator::apply) -- at 10 000 filaments
+//! and the default parameters, set-up (about 20 s on a Linux CI-class host,
+//! `RAYON_NUM_THREADS=4`) costs about as much as 300 products (each about
+//! 65 ms; `cargo bench -p fasterhenry --bench pfft`). A phase-by-phase
+//! profile at that size
+//! (`cargo test --release -p fasterhenry --lib pfft::near::profile --
+//! --ignored --nocapture`, issue #51) attributes it as:
+//!
+//! | Phase | Share of set-up |
+//! |-------|-----------------|
+//! | Projection (`grid::project_all`) | ~10% |
+//! | Near-pair search (`near::near_pairs`) | ~5% |
+//! | Precorrection: grid precorrection (`near::grid_interactions`) | ~75% |
+//! | Precorrection: exact kernel (`inductance::evaluate`) | ~10% |
+//! | FFT planning (`Convolver::new`) | <1% |
+//!
+//! Grid precorrection -- the local box potential summed per near pair to
+//! subtract the grid's (wrong, at that range) approximation -- dominates,
+//! by roughly 7-8× over the exact kernel evaluation it is paired with; the
+//! #50 review's guess that the two split the cost evenly does not hold at
+//! these parameters. `near::grid_interactions` already picks the cheaper of
+//! two evaluations per row (a direct double sum, or a local dense
+//! accumulation over the box spanned by a filament's near partners) and the
+//! accumulation itself is a SIMD multiply-add (`near::axpy`, four lanes),
+//! which is about 10-15% cheaper in aggregate set-up time than the
+//! equivalent scalar loop -- measured with `cargo bench -p fasterhenry
+//! --bench pfft -- --quick pfft_setup/10000` on the same host, both before
+//! and after, since the effect is within run-to-run noise on a single
+//! sample and needs the comparison.
+//!
+//! Two larger levers were considered and set aside for now, not because
+//! they are wrong but because neither clearly pays off at the sizes and
+//! parameters this crate ships by default:
+//!
+//! - **A small FFT for the local box potential**, in place of the direct
+//!   accumulation. At the default `k = 8`, `p = 5`, a row's box is only
+//!   about 20-25 cells per axis; an aperiodic (non-wrapping) FFT convolution
+//!   needs the box roughly doubled per axis to pad against wraparound, so
+//!   the padded volume is about 8× the box itself. At that scale the FFT's
+//!   `O(N log N)` no longer clearly beats the current `O(source × box)`
+//!   direct sum -- the two were within a small constant factor of each
+//!   other by estimate. It would pay off at a much larger near-field
+//!   radius or interpolation order than the defaults use.
+//! - **Reusing precorrection entries across translated identical filament
+//!   pairs.** `fasterhenry/benches/pfft.rs`'s filament clouds (and the
+//!   crate's other accuracy fixtures) have continuously-varying lengths and
+//!   cross-sections by construction, so no pair repeats exactly and a cache
+//!   keyed on canonical pair geometry would never hit on them. It would
+//!   help a literal regular mesh (e.g. a uniformly discretized ground
+//!   plane) but that is not what the shipped benchmark measures, and adding
+//!   a geometry-canonicalization cache is a real correctness surface
+//!   (floating-point key stability) for an unverified win; left for a
+//!   follow-up if a real workload shows the repetition.
+//!
+//! Given set-up is already `O(n)`, and [`PfftParams`] exposes the exact
+//! knobs (grid density, `near_field_radius`, `interpolation_order`) that
+//! trade set-up cost against accuracy directly (see the table above), the
+//! existing cost is considered acceptable for #43 (GMRES needs one set-up
+//! per solve, amortized over many products) and for the dense-vs-iterative
+//! threshold of #44.
+//!
 //! # Scope
 //!
 //! This is the operator alone. [`IterativeSystem`](crate::IterativeSystem)

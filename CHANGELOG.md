@@ -135,6 +135,17 @@ unstable and may change in any release.
 
 ### Changed
 
+- `PfftOperator::new` set-up: the near-field precorrection's local box
+  potential (`near::grid_interactions`, issue #51's profiling found it about
+  7-8× the cost of the exact kernel evaluation it is paired with, and about
+  75% of total set-up at 10 000 filaments) now accumulates with a SIMD
+  multiply-add instead of a scalar loop, about 10-15% off total set-up time
+  at that size. A reusable phase-by-phase profiling test
+  (`cargo test --release -p fasterhenry --lib pfft::near::profile --
+  --ignored --nocapture`) and the profiling results, including the levers
+  considered and set aside, are documented in the `pfft` module docs
+  ("Set-up cost"). Accuracy and the `O(n)` scaling from issue #42 are
+  unchanged.
 - `fasterhenry-cli` now takes the library from `[workspace.dependencies]` with
   both a `path` and a `version`, so the CLI crate is publishable.
 

@@ -15,6 +15,7 @@
 
 use nalgebra::Vector3;
 use rayon::prelude::*;
+use wide::f64x4;
 
 use super::grid::{Grid, Projection};
 use crate::filament::Filament;
@@ -161,6 +162,32 @@ impl KernelTable {
     fn index(&self, d: [i64; 3]) -> usize {
         let at = |a: usize| (d[a] + self.reach[a] as i64) as usize;
         (at(0) * self.dims[1] + at(1)) * self.dims[2] + at(2)
+    }
+}
+
+/// `row[k] += wg * kernel[k]` for every `k`, four lanes at a time (`wg4` is
+/// `wg` broadcast, passed in rather than recomputed per call since callers
+/// invoke this once per box row -- `by` times per source point).
+///
+/// # Panics
+///
+/// If `row.len() != kernel.len()`.
+#[inline]
+fn axpy(row: &mut [f64], kernel: &[f64], wg: f64, wg4: f64x4) {
+    assert_eq!(row.len(), kernel.len());
+    let mut k_chunks = kernel.chunks_exact(4);
+    let mut r_chunks = row.chunks_exact_mut(4);
+    while let (Some(kc), Some(rc)) = (k_chunks.next(), r_chunks.next()) {
+        let k4 = f64x4::new(kc.try_into().unwrap());
+        let r4 = f64x4::new((&*rc).try_into().unwrap());
+        rc.copy_from_slice(&wg4.mul_add(k4, r4).to_array());
+    }
+    for (value, &k) in r_chunks
+        .into_remainder()
+        .iter_mut()
+        .zip(k_chunks.remainder())
+    {
+        *value += wg * k;
     }
 }
 
@@ -330,22 +357,30 @@ fn grid_interactions(
     }
 
     // ψ over the box, one source point at a time: each (x, y) row of the box
-    // takes a contiguous run of the table, a vectorizable multiply-add.
+    // takes a contiguous run of the table, a SIMD multiply-add (see `axpy`).
+    // `table.index` is inlined and hoisted here rather than called per (x,
+    // y): for a fixed source point and x, consecutive y advance the table
+    // index by exactly `dims[2]` (issue #51 profiling found the naive
+    // per-(x, y) `table.index` call plus a scalar accumulate loop cost about
+    // as much as the FFT precorrection it belongs to; both parts of that are
+    // addressed here).
     let [bx, by, bz] = box_dims;
+    let (dims1, dims2) = (table.dims[1], table.dims[2]);
+    let [r0, r1, r2] = table.reach.map(|r| r as i64);
     let mut psi = vec![0.0; box_len];
     for &(g, wg) in &source {
+        let wg4 = f64x4::splat(wg);
+        let at0_base = r0 - g[0];
+        let at1_0 = (lo[1] as i64 - g[1] + r1) as usize;
+        let at2 = (lo[2] as i64 - g[2] + r2) as usize;
         for x in 0..bx {
+            let at0 = (lo[0] + x) as i64 + at0_base;
+            let mut start = (at0 as usize * dims1 + at1_0) * dims2 + at2;
             for y in 0..by {
-                let start = table.index([
-                    (lo[0] + x) as i64 - g[0],
-                    (lo[1] + y) as i64 - g[1],
-                    lo[2] as i64 - g[2],
-                ]);
                 let kernel = &table.values[start..start + bz];
                 let row = &mut psi[(x * by + y) * bz..(x * by + y + 1) * bz];
-                for (value, &k) in row.iter_mut().zip(kernel) {
-                    *value += wg * k;
-                }
+                axpy(row, kernel, wg, wg4);
+                start += dims2;
             }
         }
     }
@@ -363,4 +398,229 @@ fn grid_interactions(
                 .sum()
         })
         .collect()
+}
+
+/// Manual, phase-by-phase profiling of `PfftOperator::new`'s set-up cost
+/// (issue #51). Not run by `cargo test`; the phases mirror `PfftOperator::new`
+/// and `precorrect` exactly (rather than sampling with an external profiler)
+/// so that the "grid precorrection" and "exact kernel" costs -- interleaved
+/// row by row inside `precorrect` -- can be attributed separately. Run with:
+///
+/// ```text
+/// cargo test --release -p fasterhenry --lib pfft::near::profile -- --ignored --nocapture
+/// ```
+///
+/// `FASTERHENRY_PROFILE_N` overrides the filament count (default 10 000).
+#[cfg(test)]
+mod profile {
+    use std::time::{Duration, Instant};
+
+    use rayon::prelude::*;
+
+    use super::*;
+    use crate::filament::Filament;
+    use crate::geometry::{Node, Segment};
+    use crate::pfft::fft as fft_mod;
+    use crate::pfft::grid as grid_mod;
+    use crate::pfft::{auto_spacing, bounding_box, GridSpacing, PfftParams};
+
+    const COPPER: f64 = 5.8e7;
+
+    /// The same generator as `benches/pfft.rs::cloud` and
+    /// `tests/pfft.rs::random_set(.., manhattan: true, ..)`: `n` random
+    /// axis-aligned filaments at constant density (400 per 1 000 mm³), from a
+    /// fixed sequence so every run sees the same geometry. Duplicated here
+    /// because a private module can't share code with an integration test or
+    /// bench crate.
+    fn cloud(n: usize) -> Vec<Filament> {
+        let side = 10e-3 * (n as f64 / 400.0).cbrt();
+        let mut state = 11u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        (0..n)
+            .map(|_| {
+                let a = [side * next(), side * next(), side * next()];
+                let length = 1e-3 * (0.5 + next());
+                let mut d = [0.0; 3];
+                d[((next() * 3.0) as usize).min(2)] = if next() < 0.5 { -1.0 } else { 1.0 };
+                let b = [0, 1, 2].map(|k| a[k] + length * d[k]);
+                let width = 0.1e-3 + 0.2e-3 * next();
+                let height = 0.05e-3 + 0.1e-3 * next();
+                Filament::new(&Segment::new(
+                    Node::from(a),
+                    Node::from(b),
+                    width,
+                    height,
+                    COPPER,
+                ))
+                .expect("valid segment")
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore]
+    fn setup_phase_breakdown() {
+        let n: usize = std::env::var("FASTERHENRY_PROFILE_N")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10_000);
+        let params = PfftParams::default();
+        let order = params.interpolation_order;
+        let filaments = cloud(n);
+
+        let t = Instant::now();
+        let (lo, hi) = bounding_box(&filaments);
+        let spacing = match params.grid_spacing {
+            GridSpacing::Fixed(h) => h,
+            GridSpacing::Auto { cells_per_filament } => {
+                auto_spacing(hi - lo, cells_per_filament * n as f64)
+            }
+        };
+        let grid = Grid::new(lo, hi, spacing, order + 1);
+        let bbox_time = t.elapsed();
+        let radius = params.near_field_radius * spacing;
+
+        let t = Instant::now();
+        let projections = grid_mod::project_all(&grid, &filaments, radius);
+        let projection_time = t.elapsed();
+
+        let t = Instant::now();
+        let pairs = near_pairs(&filaments, radius);
+        let near_pair_time = t.elapsed();
+
+        // From here on, mirrors `precorrect` step by step.
+        let t = Instant::now();
+        let partners: Vec<Vec<usize>> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let direction = filaments[i].direction();
+                pairs[i]
+                    .iter()
+                    .map(|&j| j as usize)
+                    .filter(|&j| direction.dot(&filaments[j].direction()).abs() >= ORTHOGONAL_COS)
+                    .collect()
+            })
+            .collect();
+        let partner_filter_time = t.elapsed();
+
+        let t = Instant::now();
+        let reach = (0..n)
+            .into_par_iter()
+            .filter(|&i| !partners[i].is_empty())
+            .map(|i| {
+                let (lo, hi) = partner_box(&partners[i], &projections);
+                let own = &projections[i];
+                [0, 1, 2]
+                    .map(|a| (hi[a] - own.lo[a].min(hi[a])).max(own.hi[a] - lo[a].min(own.hi[a])))
+            })
+            .reduce(|| [0; 3], |a, b| [0, 1, 2].map(|k| a[k].max(b[k])));
+        let table = KernelTable::new(reach, grid.spacing);
+        let reach_table_time = t.elapsed();
+
+        // Size of `table` versus each row's own local box (its span, not the
+        // global worst case `reach` is sized to): if rows typically use only
+        // a small slice of `table`, the table itself stays cache-resident
+        // (ruling out "table too big to cache" as the row loop's cost
+        // driver -- it was checked and ruled out this way; see the module
+        // documentation).
+        let mut box_lens: Vec<usize> = (0..n)
+            .into_par_iter()
+            .filter(|&i| !partners[i].is_empty())
+            .map(|i| {
+                let (lo, hi) = partner_box(&partners[i], &projections);
+                [0, 1, 2].map(|a| hi[a] - lo[a] + 1).iter().product()
+            })
+            .collect();
+        box_lens.sort_unstable();
+        let mean = box_lens.iter().sum::<usize>() as f64 / box_lens.len().max(1) as f64;
+        eprintln!(
+            "  table.dims {:?} ({} cells, {:.1} MB); row box_len: min {} p50 {} p90 {} max {} mean {mean:.0}",
+            table.dims,
+            table.values.len(),
+            table.values.len() as f64 * 8.0 / 1e6,
+            box_lens.first().copied().unwrap_or(0),
+            box_lens.get(box_lens.len() / 2).copied().unwrap_or(0),
+            box_lens.get(box_lens.len() * 9 / 10).copied().unwrap_or(0),
+            box_lens.last().copied().unwrap_or(0),
+        );
+
+        // The row loop, with `grid_interactions` (grid precorrection) and
+        // `evaluate` (exact near-pair kernel) timed separately per row and
+        // summed as core-nanoseconds across the parallel rows -- a self-time
+        // attribution, not wall time (rows run concurrently), but the right
+        // quantity to compare the two against each other. `checksum` is
+        // printed so neither call is optimized away.
+        let t = Instant::now();
+        let (grid_ns, kernel_ns, checksum) = (0..n)
+            .into_par_iter()
+            .filter(|&i| !partners[i].is_empty())
+            .fold(
+                || (0u64, 0u64, 0.0f64),
+                |(g, k, sum), i| {
+                    let tg = Instant::now();
+                    let approx = grid_interactions(i, &partners[i], &grid, &projections, &table);
+                    let g = g + tg.elapsed().as_nanos() as u64;
+
+                    let fi = &filaments[i];
+                    let tk = Instant::now();
+                    let mut exact_sum = 0.0;
+                    for &j in &partners[i] {
+                        let fj = &filaments[j];
+                        exact_sum += evaluate(fi, fj, true).expect("evaluable pair").value;
+                    }
+                    let k = k + tk.elapsed().as_nanos() as u64;
+
+                    (g, k, sum + exact_sum + approx.iter().sum::<f64>())
+                },
+            )
+            .reduce(|| (0, 0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+        let row_loop_wall_time = t.elapsed();
+
+        let t = Instant::now();
+        let h = grid.spacing;
+        let convolver = fft_mod::Convolver::new(grid.dims, |d| grid_kernel(d, h));
+        let fft_planning_time = t.elapsed();
+
+        // Cross-check: the real, unmodified `precorrect` call, for comparison
+        // against partner_filter + reach_table + row_loop above.
+        let t = Instant::now();
+        let near = precorrect(&filaments, &grid, &projections, &pairs).expect("precorrects");
+        let real_precorrect_time = t.elapsed();
+
+        let grid_core_time = Duration::from_nanos(grid_ns);
+        let kernel_core_time = Duration::from_nanos(kernel_ns);
+        eprintln!("pFFT set-up phase breakdown at n = {n} (default params):");
+        eprintln!(
+            "  grid dims {:?}, padded {:?}",
+            grid.dims,
+            convolver.padded_dims()
+        );
+        eprintln!(
+            "  near entries {} ({:.1}/filament), projection entries {} ({:.1}/filament)",
+            near.columns.len(),
+            near.columns.len() as f64 / n as f64,
+            projections.iter().map(|p| p.entries.len()).sum::<usize>(),
+            projections.iter().map(|p| p.entries.len()).sum::<usize>() as f64 / n as f64,
+        );
+        eprintln!("  bounding box + grid init         {bbox_time:>10.2?}");
+        eprintln!("  projection (grid::project_all)   {projection_time:>10.2?}");
+        eprintln!("  near-pair search (near_pairs)     {near_pair_time:>10.2?}");
+        eprintln!("  precorrection, of which:");
+        eprintln!("    partner (orthogonality) filter  {partner_filter_time:>10.2?}");
+        eprintln!("    reach + kernel table build       {reach_table_time:>10.2?}");
+        eprintln!("    row loop, wall time              {row_loop_wall_time:>10.2?}");
+        eprintln!("      grid precorrection, core-time   {grid_core_time:>10.2?}");
+        eprintln!("      exact kernel eval, core-time     {kernel_core_time:>10.2?}");
+        eprintln!("    (cross-check) real precorrect() {real_precorrect_time:>10.2?}");
+        eprintln!("  FFT planning (Convolver::new)    {fft_planning_time:>10.2?}");
+        let measured_total =
+            bbox_time + projection_time + near_pair_time + real_precorrect_time + fft_planning_time;
+        eprintln!("  measured total (excl. final CSR arrays in PfftOperator::new) {measured_total:>10.2?}");
+        eprintln!("  checksum (ignore): {checksum:e}");
+    }
 }
