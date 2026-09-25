@@ -23,6 +23,9 @@ none of its code.
   cores with SIMD-batched kernels. For large problems, `IterativeSystem`
   solves the same system matrix-free: restarted GMRES on a precorrected-FFT
   (`PfftOperator`) evaluation of `L·x`, in near-linear time and memory.
+  `SolverChoice::Auto` picks between them by size — dense up to
+  `DENSE_PATH_MAX_FILAMENTS` (10 000 filaments), matrix-free above — and
+  is what the `fasterhenry` CLI does by default.
 - **Validated** against independent oracles — PyPEEC and the Greenhouse
   closed forms on a spiral fixture (inductance within 0.5 %), plus skin-effect and
   ground-plane references; see

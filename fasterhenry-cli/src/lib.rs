@@ -14,7 +14,9 @@ pub use problem::Problem;
 
 use std::path::Path;
 
-use fasterhenry::{MeshSystem, SweepResult};
+use fasterhenry::{
+    IterativeParams, IterativeSystem, MeshSystem, Solver, SolverChoice, SweepResult,
+};
 
 /// Reads a problem from a file: `.inp`/`.fh` decks by extension, anything
 /// else as a JSON problem document.
@@ -36,6 +38,35 @@ pub fn run(problem: &Problem, frequency_override: Option<Vec<f64>>) -> Result<Sw
     run_reporting(problem, frequency_override).map(|(result, _)| result)
 }
 
+/// The solve path `choice` takes on `problem`: its filament count against
+/// [`fasterhenry::DENSE_PATH_MAX_FILAMENTS`] when the choice is
+/// [`SolverChoice::Auto`], the forced path otherwise.
+///
+/// A [`fasterhenry::Coupling`] that truncates something is a dense-path
+/// feature — the matrix-free operator couples every pair — so `Auto` stays
+/// dense for such a problem whatever its size, and an explicit
+/// [`SolverChoice::Iterative`] is an error rather than a silently different
+/// physical approximation.
+pub fn solver_for(problem: &Problem, choice: SolverChoice) -> Result<Solver, String> {
+    let filaments = problem
+        .discretization
+        .filament_count(&problem.geometry)
+        .map_err(|error| error.to_string())?;
+    let solver = choice.resolve(filaments);
+    if problem.coupling.is_all_pairs() {
+        return Ok(solver);
+    }
+    match choice {
+        SolverChoice::Iterative => Err(
+            "--solver iterative cannot honour a .couples truncation: the matrix-free operator \
+             couples every pair of filaments. Drop the truncation or use --solver dense."
+                .to_string(),
+        ),
+        // Truncation is the user's own approximation; keep it.
+        SolverChoice::Auto | SolverChoice::Dense => Ok(Solver::Dense),
+    }
+}
+
 /// Runs the sweep and returns it together with the assembly's
 /// coupling-truncation warnings — the group pairs whose mutual inductance
 /// `.couples` dropped even though they are closer than one extent apart, in
@@ -44,9 +75,28 @@ pub fn run(problem: &Problem, frequency_override: Option<Vec<f64>>) -> Result<Sw
 ///
 /// `frequency_override`, when given, replaces the problem's frequencies (the
 /// CLI's `--freq fmin fmax ndec`).
+///
+/// The solve path is [`SolverChoice::Auto`]'s; see [`run_reporting_with`] to
+/// force one.
 pub fn run_reporting(
     problem: &Problem,
     frequency_override: Option<Vec<f64>>,
+) -> Result<(SweepResult, Vec<String>), String> {
+    run_reporting_with(problem, frequency_override, SolverChoice::Auto)
+}
+
+/// [`run_reporting`] on a chosen solve path (the CLI's `--solver`).
+///
+/// [`SolverChoice::Auto`] keeps the dense path
+/// ([`MeshSystem`]) at or below [`fasterhenry::DENSE_PATH_MAX_FILAMENTS`]
+/// filaments and takes the matrix-free pFFT + GMRES path
+/// ([`IterativeSystem`]) above it — see [`solver_for`]. The iterative path
+/// reports no coupling-truncation warnings because it does not truncate:
+/// its warning list is always empty.
+pub fn run_reporting_with(
+    problem: &Problem,
+    frequency_override: Option<Vec<f64>>,
+    choice: SolverChoice,
 ) -> Result<(SweepResult, Vec<String>), String> {
     let frequencies = frequency_override.unwrap_or_else(|| problem.frequencies_hz.clone());
     if frequencies.is_empty() {
@@ -57,6 +107,19 @@ pub fn run_reporting(
     }
     if problem.ports.is_empty() {
         return Err("no ports: give .external in the deck or ports in the document".to_string());
+    }
+    if solver_for(problem, choice)? == Solver::Iterative {
+        let system = IterativeSystem::assemble(
+            &problem.geometry,
+            &problem.ports,
+            &problem.discretization,
+            &IterativeParams::default(),
+        )
+        .map_err(|error| error.to_string())?;
+        let result = system
+            .sweep(&frequencies)
+            .map_err(|error| error.to_string())?;
+        return Ok((result, Vec::new()));
     }
     let system = MeshSystem::assemble_with_coupling(
         &problem.geometry,
