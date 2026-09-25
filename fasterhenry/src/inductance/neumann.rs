@@ -222,6 +222,18 @@ fn point_sum_scalar(a: &Cloud, b: &Cloud) -> f64 {
 
 /// `Σᵢ Σⱼ wᵢ wⱼ / |rᵢ − rⱼ|`, with the inner quadrature over `b` evaluated
 /// four points at a time.
+///
+/// Issue #14 tried hoisting `b`'s lane-packing out of the `i` loop below (so
+/// it runs `O(lanes)` times instead of `O(a.len * lanes)`), both with and
+/// without `-C target-feature=+avx2,+fma`: on the `point_quadrature_far` and
+/// `_mid` fixtures of `benches/kernels.rs` the change stayed within this
+/// host's ~15-20% run-to-run benchmark noise (confirmed by re-running the
+/// *unmodified* kernel back to back), i.e. no measurable win either way, with
+/// a plausible reason it wouldn't show one here: a fixed-size lane buffer
+/// large enough for [`CLOUD_CAPACITY`] needs zero-initializing whether or not
+/// `lanes` fills it, and the far-field fixture's clouds are only one or two
+/// points, where that fixed cost is not obviously smaller than the packing
+/// it would save. Not adopted; see the issue for the measurements.
 fn point_sum_simd(a: &Cloud, b: &Cloud) -> f64 {
     let lanes = b.len.div_ceil(4);
     let pack = |v: &[f64; CLOUD_CAPACITY], lane: usize| {
