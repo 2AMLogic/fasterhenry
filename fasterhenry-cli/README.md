@@ -7,8 +7,9 @@ circuit) extraction of resistance and inductance of 3-D conductor geometries.
 This crate installs a binary named **`fasterhenry`** (the crate is
 `fasterhenry-cli`; the library crate owns the `fasterhenry` package name).
 
-> **Status: 0.0.x, pre-release.** The command-line interface is unstable and
-> will change without notice between patch versions.
+> **Status: 0.1, early release.** Following semver for `0.x`, a minor release
+> (`0.2`, `0.3`, …) may change the command-line interface; patch releases
+> stay compatible.
 
 ## Install
 
@@ -58,7 +59,7 @@ Options:
 ```
 
 `--version` prints the crate version and the source revision stamped at
-build time (`fasterhenry 0.0.1 (git: <git describe>)`, or `(git: unknown)`
+build time (`fasterhenry 0.1.0 (git: <git describe>)`, or `(git: unknown)`
 when built outside a repository, e.g. from a crates.io tarball).
 
 The deck reader covers a subset of the public FastHenry `.inp` format:

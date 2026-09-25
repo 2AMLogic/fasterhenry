@@ -5,8 +5,9 @@ circuit) extraction of resistance and inductance of 3-D conductor geometries:
 spirals, busbars, bond wires, on-chip interconnect. FastHenry's problem class,
 none of its code.
 
-> **Status: 0.0.x, pre-release.** The API is unstable and will change without
-> notice between patch versions. Pin an exact version if you depend on it.
+> **Status: 0.1, early release.** Following semver for `0.x`, a minor release
+> (`0.2`, `0.3`, …) may make breaking API changes; patch releases stay
+> compatible. Changes are recorded in `CHANGELOG.md`.
 
 ## What it does
 
@@ -31,7 +32,7 @@ none of its code.
 
 ```toml
 [dependencies]
-fasterhenry = "0.0.1"
+fasterhenry = "0.1"
 ```
 
 A 1 mm copper bar with a port across its ends, swept from DC to 1 GHz (SI

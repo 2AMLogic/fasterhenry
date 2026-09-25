@@ -253,7 +253,7 @@ jobs:
         run: cargo publish --dry-run -p fasterhenry
       # `cargo publish --dry-run -p fasterhenry-cli` on its own cannot pass until
       # the library's first real publish: the packaged CLI manifest depends on
-      # `fasterhenry = "0.0.1"` from crates.io, and that version is not in the
+      # `fasterhenry = "<workspace version>"` from crates.io, which is not in the
       # index yet ("no matching package named `fasterhenry` found"). The
       # --workspace form below packages the library first and verifies the CLI
       # against that local package, so the CLI still gets a full verify build.
