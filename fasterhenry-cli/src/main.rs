@@ -6,7 +6,7 @@
 use clap::Parser;
 use fasterhenry_cli::cli::{Cli, Command};
 use fasterhenry_cli::spice::write_spice_subckt;
-use fasterhenry_cli::{read_inputs, run_reporting};
+use fasterhenry_cli::{read_inputs, run_reporting_with, solver_for};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -18,13 +18,23 @@ fn main() -> anyhow::Result<()> {
             zc_mat,
             spice,
             spice_freq,
+            solver,
         } => {
             let problem = read_inputs(&input).map_err(|m| anyhow::anyhow!("{m}"))?;
             let override_frequencies = match &freq {
                 Some(values) => Some(decade_frequencies(values[0], values[1], values[2])?),
                 None => None,
             };
-            let (result, warnings) = run_reporting(&problem, override_frequencies)
+            let choice = solver.into();
+            // Say so when the run leaves the default dense path: the two
+            // paths differ in their approximations, so which one produced
+            // the JSON on stdout is worth a line on stderr.
+            if solver_for(&problem, choice).map_err(|m| anyhow::anyhow!("{m}"))?
+                == fasterhenry::Solver::Iterative
+            {
+                eprintln!("solver: iterative (matrix-free precorrected-FFT + GMRES)");
+            }
+            let (result, warnings) = run_reporting_with(&problem, override_frequencies, choice)
                 .map_err(|m| anyhow::anyhow!("{m}"))?;
             // Truncation is a physical approximation; say so on stderr, so it
             // never hides inside the JSON on stdout.

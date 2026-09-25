@@ -28,7 +28,8 @@
 //! memory, without assembling `L`. [`IterativeSystem`] builds on it: the
 //! same port impedance matrix as [`MeshSystem`], solved by [`mod@gmres`] on
 //! that operator instead of by dense LU. The dense [`MeshSystem`] remains
-//! the default.
+//! the default up to [`DENSE_PATH_MAX_FILAMENTS`] filaments, which is what
+//! [`SolverChoice::Auto`] — the front end's default — switches on.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -64,7 +65,7 @@ pub use pfft::{GridSpacing, PfftError, PfftOperator, PfftParams, PfftStats};
 pub use result::{Counts, Provenance, SweepResult, Timing};
 pub use solve::{
     filament_resistance, skin_depth, solve, Discretization, Grading, MeshSystem, SkinDepthGrading,
-    SolveError, Subdivision,
+    SolveError, Solver, SolverChoice, Subdivision, DENSE_PATH_MAX_FILAMENTS,
 };
 
 /// Crate version, for CLI `--version` and JSON output provenance.

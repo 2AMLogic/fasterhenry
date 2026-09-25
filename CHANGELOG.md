@@ -13,6 +13,31 @@ unstable and may change in any release.
 
 ### Added
 
+- Dense/iterative size threshold, and the scaling measurement behind it
+  (issue #44, phase 3 of #24). `fasterhenry::DENSE_PATH_MAX_FILAMENTS`
+  (10 000) is the filament count at or below which the new
+  `SolverChoice::Auto` — the default for `fasterhenry_cli::run_reporting`
+  and the CLI's new `--solver auto` — keeps the dense `MeshSystem`;
+  above it it selects the matrix-free `IterativeSystem`.
+  `SolverChoice::Dense` / `SolverChoice::Iterative` (`--solver dense` /
+  `--solver iterative`) force either path at any size, `Solver` names the
+  resolved path, and `Discretization::filament_count` sizes a problem
+  without assembling it so a front end can choose before paying for
+  assembly. A deck that truncates coupling (`.couples`) stays dense at any
+  size; `--solver iterative` on one is an error rather than a silently
+  different approximation, and the CLI reports on stderr whenever a run
+  leaves the dense path. The threshold sits deliberately above the
+  measured ~3 000-filament wall-clock crossover — where the dense path
+  stops being tractable, not where it stops being fastest — because it is
+  exact where the pFFT far field approximates. New criterion bench
+  `fasterhenry/benches/scaling.rs` measures both paths end to end (960 to
+  99 224 filaments, wall time plus model and peak-RSS memory) and
+  `docs/benchmarks.md` records the numbers, hardware and date; a budgeted
+  regression guard for the matrix-free headline joins the dense one in
+  `fasterhenry/tests/perf_smoke.rs`. Determinism of the iterative path is
+  asserted directly: repeated solves are bit-identical and `Z(ω)`,
+  GMRES iteration counts and residuals are unchanged across rayon thread
+  counts.
 - Iterative port-impedance solve on the pFFT operator (issue #43, phase 2
   of #24): `fasterhenry::IterativeSystem` computes the same `Z(ω)` as
   `MeshSystem` without forming `L` or the dense internal-loop block
@@ -28,7 +53,8 @@ unstable and may change in any release.
   `SolveError::Pfft`. Matches the dense path to better than `1e-7`
   relative on the spiral and coupled-structure fixtures (tested at `1e-4`,
   including a floating ring and DC). The dense `MeshSystem` stays the
-  default; the size threshold between the two is issue #44.
+  default; the size threshold between the two is
+  `DENSE_PATH_MAX_FILAMENTS`, above (issue #44).
 - Matrix-free partial-inductance operator by the precorrected FFT
   (issue #42, phase 1 of #24): `fasterhenry::pfft::PfftOperator` evaluates
   `L·x` without assembling `L` — filaments projected onto a uniform grid by

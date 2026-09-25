@@ -56,25 +56,52 @@ against filament count (`fasterhenry/benches/assembly.rs`,
 `fasterhenry/benches/kernels.rs`), regenerated on demand by
 `.github/workflows/bench.yml` on a pinned `ubuntu-latest` runner —
 parsed straight from criterion's own JSON output, not hand-typed off
-whichever machine ran it last. The `perf_smoke` CI test backs the same
-posture with a hard budget, on every run: a 2 000-filament dense sweep
-must solve within 10 s on that same pinned runner class
-(`fasterhenry/tests/perf_smoke.rs`).
+whichever machine ran it last. The `perf_smoke` CI tests back the same
+posture with hard budgets, on every run: a 2 000-filament dense sweep
+within 10 s on that same pinned runner class, and a 4 760-filament
+matrix-free sweep within 120 s and under half the dense path's working
+set (`fasterhenry/tests/perf_smoke.rs`).
 
 The dense path is parallel across all cores and SIMD-batched in the
 kernels, so it is dramatically faster than a single-threaded 1994-era
-solver on modern hardware — for problems that fit the dense regime
-(~10⁴ filaments comfortably, ~10⁵ with patience and memory). It is **not**
-yet accelerated: beyond that, a multipole/FFT method wins, and precorrected-FFT
-acceleration is tracked as the next milestone (#24).
+solver on modern hardware — for problems that fit the dense regime,
+because its working set is `8n²` bytes of partial inductances before the
+factorization is counted. Beyond that regime the matrix-free path takes
+over: a precorrected-FFT operator (#42) under GMRES (#43), linear in
+memory and near-linear in time.
+
+Measured on one machine (AWS 8 vCPU, one thread, 2026-09-25) over
+assembly plus a one-frequency sweep of a square-meander fixture, dense
+against pFFT + GMRES — full table, method and caveats in
+[`docs/benchmarks.md`](docs/benchmarks.md#scaling-dense-vs-pfft--gmres-and-where-the-default-switches):
+
+| filaments | dense | pFFT + GMRES | dense working set |
+|---|---|---|---|
+| 2 400 | **4.2 s** | 4.7 s | 0.15 GB |
+| 9 800 | 156 s | **19.4 s** | 2.5 GB |
+| 29 928 | not attempted | **61 s** | 23 GB |
+| 99 224 | not attempted | **207 s** | 256 GB |
+
+GMRES converges in 5 iterations at every size, and `Z(ω)` is reproducible
+run to run and thread-count to thread-count.
+
+The wall-clock crossover is near 3 000 filaments, but the **default**
+switches at `fasterhenry::DENSE_PATH_MAX_FILAMENTS` = 10 000: the dense
+path is exact where the matrix-free one approximates the far field
+(`< 1e-4` on `Z`), so the handover is placed where dense stops being
+affordable on any geometry rather than where it stops being fastest.
+`--solver dense` / `--solver iterative` (library: `SolverChoice`) force
+either path at any size, and the CLI says on stderr when a run leaves the
+dense path.
 
 Measured head-to-head against the original FastHenry (operator-run,
 one machine, self-authored decks; method, hardware and caveats in
 [`docs/benchmarks.md`](docs/benchmarks.md)):
 fasterhenry's dense path is faster on wall clock at every size up to
 ~20 000 filaments (3× at small sizes, ~1.2× at 20 k, where FastHenry's
-multipole stays 14× ahead per thread — our edge is parallelism today,
-algorithmics pending #24). On shared segment fixtures the two engines
+multipole stays 14× ahead *per thread* — that dense-path edge is
+parallelism; the algorithmic answer is the pFFT + GMRES path above).
+On shared segment fixtures the two engines
 agree to **better than 0.1 %** on the extracted impedance — the
 cross-validation behind the "replacement" claim.
 
