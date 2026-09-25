@@ -135,12 +135,15 @@ The `--fixture plane` / `--fixture plane-solid` modes of
 The gate is the most expensive one in CI: the differential is two 96 × 64
 solves plus a 48 × 32 pair for the grid-sensitivity check — 12 128 plane
 bars on the reference grid — and it is essentially single-threaded. On the
-first run that actually executed it (run 36162393794, 2026-09-25) the whole
-plane step took **2 min 33 s**, of which ~65 s is generating the four PyPEEC
-references and ~50 s is the slot gate itself; the `ubuntu-latest` leg came
-in at 9 min against a 30 min `timeout-minutes`. The same gate costs
-4 min 16 s wall and 2.5 GB peak RSS on a loaded 8-core box, so measure on a
-hosted runner before concluding the budget is tight.
+first two runs that actually executed it (2026-09-25) the whole plane step —
+four PyPEEC reference generations plus the gate — took **2 min 33 s** on run
+36162393794 and **4 min 32 s** on run 36163545213, with the `ubuntu-latest`
+leg at 9 min and 16 min respectively. That ~1.8x spread is hosted-runner
+variance, not the gate: every step of the slower run scaled alike, and both
+runs agree exactly on the physics (`fh dL 0.173660 nH`). The `rust` job's
+`timeout-minutes` is sized against the slower observation. For reference the
+same gate costs 4 min 16 s wall and 2.5 GB peak RSS on a loaded 8-core
+workstation.
 
 ### Graded contact regions (issue #36, measured 2026-09-25)
 

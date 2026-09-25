@@ -33,14 +33,16 @@ jobs:
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Stays 30 even though #59 turned the two PyPEEC steps below from
-    # silent skips into real solves: measured on run 36162393794, the whole
-    # plane step (four pypeec reference generations plus the 96x64 slot
-    # differential) is 2 min 33 s and the ubuntu-latest leg 9 min. The same
-    # gate costs 4 min 16 s on a loaded 8-core box, so a hosted runner has
-    # ample margin here; 30 keeps this a useful hang detector rather than
-    # over-provisioning it 3x.
-    timeout-minutes: 30
+    # #59 turned the two PyPEEC steps below from silent skips into real
+    # solves. Measured on the two runs that first executed them, hosted
+    # runner speed varies by ~1.8x end to end:
+    #   run 36162393794: plane step 2 min 33 s, ubuntu-latest leg  9 min
+    #   run 36163545213: plane step 4 min 32 s, ubuntu-latest leg 16 min
+    # So 30 would leave only ~1.85x over the slower observation -- thin
+    # enough to go flaky on a slow runner with a cold cargo cache -- while
+    # 45 over-provisions the fast one 5x. 40 is ~2.5x the slowest leg seen:
+    # still a useful hang detector, with room for runner variance.
+    timeout-minutes: 40
     env:
       # One pin for the validation venv: the cache key, the install and the
       # post-install check below all read it, so they cannot drift apart.
