@@ -10,9 +10,16 @@ terminals at DC and at 1 kHz, and writes the terminal impedance as JSON:
 
 Usage:
     python3 tools/pypeec_reference.py [--out OUT.json] [--voxel-um 1.0]
+                                      [--fixture FIXTURE]
+
+`--fixture` selects what is built: the `spiral` above (the default), the
+`plane` / `plane-solid` pair behind the ground-plane slot differential, or
+the `contact` / `contact-near` pair behind the graded contact-region
+differential (issue #36).
 
 The fasterhenry test `tests/spiral_validation.rs` reads that JSON and
-asserts agreement within 2 % on L. CI regenerates it (nothing generated is
+asserts agreement within 2 % on L; `tests/plane_validation.rs` reads the
+plane and contact pairs. CI regenerates them (nothing generated is
 committed).
 
 PyPEEC is MPL-2.0 (Thomas Guillod, Dartmouth College); this script is an
@@ -66,6 +73,26 @@ PLANE_T = 20e-6
 PLANE_HOLE = ([0.5e-3, 0.0], [0.7e-3, 0.64e-3])
 
 
+def voxel_geometry(n, d, c, idx: dict) -> dict:
+    """The mesher input for a voxel grid `n` of pitch `d` centred on `c`."""
+    return {
+        "mesh_type": "voxel",
+        "data_voxelize": {"param": {"n": list(n), "d": list(d), "c": list(c)},
+                          "domain_index": idx},
+        "data_point": {"check_cloud": False, "filter_cloud": False, "pts_cloud": []},
+        "data_resampling": {"use_reduce": False, "use_resample": False,
+                            "resampling_factor": [1, 1, 1]},
+        "data_conflict": {"resolve_rules": False, "resolve_random": False,
+                          "conflict_rules": []},
+        "data_integrity": {
+            "check_integrity": True,
+            "domain_connected": {"conductor": {"domain_group": [["src", "wire", "sink"]],
+                                               "connected": True}},
+            "domain_adjacent": {},
+        },
+    }
+
+
 def build_plane_geometry(voxel_m: float, slotted: bool = True) -> dict:
     (x0, y0), (x1, y1) = PLANE_LO, PLANE_HI
     if slotted:
@@ -99,22 +126,54 @@ def build_plane_geometry(voxel_m: float, slotted: bool = True) -> dict:
     sink_flat = [v - nx * ny * (nz - 1) for v in idx["sink"]]
     idx["src"] = [v + nx * ny * k for v in src_flat for k in range(nz)]
     idx["sink"] = [v + nx * ny * k for v in sink_flat for k in range(nz)]
-    return {
-        "mesh_type": "voxel",
-        "data_voxelize": {"param": {"n": [nx, ny, nz], "d": list(d), "c": list(c)},
-                          "domain_index": idx},
-        "data_point": {"check_cloud": False, "filter_cloud": False, "pts_cloud": []},
-        "data_resampling": {"use_reduce": False, "use_resample": False,
-                            "resampling_factor": [1, 1, 1]},
-        "data_conflict": {"resolve_rules": False, "resolve_random": False,
-                          "conflict_rules": []},
-        "data_integrity": {
-            "check_integrity": True,
-            "domain_connected": {"conductor": {"domain_group": [["src", "wire", "sink"]],
-                                               "connected": True}},
-            "domain_adjacent": {},
-        },
-    }
+    return voxel_geometry([nx, ny, nz], d, c, idx)
+
+
+# The contact fixture (issue #36): the same unslotted sheet, driven between
+# two square via landings inside it rather than across its short ends, so
+# the port impedance is dominated by the current crowding under the
+# contacts. The landing side matches the fine cell of fasterhenry's graded
+# contact region (25 µm), and every landing centre is a voxel centre of the
+# 5 µm grid as well as a cell centre of every fasterhenry mesh under test.
+# `far` and `near` differ only in the separation, so the pad terms the two
+# solvers model differently cancel in `L(far) − L(near)`.
+CONTACT_PAD = 25e-6
+CONTACT_FAR = ([0.1875e-3, 0.3875e-3], [1.0125e-3, 0.3875e-3])
+CONTACT_NEAR = ([0.4875e-3, 0.3875e-3], [0.7125e-3, 0.3875e-3])
+
+
+def build_contact_geometry(voxel_m: float, near: bool = False) -> dict:
+    (x0, y0), (x1, y1) = PLANE_LO, PLANE_HI
+    src_c, sink_c = CONTACT_NEAR if near else CONTACT_FAR
+    nx = int(round((x1 - x0) / voxel_m))
+    ny = int(round((y1 - y0) / voxel_m))
+    nz = max(1, int(round(PLANE_T / voxel_m)))
+    d = (voxel_m, voxel_m, PLANE_T / nz)
+    c = ((x0 + x1) / 2, (y0 + y1) / 2, PLANE_T / 2)
+    half = CONTACT_PAD / 2
+
+    idx = {"src": [], "sink": [], "wire": []}
+    for j in range(ny):
+        for i in range(nx):
+            x = x0 + (i + 0.5) * voxel_m
+            y = y0 + (j + 0.5) * voxel_m
+            if abs(x - src_c[0]) <= half and abs(y - src_c[1]) <= half:
+                tag = "src"
+            elif abs(x - sink_c[0]) <= half and abs(y - sink_c[1]) <= half:
+                tag = "sink"
+            else:
+                tag = "wire"
+            for k in range(nz):
+                idx[tag].append(i + nx * j + nx * ny * k)
+    pads = (len(idx["src"]) // nz, len(idx["sink"]) // nz)
+    expected = round(CONTACT_PAD / voxel_m) ** 2
+    if pads != (expected, expected):
+        raise RuntimeError(
+            f"contact pads are {pads} voxels, expected {expected} each: the "
+            f"{CONTACT_PAD * 1e6:g} um landing does not tile the "
+            f"{voxel_m * 1e6:g} um voxel grid"
+        )
+    return voxel_geometry([nx, ny, nz], d, c, idx)
 
 
 def build_geometry(voxel_um: float) -> dict:
@@ -322,17 +381,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="tools/pypeec_reference.json")
     parser.add_argument("--voxel-um", type=float, default=1.0)
-    parser.add_argument("--fixture", choices=["spiral", "plane", "plane-solid"], default="spiral")
+    parser.add_argument(
+        "--fixture",
+        choices=["spiral", "plane", "plane-solid", "contact", "contact-near"],
+        default="spiral",
+    )
     args = parser.parse_args()
 
     started = time.time()
-    geometry = (
-        build_plane_geometry(args.voxel_um * 1e-6, True)
-        if args.fixture == "plane"
-        else build_plane_geometry(args.voxel_um * 1e-6, False)
-        if args.fixture == "plane-solid"
-        else build_geometry(args.voxel_um)
-    )
+    builders = {
+        "plane": lambda: build_plane_geometry(args.voxel_um * 1e-6, True),
+        "plane-solid": lambda: build_plane_geometry(args.voxel_um * 1e-6, False),
+        "contact": lambda: build_contact_geometry(args.voxel_um * 1e-6, False),
+        "contact-near": lambda: build_contact_geometry(args.voxel_um * 1e-6, True),
+        "spiral": lambda: build_geometry(args.voxel_um),
+    }
+    geometry = builders[args.fixture]()
     data_voxel = mesher.run(geometry)
     n_voxel = sum(len(v) for v in geometry["data_voxelize"]["domain_index"].values())
     print(f"voxels: {n_voxel} conductor voxels in grid {geometry['data_voxelize']['param']['n']}")

@@ -21,6 +21,7 @@
 //! | `.freq fmin=<v> fmax=<v> ndec=<n>` | Frequency sweep in hertz (see below) |
 //! | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=]` | Ground plane: extent, top surface `z`, thickness `t` down, `nx × ny` cells |
 //! | `.hole G<name> x1 y1 x2 y2` | Rectangular hole in that plane's footprint |
+//! | `.contact G<name> x1 y1 x2 y2 [nx=] [ny=] [ratio=]` | Contact region: refine that rectangle to `nx × ny` cells, decaying outward by `ratio` |
 //! | `.equiv N<a> N<b>` | Electrically join two nodes into one |
 //! | `.couples all \| <group> <group> …` | Which segment groups couple; default (no line) is all pairs |
 //! | `.end` | End of deck (required) |
@@ -64,6 +65,17 @@
 //!   within a plane's footprint and depth is snapped to the nearest live
 //!   cell-centre node, wiring the segment into the plane mesh. Declare the
 //!   plane before or after the segment — the assembly is order-independent.
+//! * **`.contact` grades the mesh under a landing.** A plane's `nx`/`ny`
+//!   are its *background* resolution; every `.contact` rectangle is cut
+//!   into `nx × ny` fine cells of its own (default `2 × 2`) and the cells
+//!   outside it grow by `ratio` each (default `2`, `1` meaning no decay)
+//!   until they reach the background cell. Put one under each via landing
+//!   to resolve the current crowding there without paying for a fine mesh
+//!   across the whole plane; grading is per axis, so a region refines a
+//!   band across the plane in each direction (see the
+//!   `fasterhenry::plane` module documentation for the cell-count
+//!   formula). `.hole` and `.contact` both name a plane declared earlier
+//!   in the deck, with the leading `G` optional.
 //! * Everything else is rejected with an error carrying the line number.
 //!   Deck-level problems that belong to no single line (missing `.units`, a
 //!   geometry validation failure) report line 0.
@@ -73,7 +85,7 @@ use std::collections::HashMap;
 use fasterhenry::coupling::Coupling;
 use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
 use fasterhenry::mesh::Port;
-use fasterhenry::plane::{GroundPlane, Hole};
+use fasterhenry::plane::{ContactRegion, GroundPlane, Hole};
 use fasterhenry::solve::{Discretization, Subdivision};
 
 /// A parsed `.inp` deck: everything [`fasterhenry::solve::solve`] needs.
@@ -95,11 +107,32 @@ pub struct Deck {
     pub frequencies: Vec<f64>,
 }
 
-/// A `G` line pending assembly: the plane and the name `.hole` refers to.
+/// A `G` line pending assembly: the plane and the name `.hole` /
+/// `.contact` refers to.
 #[derive(Clone, Debug)]
 struct PlaneSpec {
     name: String,
     plane: GroundPlane,
+}
+
+/// The declared plane a `.hole` / `.contact` line names; the leading `G` is
+/// optional (`.hole Gp` and `.hole p` both find `Gp`).
+fn plane_named<'a>(
+    planes: &'a mut [PlaneSpec],
+    name: &str,
+    directive: &str,
+    line: usize,
+) -> Result<&'a mut PlaneSpec, ParseError> {
+    let wanted = name.strip_prefix(['g', 'G']).unwrap_or(name);
+    planes
+        .iter_mut()
+        .find(|spec| spec.name[1..] == *wanted || spec.name == name)
+        .ok_or_else(|| {
+            err(
+                line,
+                format!("'{directive}' names unknown ground plane '{name}'"),
+            )
+        })
 }
 
 /// A parse error: what went wrong, and on which line (`0` = deck-level).
@@ -187,11 +220,13 @@ fn parse_count(text: &str, what: &str, line: usize) -> Result<usize, ParseError>
 }
 
 /// The value side of a `<field>=<value>` pair: a length (scaled), a
-/// conductivity (per deck unit, converted to S/m), or a count.
+/// conductivity (per deck unit, converted to S/m), a count, or a
+/// dimensionless ratio.
 fn parse_value(key: &str, value: &str, unit: f64, line: usize) -> Result<f64, ParseError> {
     match key {
         "sigma" => Ok(parse_number(value, line)? / unit),
         "nwinc" | "nhinc" | "nx" | "ny" => Ok(parse_count(value, key, line)? as f64),
+        "ratio" => parse_number(value, line),
         _ => Ok(parse_number(value, line)? * unit),
     }
 }
@@ -467,19 +502,58 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                     for (slot, token) in bounds.iter_mut().zip(&tokens[2..]) {
                         *slot = parse_number(token, number)? * factor;
                     }
-                    let wanted = name.strip_prefix(['g', 'G']).unwrap_or(name);
-                    let plane = planes
-                        .iter_mut()
-                        .find(|spec| spec.name[1..] == *wanted || spec.name == name)
-                        .ok_or_else(|| {
-                            err(
-                                number,
-                                format!("'.hole' names unknown ground plane '{name}'"),
-                            )
-                        })?;
+                    let plane = plane_named(&mut planes, name, ".hole", number)?;
                     plane.plane.holes.push(Hole {
                         lo: [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
                         hi: [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
+                    });
+                }
+                "contact" => {
+                    if tokens.len() < 6 {
+                        return Err(err(
+                            number,
+                            "expected .contact G<name> x1 y1 x2 y2 [nx=…] [ny=…] [ratio=…]",
+                        ));
+                    }
+                    let name = tokens[1];
+                    let mut bounds = [0.0f64; 4];
+                    for (slot, token) in bounds.iter_mut().zip(&tokens[2..6]) {
+                        *slot = parse_number(token, number)? * factor;
+                    }
+                    let mut cells = [2usize; 2];
+                    let mut ratio = 2.0f64;
+                    for token in &tokens[6..] {
+                        let (key, raw_value) = parse_field(token, number)?;
+                        match key.as_str() {
+                            "nx" => cells[0] = parse_count(&raw_value, "nx", number)?,
+                            "ny" => cells[1] = parse_count(&raw_value, "ny", number)?,
+                            "ratio" => {
+                                ratio = parse_number(&raw_value, number)?;
+                                if ratio < 1.0 {
+                                    return Err(err(
+                                        number,
+                                        format!(
+                                            "contact decay ratio must be ≥ 1 (got {raw_value}); 1 is an ungraded, uniformly fine axis"
+                                        ),
+                                    ));
+                                }
+                            }
+                            other => {
+                                return Err(err(
+                                    number,
+                                    format!(
+                                        "unknown .contact field '{other}' (supported: nx, ny, ratio)"
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    let plane = plane_named(&mut planes, name, ".contact", number)?;
+                    plane.plane.contacts.push(ContactRegion {
+                        lo: [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
+                        hi: [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
+                        cells,
+                        ratio,
                     });
                 }
                 "end" => {
@@ -679,6 +753,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                             )
                         })?,
                         holes: Vec::new(),
+                        contacts: Vec::new(),
                     },
                 });
             }
@@ -1113,6 +1188,123 @@ e1 n1 n2 w=0.2 h=0.035
         // snapped off the declared nodes onto cell centres.
         let end_a = deck.geometry.segment(18).unwrap().a;
         assert_ne!(end_a, Node::new(1e-3, 0.0, 0.0));
+    }
+
+    #[test]
+    fn contact_regions_grade_the_plane_mesh() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp 0 0 0 10 6 0 0.035 nx=5 ny=3
+.contact Gp 4.5 2.5 5.5 3.5 nx=4 ny=4 ratio=2
+n1 x=5 y=3 z=0.5
+n2 x=5 y=3 z=0
+e1 n1 n2 w=0.2 h=0.035
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        // The deck's plane is exactly the library plane with the region.
+        let mesh = GroundPlane {
+            lo: [0.0, 0.0],
+            hi: [10e-3, 6e-3],
+            z_top: 0.0,
+            thickness: 0.035e-3,
+            nx: 5,
+            ny: 3,
+            sigma: 5.8e7,
+            holes: Vec::new(),
+            contacts: vec![ContactRegion::new(
+                [4.5e-3, 2.5e-3],
+                [5.5e-3, 3.5e-3],
+                [4, 4],
+                2.0,
+            )],
+        }
+        .mesh()
+        .unwrap();
+        assert!(mesh.nx() > 5 && mesh.ny() > 3, "the deck plane is refined");
+        // The plane's cells, plus the via's top node (the bottom one
+        // snapped onto a plane cell).
+        assert_eq!(deck.geometry.nodes().len(), mesh.nx() * mesh.ny() + 1);
+        assert_eq!(deck.geometry.segment_count(), mesh.bars() + 1);
+        // The via at (5, 3) mm lands on a refined cell centre: within half
+        // a 0.25 mm fine cell, not half a 2 mm background cell.
+        let landing = deck.geometry.segment(mesh.bars()).unwrap().b;
+        assert!((landing.x - 5e-3).abs() <= 0.125e-3 + 1e-12);
+        assert!((landing.y - 3e-3).abs() <= 0.125e-3 + 1e-12);
+    }
+
+    #[test]
+    fn contact_defaults_and_field_errors() {
+        // Without fields: 2 x 2 cells at ratio 2.
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp 0 0 0 10 6 0 0.035 nx=5 ny=3
+.contact Gp 4 2 6 4
+n1 x=5 y=3 z=0.5
+n2 x=5 y=3 z=0
+e1 n1 n2 w=0.2 h=0.035
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        let mesh = GroundPlane {
+            lo: [0.0, 0.0],
+            hi: [10e-3, 6e-3],
+            z_top: 0.0,
+            thickness: 0.035e-3,
+            nx: 5,
+            ny: 3,
+            sigma: 5.8e7,
+            holes: Vec::new(),
+            contacts: vec![ContactRegion::new([4e-3, 2e-3], [6e-3, 4e-3], [2, 2], 2.0)],
+        }
+        .mesh()
+        .unwrap();
+        // The plane's cells, plus the via's top node (the bottom one
+        // snapped onto a plane cell).
+        assert_eq!(deck.geometry.nodes().len(), mesh.nx() * mesh.ny() + 1);
+
+        let bad = |line: &str| {
+            parse(&format!(
+                "\
+.units mm
+.default sigma=5.8e4
+Gp 0 0 0 10 6 0 0.035 nx=5 ny=3
+{line}
+n1 x=5 y=3 z=0.5
+n2 x=5 y=3 z=0
+e1 n1 n2 w=0.2 h=0.035
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+            ))
+            .unwrap_err()
+        };
+        assert!(bad(".contact Gq 4 2 6 4")
+            .message
+            .contains("'.contact' names unknown ground plane 'Gq'"));
+        assert!(bad(".contact Gp 4 2").message.contains("expected .contact"));
+        assert!(bad(".contact Gp 4 2 6 4 decay=2")
+            .message
+            .contains("unknown .contact field 'decay'"));
+        assert!(bad(".contact Gp 4 2 6 4 ratio=0.5")
+            .message
+            .contains("ratio must be ≥ 1"));
+        assert!(bad(".contact Gp 4 2 6 4 nx=0")
+            .message
+            .contains("nx must be ≥ 1"));
+        // A region that misses the footprint is a plane-assembly error.
+        assert!(bad(".contact Gp 40 2 60 4")
+            .message
+            .contains("outside the plane footprint"));
     }
 
     #[test]

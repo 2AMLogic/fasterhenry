@@ -105,6 +105,55 @@ the gate in release mode (assert-not-skipped, like the spiral gate).
 The `--fixture plane` / `--fixture plane-solid` modes of
 `tools/pypeec_reference.py` regenerate the references
 (`--voxel-um 5`, ~10 s each locally).
+
+### Graded contact regions (issue #36, measured 2026-09-25)
+
+A uniform cell-centre plane converges like `1/n` (the ΔL series above), so
+resolving a via landing by refining everywhere is ruinous. A
+`ContactRegion` refines *locally* instead: inside the rectangle the mesh is
+uniform at the fine cell, and outside it each cell grows by a geometric
+ratio until it reaches the background cell.
+
+The **contact-dominated fixture** is the same 1.2 × 0.8 × 0.02 mm sheet,
+driven between two 25 µm via landings *inside* it rather than across its
+short ends, so the port impedance is dominated by the current crowding
+under the contacts. It is meshed three ways: a 100 µm background graded to
+25 µm under each landing (`ratio = 2`, 5 fine cells per axis per region),
+a fully uniform 25 µm plane, and the bare 100 µm background. Landings
+0.825 mm apart:
+
+| mesh | plane bars | L (1 kHz) | R (DC) | rel L | rel R |
+|---|---|---|---|---|---|
+| graded (100 → 25 µm) | **580** | 0.274043 nH | 1.809 mΩ | **0.10 %** | **0.80 %** |
+| uniform 100 µm | 172 | 0.308044 nH | 1.520 mΩ | 12.52 % | 15.30 % |
+| uniform 25 µm (reference) | 2 992 | 0.273774 nH | 1.794 mΩ | — | — |
+
+Grading reaches the fully-fine answer inside 1 % on both L and R at
+**5.2× fewer filaments** (2 992 → 580), and is 125× closer than the
+background mesh it is built on. Bounds: 1 % on each, ≥ 4× saving.
+
+The same fixture carries an independent **PyPEEC separation
+differential**: `L(far) − L(near)` for landings 0.825 mm and 0.225 mm
+apart, which cancels the pad terms the two solvers model differently
+(a cell-centre node here, a 25 µm voxel pad there).
+
+| quantity | fasterhenry (graded, 580 bars) | PyPEEC 5 µm voxels | rel |
+|---|---|---|---|
+| ΔL (separation) | 0.224802 nH | 0.224530 nH | **0.12 %** (bound 3 %) |
+| ΔR (separation) | 0.7180 mΩ | 0.7129 mΩ | 0.72 % (bound 15 %) |
+
+Grading moves that differential by 0.06 % against the fully uniform 25 µm
+mesh, so the comparison measures physics rather than the mesh. The
+`--fixture contact` / `--fixture contact-near` modes of
+`tools/pypeec_reference.py` regenerate the references (`--voxel-um 5`,
+~3 min each locally).
+
+Both contact gates are **release-mode**: the fully-fine reference is 2 992
+filaments, ~12 s optimized and ~10 min unoptimized, so the first skips
+itself in a debug build. Each prints `CONTACT GATE PASSED` on success and
+CI asserts it counted two — a positive assertion, since a skip goes to
+stderr where the neighbouring `grep SKIPPED` cannot see it (#59).
+
 ## Surface-graded filaments (issue #23, measured 2026-09-21)
 
 A 400 mm × 40 mm × 200 µm copper trace (`σ = 5.8e7 S/m`) uses one

@@ -152,9 +152,13 @@ jobs:
                       assert abs(got.imag - entry['im']) <= 1e-12 * abs(entry['im']) + 1e-30
           print('scipy.io.loadmat round-trip: exact')
           PYEOF
-      # The ground-plane PyPEEC gate: slotted-vs-solid differential on
-      # both solvers (contact terms cancel), release mode for the 96x64
-      # reference grid. ubuntu-latest only; it needs the venv above.
+      # The ground-plane PyPEEC gates: the slotted-vs-solid differential
+      # and the graded contact-region separation differential (issue #36),
+      # on both solvers (contact terms cancel on each). Release mode, for
+      # the 96x64 slot grid and the 48x32 fully-fine contact reference --
+      # the latter is minutes unoptimized, so it skips itself in a debug
+      # build and the SKIPPED assertion below is what makes it run at all.
+      # ubuntu-latest only; it needs the venv above.
       - name: validation reference (PyPEEC planes) + assert it did not skip
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -163,12 +167,32 @@ jobs:
             --fixture plane --voxel-um 5.0 --out target/pypeec_plane.json
           /tmp/pypeec-venv/bin/python tools/pypeec_reference.py \
             --fixture plane-solid --voxel-um 5.0 --out target/pypeec_plane_solid.json
+          /tmp/pypeec-venv/bin/python tools/pypeec_reference.py \
+            --fixture contact --voxel-um 5.0 \
+            --out "$GITHUB_WORKSPACE/target/pypeec_contact.json"
+          /tmp/pypeec-venv/bin/python tools/pypeec_reference.py \
+            --fixture contact-near --voxel-um 5.0 \
+            --out "$GITHUB_WORKSPACE/target/pypeec_contact_near.json"
+          # Absolute, like the cross-section gate below: an integration
+          # test runs with its *package* directory as the cwd, so a
+          # workspace-relative `target/...` would not resolve. The plane
+          # pair above still uses the relative form and still skips; that
+          # pre-existing wiring bug is #59, not this issue's to flip on.
           FASTERHENRY_PYPEEC_PLANE_REFERENCE=target/pypeec_plane.json \
           FASTERHENRY_PYPEEC_PLANE_SOLID_REFERENCE=target/pypeec_plane_solid.json \
+          FASTERHENRY_PYPEEC_CONTACT_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_contact.json" \
+          FASTERHENRY_PYPEEC_CONTACT_NEAR_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_contact_near.json" \
             cargo test --release -p fasterhenry --test plane_validation -- --nocapture \
             | tee target/plane-validation.log
           if grep -q "SKIPPED" target/plane-validation.log; then
             echo "::error::plane_validation skipped although the references were generated"
+            exit 1
+          fi
+          # Both contact gates must announce themselves positively: a skip
+          # that somehow avoided the word SKIPPED cannot look like a pass.
+          passed="$(grep -c "CONTACT GATE PASSED" target/plane-validation.log || true)"
+          if [ "$passed" -ne 2 ]; then
+            echo "::error::plane_validation: $passed of 2 contact gates ran"
             exit 1
           fi
       # The width-graded skin-effect gate (issue #32): an independent 2-D

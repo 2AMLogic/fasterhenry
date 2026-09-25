@@ -58,14 +58,28 @@ Sub-0.1 % engine agreement on shared segment fixtures — the strongest
 cross-validation available to this project, and the first literal
 FastHenry comparison in either this repository or klayout-tools.
 
-**Open**: the trace-over-plane deck disagrees (FastHenry 6.65 nH vs our
-3.2 nH at 1 GHz) because FastHenry's ground planes connect through
-explicit `contact` regions with their own adaptive meshing
-(`contact decay_rect … nhinc= rh=`) — our deck's vias never attached, so
-FastHenry solved trace-plus-dangling-stubs (its DC resistance equals the
-trace alone, confirming the diagnosis). A fair plane comparison needs
-matched contact modeling in their dialect; tracked in #36 (graded
-contact-region plane mesh).
+**Planes, resolved (#36)**: the trace-over-plane deck used to disagree
+(FastHenry 6.65 nH vs our 3.2 nH at 1 GHz) because FastHenry's ground
+planes connect through explicit `contact` regions with their own adaptive
+meshing (`contact decay_rect … nhinc= rh=`) — our deck's vias never
+attached, so FastHenry solved trace-plus-dangling-stubs (its DC resistance
+equals the trace alone, confirming the diagnosis). The engine now has the
+matching capability: a `.contact` region on a `G` line refines the plane
+mesh locally under a landing and decays geometrically back to the
+background cell, so a deck can express the same contact modelling their
+dialect needs (`fasterhenry::plane::ContactRegion`; see
+`docs/validation.md` § *Graded contact regions*, where the graded mesh
+matches a fully-fine uniform plane to 0.10 % on L at 5.2× fewer filaments,
+and an independent PyPEEC separation differential to 0.12 %).
+
+What is **still open** is the head-to-head itself: rerunning the
+trace-over-plane deck against FastHenry with contacts declared on both
+sides is an operator-run, single-machine measurement like the rest of this
+section, and it has not been redone since the capability landed. The
+number above is therefore left standing as the last measured one, not
+claimed as fixed. This repository's own plane accuracy is gated
+independently by the PyPEEC slot and contact differentials, which need no
+FastHenry.
 
 ## Committed criterion bench suite
 
