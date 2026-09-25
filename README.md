@@ -15,11 +15,15 @@ a legal grey zone or does without. `fasterhenry` is the replacement: the
 published method, implemented from the papers, released under MIT, fast enough
 to sit inside a design loop.
 
-Current milestone: **M0 — dense core, validated**. A filament model, partial
-self/mutual inductance kernels, mesh assembly, a dense complex solve with a
-frequency sweep, and a validation harness that cross-checks a spiral fixture
-against PyPEEC and the Mohan/Greenhouse closed forms. Acceleration (FFT/FMM)
-and skin/proximity refinement are M1.
+What exists today: a filament model with uniform, surface-graded and
+skin-depth-graded subdivision; partial self/mutual inductance kernels;
+ground planes with holes and graded contact regions; coupling truncation;
+mesh assembly with a dense complex solve over a frequency sweep; and a
+matrix-free precorrected-FFT operator with a GMRES solve for large problems.
+Every piece is cross-checked against independent references (PyPEEC, the
+Greenhouse closed forms, and a head-to-head with FastHenry itself) —
+see [`docs/validation.md`](docs/validation.md). The CLI reads FastHenry
+`.inp` decks and writes JSON, a MAT v4 `Zc.mat`, or a SPICE subcircuit.
 
 ## Method
 
@@ -64,9 +68,10 @@ must solve within 10 s on that same pinned runner class
 The dense path is parallel across all cores and SIMD-batched in the
 kernels, so it is dramatically faster than a single-threaded 1994-era
 solver on modern hardware — for problems that fit the dense regime
-(~10⁴ filaments comfortably, ~10⁵ with patience and memory). It is **not**
-yet accelerated: beyond that, a multipole/FFT method wins, and precorrected-FFT
-acceleration is tracked as the next milestone (#24).
+(~10⁴ filaments comfortably, ~10⁵ with patience and memory). Beyond that,
+the library's `IterativeSystem` (precorrected FFT + GMRES, #24) computes
+the same impedance matrix in near-linear time and memory; the size
+threshold at which it becomes the default is being measured in #44.
 
 Measured head-to-head against the original FastHenry (operator-run,
 one machine, self-authored decks; method, hardware and caveats in

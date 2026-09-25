@@ -11,6 +11,10 @@ unstable and may change in any release.
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-09-25
+
+First release to crates.io.
+
 ### Added
 
 - Graded contact regions in the ground-plane mesh (issue #36):
@@ -172,4 +176,5 @@ unstable and may change in any release.
 - `fasterhenry-cli` now takes the library from `[workspace.dependencies]` with
   both a `path` and a `version`, so the CLI crate is publishable.
 
-[Unreleased]: https://github.com/2AMLogic/fasterhenry/commits/main
+[Unreleased]: https://github.com/2AMLogic/fasterhenry/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/2AMLogic/fasterhenry/releases/tag/v0.0.1

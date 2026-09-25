@@ -1,5 +1,5 @@
 //! Reader for the FastHenry `.inp` deck format — a public, documented file
-//! format — restricted to the M0 subset.
+//! format — restricted to the subset documented below.
 //!
 //! # Clean-room note
 //!
@@ -9,7 +9,7 @@
 //! text, or tables were consulted, in keeping with the repository's
 //! clean-room rule (see `CONTRIBUTING.md`).
 //!
-//! # Supported subset (M0)
+//! # Supported subset
 //!
 //! | Line | Meaning |
 //! |------|---------|
