@@ -415,8 +415,6 @@ fn grid_interactions(
 mod profile {
     use std::time::{Duration, Instant};
 
-    use rayon::prelude::*;
-
     use super::*;
     use crate::filament::Filament;
     use crate::geometry::{Node, Segment};
