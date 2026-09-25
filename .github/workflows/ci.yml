@@ -34,6 +34,10 @@ jobs:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # One pin for the validation venv: the cache key, the install and the
+      # post-install check below all read it, so they cannot drift apart.
+      PYPEEC_VERSION: "5.8.0"
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +61,60 @@ jobs:
       - name: performance smoke (2 000 filaments < 10 s, release)
         if: matrix.os == 'ubuntu-latest'
         run: cargo test --release -p fasterhenry --test perf_smoke -- --ignored --nocapture --test-threads=1
+      # The PyPEEC venv is the same tree on every run with the same pin and
+      # the same interpreter, so it is cached instead of reinstalled (the
+      # install is ~40 s per Linux leg, per run). There is no setup-python
+      # here -- `python3` is the runner image's -- so the interpreter version
+      # goes into the key explicitly, next to the runner (x86 and arm resolve
+      # different wheels). Bump the trailing salt to evict every entry.
+      - name: pypeec venv cache key
+        id: pypeec-venv-key
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          set -euo pipefail
+          py="$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
+          echo "key=pypeec-venv-${{ matrix.os }}-py$py-pypeec$PYPEEC_VERSION-v1" >> "$GITHUB_OUTPUT"
+      - name: restore the PyPEEC venv
+        id: pypeec-venv-cache
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: actions/cache@v4
+        with:
+          path: /tmp/pypeec-venv
+          key: ${{ steps.pypeec-venv-key.outputs.key }}
+      # A restored venv is used only if it passes the same check a fresh one
+      # has to pass; anything else is thrown away and installed clean, so a
+      # bad cache entry costs a slow run, never a broken gate. It has to be
+      # checked: actions/cache writes its entry in a post step that runs even
+      # when the job failed, so a half-installed venv can outlive a failed
+      # install and be restored here on a later run.
+      - name: prepare the PyPEEC venv (cache restore, else clean install)
+        if: startsWith(matrix.os, 'ubuntu')
+        env:
+          CACHE_HIT: ${{ steps.pypeec-venv-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          venv=/tmp/pypeec-venv
+          # Written last, after a *complete* install -- a tree without it is
+          # partial by definition, whatever else it happens to contain.
+          stamp="$venv/.ci-install-complete"
+          venv_ok() {
+            [ -x "$venv/bin/python" ] || return 1
+            [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$PYPEEC_VERSION" ] || return 1
+            "$venv/bin/python" -c 'import sys, importlib.metadata as md; import pypeec; sys.exit(0 if md.version("pypeec") == sys.argv[1] else 1)' "$PYPEEC_VERSION"
+          }
+          if venv_ok; then
+            echo "pypeec venv: restored from cache in ${SECONDS}s (pypeec $PYPEEC_VERSION)"
+            exit 0
+          fi
+          if [ "$CACHE_HIT" = 'true' ]; then
+            echo "::warning::cached pypeec venv failed validation -- installing clean. The bad entry stays until its key expires; bump the salt in 'pypeec venv cache key' to evict it now."
+          fi
+          rm -rf "$venv"
+          python3 -m venv "$venv"
+          "$venv/bin/pip" install -q "pypeec==$PYPEEC_VERSION"
+          "$venv/bin/python" -c 'import sys, importlib.metadata as md; import pypeec; sys.exit(0 if md.version("pypeec") == sys.argv[1] else 1)' "$PYPEEC_VERSION"
+          printf '%s' "$PYPEEC_VERSION" > "$stamp"
+          echo "pypeec venv: clean install in ${SECONDS}s (pypeec $PYPEEC_VERSION)"
       # The validation oracle regenerates the PyPEEC reference here (nothing
       # generated is committed) and asserts the test did NOT take its skip
       # path. Linux legs only: pypeec wheels are not needed elsewhere.
@@ -64,8 +122,6 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           set -euo pipefail
-          python3 -m venv /tmp/pypeec-venv
-          /tmp/pypeec-venv/bin/pip install -q pypeec==5.8.0
           /tmp/pypeec-venv/bin/python tools/pypeec_reference.py --out target/pypeec_reference.json
           FASTERHENRY_PYPEEC_REFERENCE=target/pypeec_reference.json \
             cargo test -p fasterhenry --test spiral_validation -- --nocapture \
