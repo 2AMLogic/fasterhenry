@@ -53,6 +53,7 @@ mod batch;
 pub mod closed_form;
 pub(crate) mod gauss;
 mod lines;
+mod memo;
 pub(crate) mod neumann;
 
 use std::cmp::Ordering;
@@ -250,8 +251,16 @@ fn canonical(a: &Filament, b: &Filament) -> Ordering {
         .unwrap_or(Ordering::Equal)
 }
 
-/// The closed form when trustworthy, the quadrature otherwise.
+/// The closed form when trustworthy, the quadrature otherwise, memoized on
+/// the geometry — which is the whole of what the answer depends on, so a
+/// repeated relative position costs a table lookup instead of a kernel. See
+/// [`memo`] for why a bundle is full of repeats.
 fn aligned_integral(bars: &AlignedBars) -> (f64, Method) {
+    memo::aligned_integral(bars, evaluate_aligned_integral)
+}
+
+/// [`aligned_integral`] without the memo.
+fn evaluate_aligned_integral(bars: &AlignedBars) -> (f64, Method) {
     let exact = bar::bar_integral(
         &bar::corner_differences(bars.length[0], bars.length[1], bars.offset[0]),
         &bar::corner_differences(bars.width[0], bars.width[1], bars.offset[1]),
