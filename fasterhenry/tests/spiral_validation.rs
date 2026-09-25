@@ -25,8 +25,12 @@
 //!    `tools/pypeec_reference.py` (1 µm voxels, DC + 1 kHz) and read from
 //!    the JSON that script writes. Stated tolerance 2 %. The test skips
 //!    with an explicit reason when the reference file is absent; the CI
-//!    "validation" step regenerates it first and asserts the test did not
-//!    skip.
+//!    "validation" step regenerates it first and asserts the comparison
+//!    actually ran, by counting the `SPIRAL GATE PASSED` line this test
+//!    prints on stdout only after the comparison succeeded. That positive
+//!    marker is what makes the gate observable: the skip reason goes to
+//!    stderr, so grepping a stdout-only log for `SKIPPED` can never see it
+//!    (issue #59).
 //! 3. **Mohan modified-Wheeler** (computed here, reported, not asserted):
 //!    the current-sheet expression `L = K₁µ₀n²d_avg/(1+K₂ρ)` with the
 //!    square-spiral constants `K₁ = 2.34`, `K₂ = 2.75` — a ±20 %-class
@@ -43,6 +47,9 @@ const SIGMA: f64 = 5.8e7;
 const W_UM: f64 = 2.0;
 const T_UM: f64 = 2.0;
 const FREQ_HZ: f64 = 1.0e3; // skin depth 66 µm >> 2 µm: uniform current
+/// Printed only once the PyPEEC comparison has run and passed; CI counts
+/// it, so a skip (which prints to stderr) cannot look like a pass.
+const PASSED: &str = "SPIRAL GATE PASSED";
 
 type Segment = ((f64, f64), (f64, f64)); // centreline endpoints, µm
 
@@ -250,6 +257,7 @@ fn spiral_inductance_against_references() {
             let rel_r = (resistance - pypeec_r).abs() / pypeec_r;
             println!("vs PyPEEC R: rel {rel_r:.4} (sanity band 0.25)");
             assert!(rel_r < 0.25, "PyPEEC R deviation {rel_r}");
+            println!("{PASSED} (spiral L and R vs PyPEEC)");
         }
         None => {
             eprintln!(

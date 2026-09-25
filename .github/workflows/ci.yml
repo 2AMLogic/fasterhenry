@@ -33,7 +33,13 @@ jobs:
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # 30 was sized when the two PyPEEC steps below were silently skipping
+    # (#59). Turning the slot differential on adds a real 96x64 solve pair:
+    # measured 4 min 22 s wall / 2.5 GB peak RSS, single-threaded, on an
+    # 8-core Linux box under load. The ubuntu-latest leg was ~14 min, so
+    # ~20 min is the new expectation; 45 leaves the same kind of headroom 30
+    # used to.
+    timeout-minutes: 45
     env:
       # One pin for the validation venv: the cache key, the install and the
       # post-install check below all read it, so they cannot drift apart.
@@ -116,18 +122,33 @@ jobs:
           printf '%s' "$PYPEEC_VERSION" > "$stamp"
           echo "pypeec venv: clean install in ${SECONDS}s (pypeec $PYPEEC_VERSION)"
       # The validation oracle regenerates the PyPEEC reference here (nothing
-      # generated is committed) and asserts the test did NOT take its skip
-      # path. Linux legs only: pypeec wheels are not needed elsewhere.
-      - name: validation reference (PyPEEC) + assert it did not skip
+      # generated is committed) and asserts the comparison actually ran.
+      # Linux legs only: pypeec wheels are not needed elsewhere.
+      #
+      # The reference path is absolute. `cargo test` runs an integration
+      # test with its *package* directory as the cwd, so a workspace-relative
+      # `target/...` resolves to `fasterhenry/target/...` and never exists --
+      # which silently sent this gate down its skip path on every run until
+      # #59. Stderr is folded into the log as well, because the skip reason
+      # is an `eprintln!`; and the gate is asserted *positively* by counting
+      # the marker the test prints only after the comparison passed, so a
+      # skip cannot pass for a run whatever the routing.
+      - name: validation reference (PyPEEC) + assert the gate ran
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           set -euo pipefail
-          /tmp/pypeec-venv/bin/python tools/pypeec_reference.py --out target/pypeec_reference.json
-          FASTERHENRY_PYPEEC_REFERENCE=target/pypeec_reference.json \
-            cargo test -p fasterhenry --test spiral_validation -- --nocapture \
+          /tmp/pypeec-venv/bin/python tools/pypeec_reference.py \
+            --out "$GITHUB_WORKSPACE/target/pypeec_reference.json"
+          FASTERHENRY_PYPEEC_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_reference.json" \
+            cargo test -p fasterhenry --test spiral_validation -- --nocapture 2>&1 \
             | tee target/spiral-validation.log
           if grep -q "SKIPPED" target/spiral-validation.log; then
             echo "::error::spiral_validation skipped although the reference was generated"
+            exit 1
+          fi
+          passed="$(grep -c "SPIRAL GATE PASSED" target/spiral-validation.log || true)"
+          if [ "$passed" -ne 1 ]; then
+            echo "::error::spiral_validation: $passed of 1 PyPEEC gates ran"
             exit 1
           fi
       # The MAT v4 export round-trips through scipy.io.loadmat with values
@@ -157,42 +178,50 @@ jobs:
       # on both solvers (contact terms cancel on each). Release mode, for
       # the 96x64 slot grid and the 48x32 fully-fine contact reference --
       # the latter is minutes unoptimized, so it skips itself in a debug
-      # build and the SKIPPED assertion below is what makes it run at all.
+      # build and the marker counts below are what make it run at all.
       # ubuntu-latest only; it needs the venv above.
-      - name: validation reference (PyPEEC planes) + assert it did not skip
+      - name: validation reference (PyPEEC planes) + assert the gates ran
         if: matrix.os == 'ubuntu-latest'
         run: |
           set -euo pipefail
           /tmp/pypeec-venv/bin/python tools/pypeec_reference.py \
-            --fixture plane --voxel-um 5.0 --out target/pypeec_plane.json
+            --fixture plane --voxel-um 5.0 \
+            --out "$GITHUB_WORKSPACE/target/pypeec_plane.json"
           /tmp/pypeec-venv/bin/python tools/pypeec_reference.py \
-            --fixture plane-solid --voxel-um 5.0 --out target/pypeec_plane_solid.json
+            --fixture plane-solid --voxel-um 5.0 \
+            --out "$GITHUB_WORKSPACE/target/pypeec_plane_solid.json"
           /tmp/pypeec-venv/bin/python tools/pypeec_reference.py \
             --fixture contact --voxel-um 5.0 \
             --out "$GITHUB_WORKSPACE/target/pypeec_contact.json"
           /tmp/pypeec-venv/bin/python tools/pypeec_reference.py \
             --fixture contact-near --voxel-um 5.0 \
             --out "$GITHUB_WORKSPACE/target/pypeec_contact_near.json"
-          # Absolute, like the cross-section gate below: an integration
-          # test runs with its *package* directory as the cwd, so a
-          # workspace-relative `target/...` would not resolve. The plane
-          # pair above still uses the relative form and still skips; that
-          # pre-existing wiring bug is #59, not this issue's to flip on.
-          FASTERHENRY_PYPEEC_PLANE_REFERENCE=target/pypeec_plane.json \
-          FASTERHENRY_PYPEEC_PLANE_SOLID_REFERENCE=target/pypeec_plane_solid.json \
+          # Every path is absolute, like the cross-section gate below: an
+          # integration test runs with its *package* directory as the cwd,
+          # so a workspace-relative `target/...` resolves under
+          # `fasterhenry/` and never exists. The plane pair carried the
+          # relative form and so skipped on every run until #59.
+          FASTERHENRY_PYPEEC_PLANE_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_plane.json" \
+          FASTERHENRY_PYPEEC_PLANE_SOLID_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_plane_solid.json" \
           FASTERHENRY_PYPEEC_CONTACT_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_contact.json" \
           FASTERHENRY_PYPEEC_CONTACT_NEAR_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_contact_near.json" \
-            cargo test --release -p fasterhenry --test plane_validation -- --nocapture \
+            cargo test --release -p fasterhenry --test plane_validation -- --nocapture 2>&1 \
             | tee target/plane-validation.log
           if grep -q "SKIPPED" target/plane-validation.log; then
             echo "::error::plane_validation skipped although the references were generated"
             exit 1
           fi
-          # Both contact gates must announce themselves positively: a skip
-          # that somehow avoided the word SKIPPED cannot look like a pass.
+          # Every reference-backed gate must announce itself positively: a
+          # skip that somehow avoided the word SKIPPED cannot look like a
+          # pass, and neither can one whose message went to stderr.
           passed="$(grep -c "CONTACT GATE PASSED" target/plane-validation.log || true)"
           if [ "$passed" -ne 2 ]; then
             echo "::error::plane_validation: $passed of 2 contact gates ran"
+            exit 1
+          fi
+          passed="$(grep -c "SLOT GATE PASSED" target/plane-validation.log || true)"
+          if [ "$passed" -ne 1 ]; then
+            echo "::error::plane_validation: $passed of 1 slot gates ran"
             exit 1
           fi
       # The width-graded skin-effect gate (issue #32): an independent 2-D
