@@ -39,7 +39,9 @@
 //! [`IterativeSystem`](crate::IterativeSystem) is the matrix-free
 //! alternative for large problems: the same Schur complement, with
 //! `Z_ee⁻¹·Z_ep` solved by GMRES on the precorrected-FFT operator instead of
-//! by dense LU. [`MeshSystem`] remains the default.
+//! by dense LU. [`MeshSystem`] remains the default up to
+//! [`DENSE_PATH_MAX_FILAMENTS`] filaments — the size threshold
+//! [`SolverChoice::Auto`] switches on, measured in `docs/benchmarks.md`.
 //!
 //! `Z_ee` is never singular for a valid geometry: `R` is positive definite and
 //! `L` positive semidefinite, so the Hermitian part of `M_e (R + jωL) M_eᵀ` is
@@ -86,6 +88,95 @@ use crate::result::{Counts, Provenance, SweepResult, Timing};
 /// Working memory the frequency sweep may spend on concurrent factorizations
 /// before it reduces the number of frequencies solved at once.
 pub(crate) const SWEEP_MEMORY_BUDGET_BYTES: usize = 2 << 30;
+
+/// Largest filament count at which [`SolverChoice::Auto`] keeps the dense
+/// path ([`MeshSystem`]); above it the matrix-free
+/// [`IterativeSystem`](crate::IterativeSystem) is selected instead.
+///
+/// The dense path holds the `n × n` partial-inductance matrix (`8n²` bytes)
+/// and factorizes the complex internal-loop block (`16m²` bytes for `m`
+/// internal loops, twice over while it does), so its working set grows
+/// quadratically where the pFFT operator and GMRES's Krylov basis grow
+/// linearly. Measured end to end — assembly plus a one-frequency sweep, by
+/// `fasterhenry/benches/scaling.rs`, on the square-meander fixture, one
+/// thread; hardware, date and the full table in `docs/benchmarks.md`:
+///
+/// | filaments | dense | iterative | dense working set |
+/// |---|---|---|---|
+/// | 2 400 | 4.2 s | 4.7 s | 0.15 GB |
+/// | 4 760 | 20.9 s | 8.9 s | 0.6 GB |
+/// | 9 800 | 156 s | 19.4 s | 2.5 GB |
+/// | 29 928 | not attempted | 61 s | 23 GB |
+/// | 99 224 | not attempted | 207 s | 256 GB |
+///
+/// The wall-clock crossover on that fixture is near 3 000 filaments, and
+/// this threshold deliberately sits above it: it marks where the dense path
+/// stops being *tractable*, not where it stops being fastest. The dense path
+/// evaluates every pair exactly, while the iterative one approximates the
+/// far field (about `1e-6` on `L·x`, under `1e-4` on `Z`), and its advantage
+/// is geometry-dependent — a set with a few filaments much longer than the
+/// rest drives the pFFT grid spacing down and its projection cost up, moving
+/// the crossover to larger sizes. Staying dense to 10 000 filaments keeps
+/// the exact path for every problem where it is affordable on any geometry
+/// (its working set is still a couple of gigabytes there) and hands over one
+/// size before it is not affordable on any: 23 GB at 30 000 filaments. The
+/// price of that conservatism is visible in the table — a default run at
+/// 9 800 filaments is the slow column — and one flag wide:
+/// `--solver iterative` takes the other path at any size.
+///
+/// It is a default for callers that do not want to choose
+/// ([`SolverChoice::Auto`]), never a limit: [`SolverChoice::Dense`] and
+/// [`SolverChoice::Iterative`] force either path at any size.
+pub const DENSE_PATH_MAX_FILAMENTS: usize = 10_000;
+
+/// Which of the two solve paths runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Solver {
+    /// [`MeshSystem`]: dense assembly of `L` and a dense LU of `Z_ee`.
+    Dense,
+    /// [`IterativeSystem`](crate::IterativeSystem): GMRES on the
+    /// precorrected-FFT operator, matrix-free.
+    Iterative,
+}
+
+impl std::fmt::Display for Solver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Dense => "dense",
+            Self::Iterative => "iterative",
+        })
+    }
+}
+
+/// Which solve path a caller wants, before the problem size is known.
+///
+/// [`Auto`](Self::Auto) — the default — resolves to [`Solver::Dense`] at or
+/// below [`DENSE_PATH_MAX_FILAMENTS`] filaments and to
+/// [`Solver::Iterative`] above it; the other two variants force a path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverChoice {
+    /// Pick from the filament count and [`DENSE_PATH_MAX_FILAMENTS`].
+    #[default]
+    Auto,
+    /// Always [`MeshSystem`].
+    Dense,
+    /// Always [`IterativeSystem`](crate::IterativeSystem).
+    Iterative,
+}
+
+impl SolverChoice {
+    /// The path this choice takes for a problem of `filaments` filaments.
+    pub const fn resolve(self, filaments: usize) -> Solver {
+        match self {
+            Self::Dense => Solver::Dense,
+            Self::Iterative => Solver::Iterative,
+            Self::Auto if filaments <= DENSE_PATH_MAX_FILAMENTS => Solver::Dense,
+            Self::Auto => Solver::Iterative,
+        }
+    }
+}
 
 /// Number of filaments across a segment's width (`nw`) and height (`nh`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -280,6 +371,26 @@ impl Discretization {
             target_skin_depths,
             ratio,
         ))
+    }
+
+    /// How many filaments this discretization cuts `geometry` into, without
+    /// cutting it: the sum of `nw·nh` over the segments.
+    ///
+    /// Cheap (one pass over the segments), so a front end can size the
+    /// problem — and pick a solve path with
+    /// [`SolverChoice::resolve`] — before paying for assembly.
+    ///
+    /// # Errors
+    ///
+    /// [`SolveError::InvalidGrading`] for an out-of-range grading parameter
+    /// and [`SolveError::Mesh`] for a per-segment discretization of the wrong
+    /// length, exactly as assembly would report them.
+    pub fn filament_count(&self, geometry: &Geometry) -> Result<usize, SolveError> {
+        Ok(self
+            .resolve(geometry)?
+            .iter()
+            .map(|grid| grid.nw * grid.nh)
+            .sum())
     }
 
     fn resolve(&self, geometry: &Geometry) -> Result<Vec<SegmentGrid>, SolveError> {
@@ -794,6 +905,40 @@ fn congruence(
         },
     );
     DMatrix::from_fn(loops, loops, |i, j| upper[i.min(j) * loops + i.max(j)])
+}
+
+#[cfg(test)]
+mod solver_choice_tests {
+    use super::*;
+
+    #[test]
+    fn auto_switches_paths_at_the_threshold() {
+        let auto = SolverChoice::default();
+        assert_eq!(auto, SolverChoice::Auto);
+        assert_eq!(auto.resolve(0), Solver::Dense);
+        assert_eq!(auto.resolve(DENSE_PATH_MAX_FILAMENTS), Solver::Dense);
+        assert_eq!(
+            auto.resolve(DENSE_PATH_MAX_FILAMENTS + 1),
+            Solver::Iterative
+        );
+    }
+
+    #[test]
+    fn an_explicit_choice_ignores_the_threshold() {
+        for filaments in [1, DENSE_PATH_MAX_FILAMENTS, 10 * DENSE_PATH_MAX_FILAMENTS] {
+            assert_eq!(SolverChoice::Dense.resolve(filaments), Solver::Dense);
+            assert_eq!(
+                SolverChoice::Iterative.resolve(filaments),
+                Solver::Iterative
+            );
+        }
+    }
+
+    #[test]
+    fn paths_print_as_their_command_line_names() {
+        assert_eq!(Solver::Dense.to_string(), "dense");
+        assert_eq!(Solver::Iterative.to_string(), "iterative");
+    }
 }
 
 #[cfg(test)]

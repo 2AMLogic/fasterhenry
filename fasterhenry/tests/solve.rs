@@ -19,7 +19,8 @@ use std::f64::consts::TAU;
 use fasterhenry::{
     mutual_inductance, partial_inductance_matrix, self_inductance, solve, Discretization, Filament,
     Geometry, GmresParams, GridSpacing, IterativeParams, IterativeSystem, MeshError, MeshSystem,
-    Node, NodeId, PfftParams, Port, SegmentDef, SolveError, Subdivision, SweepResult,
+    Node, NodeId, PfftParams, Port, SegmentDef, SolveError, Solver, SolverChoice, Subdivision,
+    SweepResult, DENSE_PATH_MAX_FILAMENTS,
 };
 use nalgebra::DMatrix;
 use num_complex::Complex;
@@ -871,6 +872,139 @@ fn iterative_sweep_is_deterministic_and_equals_pointwise_evaluation() {
     assert_eq!(
         again.sweep(&frequencies).unwrap().without_timing(),
         result.without_timing()
+    );
+}
+
+/// The iterative path is a deterministic function of its input, whatever
+/// the size of the thread pool it runs on (issue #44): GMRES has no random
+/// or time-dependent input, the loop-basis products are indexed reductions
+/// in a fixed order, and the pFFT convolution is a fixed sequence of
+/// transforms. Nothing here is a tolerance on physics — it is the tolerance
+/// on *repeatability*, and it is far inside the solver's own `1e-10`
+/// stopping tolerance.
+#[test]
+fn iterative_impedance_does_not_depend_on_the_thread_count() {
+    let (geometry, ports, discretization) = coupled_structure();
+    let params = IterativeParams::default();
+    let frequencies = [0.0, 1e6, 1e9];
+
+    let run = |threads: usize| {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let system =
+                IterativeSystem::assemble(&geometry, &ports, &discretization, &params).unwrap();
+            let solutions: Vec<_> = frequencies
+                .iter()
+                .map(|&f| system.solve(f).unwrap())
+                .collect();
+            (
+                system.sweep(&frequencies).unwrap().without_timing(),
+                solutions,
+            )
+        })
+    };
+
+    let (single_sweep, single) = run(1);
+    for threads in [2, 4, 8] {
+        let (sweep, solutions) = run(threads);
+        assert_eq!(
+            sweep, single_sweep,
+            "the sweep differs between 1 and {threads} threads"
+        );
+        for ((solution, reference), &frequency) in solutions.iter().zip(&single).zip(&frequencies) {
+            let difference = max_relative_difference(&solution.impedance, &reference.impedance);
+            println!(
+                "{frequency:e} Hz on {threads} threads: difference {difference:e}, \
+                 GMRES iterations {:?} vs {:?}",
+                solution
+                    .gmres
+                    .iter()
+                    .map(|o| o.iterations)
+                    .collect::<Vec<_>>(),
+                reference
+                    .gmres
+                    .iter()
+                    .map(|o| o.iterations)
+                    .collect::<Vec<_>>(),
+            );
+            assert!(
+                difference < 1e-12,
+                "Z({frequency:e} Hz) moved by {difference:e} between 1 and {threads} threads"
+            );
+            // Convergence itself must not depend on the thread count either.
+            assert_eq!(solution.gmres, reference.gmres);
+        }
+    }
+}
+
+/// Repeating the same solve on the same system reproduces `Z(ω)` bit for
+/// bit, so a second run of a deck can be diffed against the first.
+#[test]
+fn repeated_iterative_solves_are_bit_identical() {
+    let (geometry, ports, discretization) = coupled_structure();
+    let system = IterativeSystem::assemble(
+        &geometry,
+        &ports,
+        &discretization,
+        &IterativeParams::default(),
+    )
+    .unwrap();
+    for frequency in [0.0, 1e6, 1e9] {
+        let first = system.solve(frequency).unwrap();
+        for _ in 0..3 {
+            assert_eq!(system.solve(frequency).unwrap(), first);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Choosing a path: the dense/iterative size threshold
+// ---------------------------------------------------------------------------
+
+#[test]
+fn filament_count_predicts_what_assembly_produces() {
+    let (geometry, ports, per_segment) = coupled_structure();
+    let cases = [
+        per_segment,
+        Discretization::uniform(3, 2),
+        Discretization::graded(3, 2, 1.5),
+        Discretization::skin_depth(1e9, 0.5, 2.0),
+    ];
+    for discretization in cases {
+        let counted = discretization.filament_count(&geometry).unwrap();
+        let assembled = MeshSystem::assemble(&geometry, &ports, &discretization)
+            .unwrap()
+            .counts()
+            .filaments;
+        assert_eq!(counted, assembled, "{discretization:?}");
+    }
+}
+
+#[test]
+fn a_per_segment_discretization_of_the_wrong_length_is_reported_before_assembly() {
+    let (geometry, _, _) = coupled_structure();
+    let wrong = Discretization::PerSegment(vec![Subdivision::SINGLE; 3]);
+    assert!(matches!(
+        wrong.filament_count(&geometry),
+        Err(SolveError::Mesh(MeshError::SegmentCountMismatch { .. }))
+    ));
+}
+
+/// The threshold is the size at which `Auto` hands over, and the fixture
+/// above — a few hundred filaments — is far below it, so the default path
+/// for an ordinary problem is the dense one.
+#[test]
+fn auto_keeps_a_small_problem_on_the_dense_path() {
+    let (geometry, _, discretization) = coupled_structure();
+    let filaments = discretization.filament_count(&geometry).unwrap();
+    assert!(filaments < DENSE_PATH_MAX_FILAMENTS);
+    assert_eq!(SolverChoice::Auto.resolve(filaments), Solver::Dense);
+    assert_eq!(
+        SolverChoice::Auto.resolve(DENSE_PATH_MAX_FILAMENTS + 1),
+        Solver::Iterative
     );
 }
 

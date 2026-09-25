@@ -1,7 +1,8 @@
 //! The command-line definition (clap). Lives in the library so the tests
 //! can validate it and the binary stays a thin wrapper.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use fasterhenry::SolverChoice;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -48,7 +49,36 @@ pub enum Command {
         /// The frequency for `--spice`, in hertz; default: the last one.
         #[arg(long, value_name = "HZ")]
         spice_freq: Option<f64>,
+        /// Which solve path to use. `auto` keeps the dense path up to
+        /// `fasterhenry::DENSE_PATH_MAX_FILAMENTS` filaments and switches to
+        /// the matrix-free precorrected-FFT + GMRES path above it; `dense`
+        /// and `iterative` force one. A deck that truncates coupling
+        /// (`.couples`) is dense-only.
+        #[arg(long, value_enum, default_value_t = SolverArg::Auto)]
+        solver: SolverArg,
     },
+}
+
+/// The `--solver` values, mapped onto [`SolverChoice`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum SolverArg {
+    /// Dense below the built-in filament threshold, matrix-free above it.
+    #[default]
+    Auto,
+    /// Always the dense path.
+    Dense,
+    /// Always the matrix-free pFFT + GMRES path.
+    Iterative,
+}
+
+impl From<SolverArg> for SolverChoice {
+    fn from(arg: SolverArg) -> Self {
+        match arg {
+            SolverArg::Auto => Self::Auto,
+            SolverArg::Dense => Self::Dense,
+            SolverArg::Iterative => Self::Iterative,
+        }
+    }
 }
 
 /// The `--version` string: crate version plus the source revision stamped

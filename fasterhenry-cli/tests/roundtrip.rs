@@ -2,7 +2,8 @@
 //! deck (`tests/data/spiral.inp`) and as the equivalent JSON problem
 //! document (`tests/data/spiral.json`) must produce identical sweeps.
 
-use fasterhenry_cli::{read_inputs, run};
+use fasterhenry::{Solver, SolverChoice, DENSE_PATH_MAX_FILAMENTS};
+use fasterhenry_cli::{read_inputs, run, run_reporting_with, solver_for};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
@@ -411,4 +412,82 @@ fn group_tags_alone_change_nothing() {
         run(&tagged, None).unwrap().without_timing(),
         run(&untagged, None).unwrap().without_timing()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Choosing a solve path (`--solver`, issue #44)
+// ---------------------------------------------------------------------------
+
+/// The default is the dense path for every problem this repository's decks
+/// describe: `auto` only hands over above
+/// `fasterhenry::DENSE_PATH_MAX_FILAMENTS` filaments, and the spiral is
+/// three orders of magnitude below it.
+#[test]
+fn auto_keeps_ordinary_decks_on_the_dense_path() {
+    let problem = read_inputs(&fixture("spiral.inp")).unwrap();
+    let filaments = problem
+        .discretization
+        .filament_count(&problem.geometry)
+        .unwrap();
+    assert!(
+        filaments < DENSE_PATH_MAX_FILAMENTS,
+        "{filaments} filaments"
+    );
+    assert_eq!(
+        solver_for(&problem, SolverChoice::Auto).unwrap(),
+        Solver::Dense
+    );
+    // The default entry point and an explicitly dense one agree bit for bit,
+    // so adding the knob did not move the default.
+    assert_eq!(
+        run(&problem, None).unwrap().without_timing(),
+        run_reporting_with(&problem, None, SolverChoice::Dense)
+            .unwrap()
+            .0
+            .without_timing()
+    );
+}
+
+/// `--solver iterative` really does run the other path — the impedances
+/// agree with the dense ones to the documented `1e-4`, not bit for bit,
+/// because the pFFT far field is an approximation.
+#[test]
+fn forcing_the_iterative_path_reproduces_the_dense_sweep() {
+    let problem = read_inputs(&fixture("spiral.inp")).unwrap();
+    assert_eq!(
+        solver_for(&problem, SolverChoice::Iterative).unwrap(),
+        Solver::Iterative
+    );
+    let dense = run(&problem, Some(vec![1e6])).unwrap();
+    let (iterative, warnings) =
+        run_reporting_with(&problem, Some(vec![1e6]), SolverChoice::Iterative).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(iterative.provenance.counts, dense.provenance.counts);
+
+    let (a, b) = (&iterative.impedance_ohm[0], &dense.impedance_ohm[0]);
+    let difference = a
+        .iter()
+        .zip(b.iter())
+        .map(|(a, b)| (a - b).norm() / b.norm())
+        .fold(0.0_f64, f64::max);
+    assert!(difference < 1e-4, "paths differ by {difference:e}");
+    assert_ne!(a, b, "the iterative path is not the dense one bit for bit");
+}
+
+/// Coupling truncation is a dense-path feature: `auto` keeps such a deck
+/// dense whatever its size, and asking for the iterative path is an error
+/// rather than a silently different physical approximation.
+#[test]
+fn a_truncating_deck_is_dense_only() {
+    let isolated = read_inputs_from_text(&two_trace_deck(".couples left")).unwrap();
+    assert!(!isolated.coupling.is_all_pairs());
+    assert_eq!(
+        solver_for(&isolated, SolverChoice::Auto).unwrap(),
+        Solver::Dense
+    );
+    let error = solver_for(&isolated, SolverChoice::Iterative).unwrap_err();
+    assert!(error.contains(".couples"), "{error}");
+    assert!(run_reporting_with(&isolated, None, SolverChoice::Iterative)
+        .unwrap_err()
+        .contains(".couples"));
 }

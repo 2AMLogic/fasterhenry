@@ -48,3 +48,7 @@ harness = false
 [[bench]]
 name = "pfft"
 harness = false
+
+[[bench]]
+name = "scaling"
+harness = false
