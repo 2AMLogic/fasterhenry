@@ -6,10 +6,15 @@ one file (each crate ships a copy in its published package).
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-While the version is `0.0.x`, the API and the command-line interface are
-unstable and may change in any release.
+While the version is `0.x`, a minor release (`0.1` → `0.2`) may make
+breaking changes to the API or the command-line interface; patch releases
+(`0.1.0` → `0.1.1`) stay compatible.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-09-25
+
+First release to crates.io.
 
 ### Added
 
@@ -111,7 +116,7 @@ unstable and may change in any release.
   [--spice-freq HZ]` writes a SPICE subcircuit stamping `Z = R + jωL`
   (coupled inductors for L, H sources for R; ngspice-verified to
   reproduce Z to six digits). See `docs/output-formats.md`. The previous
-  plain-text `--zc-mat` experiment is superseded (0.0.x-unstable CLI).
+  plain-text `--zc-mat` experiment is superseded (pre-release CLI).
 - Validation harness (M0's "validated" gate): the 2-turn square spiral
   fixture checked against PyPEEC 5.8.0 (2 % tolerance; `tools/pypeec_reference.py`
   regenerates the reference, CI regenerates it on the Linux legs and
@@ -172,4 +177,5 @@ unstable and may change in any release.
 - `fasterhenry-cli` now takes the library from `[workspace.dependencies]` with
   both a `path` and a `version`, so the CLI crate is publishable.
 
-[Unreleased]: https://github.com/2AMLogic/fasterhenry/commits/main
+[Unreleased]: https://github.com/2AMLogic/fasterhenry/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/2AMLogic/fasterhenry/releases/tag/v0.1.0

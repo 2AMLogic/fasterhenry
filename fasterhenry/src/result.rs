@@ -13,7 +13,7 @@
 //!     [[{ "re": 0.0051, "im": 0.0437 }]]
 //!   ],
 //!   "provenance": {
-//!     "fasterhenry_version": "0.0.1",
+//!     "fasterhenry_version": "0.1.0",
 //!     "counts": { "nodes": 2, "segments": 1, "filaments": 10,
 //!                 "meshes": 10, "internal_meshes": 9, "ports": 1 },
 //!     "timing": { "threads": 8, "inductance_s": 0.0004, "assembly_s": 0.0005,

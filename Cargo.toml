@@ -3,7 +3,7 @@ resolver = "2"
 members = ["fasterhenry", "fasterhenry-cli"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/2AMLogic/fasterhenry"
@@ -14,7 +14,7 @@ rust-version = "1.85"
 # against; `version` is what `cargo publish` writes into the packaged CLI
 # manifest (a path-only dependency is rejected). Cargo cannot inherit this from
 # `workspace.package.version`, so bump the two together.
-fasterhenry = { path = "fasterhenry", version = "0.0.1" }
+fasterhenry = { path = "fasterhenry", version = "0.1.0" }
 nalgebra = { version = "0.34", features = ["serde-serialize"] }
 wide = "0.7"
 rayon = "1"

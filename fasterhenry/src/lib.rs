@@ -29,6 +29,35 @@
 //! same port impedance matrix as [`MeshSystem`], solved by [`mod@gmres`] on
 //! that operator instead of by dense LU. The dense [`MeshSystem`] remains
 //! the default.
+//!
+//! # Example
+//!
+//! A 1 mm copper bar, 100 µm × 20 µm in cross-section, with a port across
+//! its ends, swept from DC to 1 GHz. All quantities are SI.
+//!
+//! ```
+//! use fasterhenry::{solve, Discretization, Geometry, Node, Port, SegmentDef, Subdivision};
+//!
+//! let sigma_cu = 5.8e7; // S/m
+//! let mut geometry = Geometry::new();
+//! let a = geometry.add_node(Node::new(0.0, 0.0, 0.0))?;
+//! let b = geometry.add_node(Node::new(1e-3, 0.0, 0.0))?;
+//! geometry.add_segment(SegmentDef::new(a, b, 100e-6, 20e-6, sigma_cu))?;
+//!
+//! let ports = [Port::new(a, b)];
+//! // A 5 × 3 filament grid across the cross-section resolves skin effect.
+//! let discretization = Discretization::Uniform(Subdivision::new(5, 3));
+//! let result = solve(&geometry, &ports, &discretization, &[0.0, 1e6, 1e9])?;
+//!
+//! // At DC the resistance is l / (σ·A).
+//! let r_dc = result.resistance(0)[(0, 0)];
+//! assert!((r_dc - 1e-3 / (sigma_cu * 100e-6 * 20e-6)).abs() < 1e-9);
+//! // Skin effect raises R at 1 GHz; the partial self-inductance is ~1 nH.
+//! assert!(result.resistance(2)[(0, 0)] > r_dc);
+//! let l_1mhz = result.inductance(1).expect("defined at f > 0")[(0, 0)];
+//! assert!(l_1mhz > 0.5e-9 && l_1mhz < 1.5e-9);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
