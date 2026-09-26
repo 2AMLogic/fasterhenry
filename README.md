@@ -20,9 +20,10 @@ skin-depth-graded subdivision; partial self/mutual inductance kernels;
 ground planes with holes and graded contact regions; coupling truncation;
 mesh assembly with a dense complex solve over a frequency sweep; and a
 matrix-free precorrected-FFT operator with a GMRES solve for large problems.
-Every piece is cross-checked against independent references (PyPEEC, the
-Greenhouse closed forms, and a head-to-head with FastHenry itself) —
-see [`docs/validation.md`](docs/validation.md). The CLI reads FastHenry
+The physics is cross-checked against independent references — PyPEEC and
+the Greenhouse closed forms ([`docs/validation.md`](docs/validation.md)) and
+a head-to-head with FastHenry itself ([`docs/benchmarks.md`](docs/benchmarks.md));
+the precorrected-FFT path is tested against the dense solve. The CLI reads FastHenry
 `.inp` decks and writes JSON, a MAT v4 `Zc.mat`, or a SPICE subcircuit.
 
 ## Method
@@ -78,8 +79,9 @@ one machine, self-authored decks; method, hardware and caveats in
 [`docs/benchmarks.md`](docs/benchmarks.md)):
 fasterhenry's dense path is faster on wall clock at every size up to
 ~20 000 filaments (3× at small sizes, ~1.2× at 20 k, where FastHenry's
-multipole stays 14× ahead per thread — our edge is parallelism today,
-algorithmics pending #24). On shared segment fixtures the two engines
+multipole stays 14× ahead per thread — the dense path's edge is
+parallelism; those measurements predate the precorrected-FFT path, whose
+benchmark against the dense path is #44). On shared segment fixtures the two engines
 agree to **better than 0.1 %** on the extracted impedance — the
 cross-validation behind the "replacement" claim.
 

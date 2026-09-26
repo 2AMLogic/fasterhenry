@@ -24,7 +24,7 @@ none of its code.
   solves the same system matrix-free: restarted GMRES on a precorrected-FFT
   (`PfftOperator`) evaluation of `L·x`, in near-linear time and memory.
 - **Validated** against independent oracles — PyPEEC and the Greenhouse
-  closed forms on a spiral fixture (≤ 0.5 %), plus skin-effect and
+  closed forms on a spiral fixture (inductance within 0.5 %), plus skin-effect and
   ground-plane references; see
   [`docs/validation.md`](https://github.com/2AMLogic/fasterhenry/blob/main/docs/validation.md).
 
