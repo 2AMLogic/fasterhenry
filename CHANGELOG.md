@@ -12,6 +12,39 @@ breaking changes to the API or the command-line interface; patch releases
 
 ## [Unreleased]
 
+### Added
+
+- Deck reader: FastHenry's ground-plane (`G`) statement syntax (issue #69,
+  phase 1 of the 0.2.0 deck-compatibility epic). A plane may now be
+  declared in the documented corner-point form — three corner points,
+  `thick=`, `seg1=`/`seg2=`, `sigma=`, `nhinc=`, with in-plane nodes
+  (`N<name> (x, y, z)`), `hole rect (…)` and `contact rect (…)` clauses on
+  the statement itself — as well as in this project's existing
+  `G<name> x1 y1 z1 x2 y2 z2 t` shorthand with `.hole` / `.contact`. The
+  two grammars are told apart by the shape of the first token after the
+  plane name, never by a deck-wide mode, so one deck may mix them and
+  `.hole`, `.contact`, `.equiv` and endpoint landing behave identically
+  whichever form declared the plane. The corner-point form names the
+  plane's *mid-thickness* surface where the shorthand names its top, and
+  `seg1`/`seg2` become the background cell counts of this engine's own
+  cell-centre PEEC mesh. `.equiv` now joins any number of nodes, and an
+  in-plane node makes its whole joined set land on that plane whichever
+  side of the directive named it first — so wiring a via into a plane does
+  not depend on argument order. Joining in-plane nodes of two *different*
+  planes is rejected rather than silently attaching to one.
+  `nhinc=` is also accepted on the shorthand form.
+  Every remaining documented plane parameter is rejected by name, with the
+  statement's line number and the alternative: `rho` (this engine takes
+  `sigma`), `rh`, `segwid1`/`segwid2`, `relx`/`rely`/`relz`, `file`, and
+  every hole or contact shape other than `rect` (`point`, `circle`,
+  `decay_rect`, `trace`, the `initial_*`/`equiv_*` forms and the
+  user-defined `user1…user7`) — nothing on a `G` statement is silently
+  ignored, and representing those shapes is tracked in #80.
+  `fasterhenry-cli/tests/data/plane_fasthenry.inp` and
+  `plane_extension.inp` are the same self-authored plane problem in the two
+  syntaxes, and a new test requires them to produce the same geometry and
+  the same `Z(ω)`.
+
 ## [0.1.1] - 2026-09-27
 
 ### Added
