@@ -82,7 +82,7 @@ A run that leaves the dense path says so on stderr, so which path produced
 the JSON on stdout is never ambiguous.
 
 `--version` prints the crate version and the source revision stamped at
-build time (`fasterhenry 0.1.0 (git: <git describe>)`, or `(git: unknown)`
+build time (`fasterhenry <version> (git: <git describe>)`, or `(git: unknown)`
 when built outside a repository, e.g. from a crates.io tarball).
 
 The deck reader covers a subset of the public FastHenry `.inp` format:
