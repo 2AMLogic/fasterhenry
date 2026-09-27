@@ -128,6 +128,42 @@ encoding today's number. CI regenerates both PyPEEC references and runs
 the gate in release mode, asserting it printed its `SLOT GATE PASSED`
 marker exactly once (the positive assertion described above).
 
+**Margin is thin — read a failure here as sensitivity before assuming a
+bug** (measured 2026-09-25, recorded against `26fba08`, 2026-09-27).
+The gate only started actually executing in CI with issue #59 / PR #62;
+before that it silently took its "reference absent" skip path. The first
+real measurements leave less room than the bounds suggest:
+
+| check | measured | bound | headroom |
+|---|---|---|---|
+| ΔL vs PyPEEC | 4.97 % | 5.5 % | 0.5 pp (~10 %) |
+| ΔL grid sensitivity (48 × 32 vs 96 × 64) | 5.91 % | 7 % | 1.1 pp (~16 %) |
+| ΔR vs PyPEEC | 2.6 % | 15 % | comfortable |
+
+Source: CI run 36162393794 (`Rust (ubuntu-latest)`, plane-validation step),
+reproduced exactly on a developer workstation (`fh dL 0.173660 nH` to all
+printed digits). These figures are deterministic across machines, so the
+thin margin is *not* run-to-run noise — but it also means the two ΔL
+checks will fail the moment anything shifts the method bias by more than
+half a point: a PyPEEC version bump (pinned to 5.8.0 via `PYPEEC_VERSION`
+in `.github/workflows/ci.yml`), a change to the plane mesh or the port
+model, a different reference voxel size, or a change to the 96 × 64 /
+48 × 32 grids the gate compares.
+
+If the gate fails, **check for that class of change first**. Most of the
+4.97 % is fasterhenry's own discretization error, not disagreement with
+PyPEEC — fasterhenry's ΔL is still converging (0.184 / 0.174 / 0.172 nH)
+while PyPEEC moves only 0.2 % from 5 µm to 2.5 µm voxels — so a finer
+fasterhenry grid moves the number down and a coarser one moves it up,
+independently of whether the physics changed. A failure accompanied by
+one of the changes above is expected sensitivity to be re-baselined
+deliberately (re-measure, then decide whether the bound or the mesh
+moves); a failure with none of them is a real regression. The bounds
+themselves (`grid_relative < 0.07`, `relative < 0.055` in
+`fasterhenry/tests/plane_validation.rs`) are deliberately left as-is:
+loosening them to buy CI stability would weaken the independent-oracle
+accuracy claim the gate exists to defend.
+
 The `--fixture plane` / `--fixture plane-solid` modes of
 `tools/pypeec_reference.py` regenerate the references
 (`--voxel-um 5`, ~10 s each locally).
