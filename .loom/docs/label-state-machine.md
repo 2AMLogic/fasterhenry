@@ -46,7 +46,7 @@ each definition, for the terse version of this same table):
 
 | Label | Question it answers | Does sweep/shepherd skip it? |
 |---|---|---|
-| `loom:blocked` | Waiting on a dependency, but still automatable once that clears | No |
+| `loom:blocked` | Waiting on a dependency, but still automatable once that clears | **Yes**, for a *fresh* work-finder candidate — `loom:blocked` is in [`PARK_LABELS`](https://github.com/rjwalters/loom/blob/main/loom-daemon/src/work_finder/labels.rs), the daemon's own authoritative park set. "Still automatable once that clears" describes what happens *after* the label is removed, not while it is present — see #8925, which found this exact row previously read "No" while the code already skipped it. The unblock sweep (`guide.md`'s `check_and_unblock`/`check_and_unblock_prs`) and `loom-daemon check-stale-blocked` are what re-evaluate it and clear it once its declared blocker resolves (`defaults/docs/park-record.md`) |
 | `loom:operator-only` | Requires human action or ruling *outside* automation entirely (credentials, infra, hardware, an owner-gated decision) | **Yes** — sweep/shepherd skip it, except the narrow capability-matched `loom:operator-mechanical` case (#6893, see "Dispatch path" below) |
 | `loom:needs-capability` | Blocked on a missing tool/agent capability — not an operator-by-right decision, but automation genuinely cannot proceed without the capability existing first (#5817) | **Yes** — sweep/shepherd skip it, identically to `loom:operator-only` today |
 | `loom:operator` | The engine has stopped on this specific artifact and a human must act, but the item stays live in its normal queue so the engine's own release conditions can still fire | **New-builder skip only** — the work finder does not *start* a fresh `--claim-owned` build on it (vibesql#6664); re-evaluation lanes (Champion/role ticks, watchdog re-dispatch, reaper resume, explicit `loom-daemon dispatch <N>`) still reach it |
@@ -246,8 +246,11 @@ gh issue list --state open --label loom:operator-only --json number --jq 'length
 **2. The merge-risk hold digest — [#6877](https://github.com/rjwalters/loom/issues/6877).**
 Champion's Held-PR Census (#6720 / #6851 / #7020) overwrites this issue's body
 every pass with one row per held PR — PR number, the hold's own reason, the
-`mergeable` status, and how long a conflict has been rotting — plus an
-aggregate line. It is **pinned** to the repository so it is reachable from the
+`mergeable` status, how long a conflict has been rotting, and (#8552) the PR's
+**base-staleness**: whether `main` has moved into the files this PR changes
+while it waited, and whether the rebase that implies looks mechanical or
+structural — plus an aggregate line. It is **pinned** to the repository so it
+is reachable from the
 issues page without knowing the number; `champion-pr-merge.md` → "Held-PR
 Census" → "Per-PR Digest" → Step 2 re-pins it on **every** pass, so an
 unpinned digest self-heals rather than silently staying invisible (the pin is
