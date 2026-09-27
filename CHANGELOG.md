@@ -12,6 +12,8 @@ breaking changes to the API or the command-line interface; patch releases
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-27
+
 ### Added
 
 - Tag-triggered release workflow (`.github/workflows/release.yml`):
@@ -223,5 +225,6 @@ First release to crates.io.
 - `fasterhenry-cli` now takes the library from `[workspace.dependencies]` with
   both a `path` and a `version`, so the CLI crate is publishable.
 
-[Unreleased]: https://github.com/2AMLogic/fasterhenry/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/2AMLogic/fasterhenry/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/2AMLogic/fasterhenry/releases/tag/v0.1.1
 [0.1.0]: https://github.com/2AMLogic/fasterhenry/releases/tag/v0.1.0
