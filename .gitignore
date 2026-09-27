@@ -98,3 +98,14 @@ __pycache__/
 tools/pypeec_reference.json
 tools/pypeec_plane_reference.json
 tools/pypeec_plane_solid_reference.json
+
+# Co-install hygiene, mirroring loom's own committed .gitignore: `.squad/` is a
+# FOREIGN tool's runtime state directory (a SQLite database -- `squad.db` plus
+# its `-wal` / `-shm` companions). Loom neither writes nor reads it; it simply
+# materializes in the checkout when that tool runs here. Left unignored it sits
+# untracked and visible to this repo's documented `git add -A` Builder step, so
+# a binary DB holding another tool's session state can be staged into a remote
+# -- and THIS repo is public. Deliberately NOT inherited from loom's
+# EPHEMERAL_PATTERNS (see loom's .gitignore: consumer repos have no reason to
+# inherit a rule for a tool they may not use), so it is declared here instead.
+.squad/
