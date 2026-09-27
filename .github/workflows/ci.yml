@@ -56,7 +56,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # PR branches restore main's cache but never save their own -- every PR
+      # can already restore what main saved, so a PR-branch save buys nothing
+      # but churn (and this repo sits at the 10 GB per-repo cache cap).
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy
@@ -83,10 +88,15 @@ jobs:
           set -euo pipefail
           py="$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
           echo "key=pypeec-venv-${{ matrix.os }}-py$py-pypeec$PYPEEC_VERSION-v1" >> "$GITHUB_OUTPUT"
+      # actions/cache@v4 has no save-if equivalent, so the restore/save split
+      # rust-cache does internally is done explicitly here with two actions:
+      # this step only ever restores (every ref); the save step below is
+      # gated to main. PR branches already restore main's entry, so a PR's
+      # own save buys nothing but churn against the 10 GB per-repo cache cap.
       - name: restore the PyPEEC venv
         id: pypeec-venv-cache
         if: startsWith(matrix.os, 'ubuntu')
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /tmp/pypeec-venv
           key: ${{ steps.pypeec-venv-key.outputs.key }}
@@ -124,6 +134,18 @@ jobs:
           "$venv/bin/python" -c 'import sys, importlib.metadata as md; import pypeec; sys.exit(0 if md.version("pypeec") == sys.argv[1] else 1)' "$PYPEEC_VERSION"
           printf '%s' "$PYPEEC_VERSION" > "$stamp"
           echo "pypeec venv: clean install in ${SECONDS}s (pypeec $PYPEEC_VERSION)"
+      # actions/cache@v4 has no save-if input, so (unlike rust-cache above)
+      # the save is its own explicit step, restricted to main for the same
+      # reason: a PR-branch save buys nothing but churn. `cache-hit != 'true'`
+      # skips the save when the restore step above already hit this exact
+      # key -- actions/cache/save errors on an existing key, where the old
+      # combined actions/cache@v4 step silently no-op'd the same case.
+      - name: save the PyPEEC venv
+        if: startsWith(matrix.os, 'ubuntu') && github.ref == 'refs/heads/main' && steps.pypeec-venv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/pypeec-venv
+          key: ${{ steps.pypeec-venv-key.outputs.key }}
       # The validation oracle regenerates the PyPEEC reference here (nothing
       # generated is committed) and asserts the comparison actually ran.
       # Linux legs only: pypeec wheels are not needed elsewhere.
@@ -254,7 +276,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # See the `rust` job's identical comment: PR branches restore-only.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Nothing here uploads anything: every publish command carries --dry-run,
       # and the job has no registry token. The real publish is an operator step.
       - name: Package contents (allowlist, both crates)
