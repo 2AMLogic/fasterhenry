@@ -1,0 +1,88 @@
+name: Release
+
+# Publishes both crates to crates.io when a `v*` tag is pushed, using
+# crates.io Trusted Publishing: the job exchanges a GitHub OIDC token for a
+# short-lived crates.io token, so no registry secret is stored in the repo.
+#
+# One-time setup (operator, on crates.io): for each of `fasterhenry` and
+# `fasterhenry-cli`, Settings -> Trusted Publishing -> add GitHub
+# repository 2AMLogic/fasterhenry, workflow `release.yml`, environment
+# `release`. A crate must already exist to configure this, so 0.1.0 was
+# published by hand.
+#
+# Release flow: bump `[workspace.package].version` and the `fasterhenry`
+# entry in `[workspace.dependencies]` together, cut the CHANGELOG section,
+# merge, then tag the merge commit `vX.Y.Z` and push the tag.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: cargo publish (fasterhenry, fasterhenry-cli)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Required reviewers / tag rules on this environment gate the publish.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # OIDC token for crates.io Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, for the on-main ancestry check
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tag matches the workspace version
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "fasterhenry") | .version')"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match workspace version ${version}"
+            exit 1
+          fi
+      - name: Tagged commit is on main
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main \
+            || { echo "::error::${GITHUB_REF_NAME} is not on main"; exit 1; }
+      # Idempotent re-runs: skip when this version is already on crates.io
+      # (e.g. v0.1.0, published by hand before this workflow existed).
+      - name: Already published?
+        id: check
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          published=0
+          for crate in fasterhenry fasterhenry-cli; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+              -A 'fasterhenry-release (github.com/2AMLogic/fasterhenry)' \
+              "https://crates.io/api/v1/crates/${crate}/${version}")"
+            if [ "$code" = 200 ]; then
+              echo "::notice::${crate} ${version} is already on crates.io"
+              published=$((published + 1))
+            fi
+          done
+          case "$published" in
+            0) echo "skip=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "skip=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::only one crate is published at ${version}; publish the other by hand"; exit 1 ;;
+          esac
+      - name: Authenticate to crates.io
+        if: steps.check.outputs.skip == 'false'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      # --workspace publishes the library first, waits for it to reach the
+      # index, then publishes the CLI against it.
+      - name: cargo publish --workspace
+        if: steps.check.outputs.skip == 'false'
+        run: cargo publish --workspace
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

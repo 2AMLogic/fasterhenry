@@ -12,6 +12,13 @@ breaking changes to the API or the command-line interface; patch releases
 
 ## [Unreleased]
 
+### Added
+
+- Tag-triggered release workflow (`.github/workflows/release.yml`):
+  pushing `vX.Y.Z` publishes both crates to crates.io via Trusted
+  Publishing (GitHub OIDC, no stored registry token), after checking the
+  tag matches the workspace version and is on `main`.
+
 ## [0.1.0] - 2026-09-25
 
 First release to crates.io.
