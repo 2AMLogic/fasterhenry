@@ -60,9 +60,12 @@
 //! # Scope
 //!
 //! Every pair of filaments is coupled; a [`Coupling`](crate::Coupling)
-//! truncation is a dense-path feature. Which path to use for a given size is
-//! the caller's decision: [`MeshSystem`](crate::MeshSystem) remains the
-//! default.
+//! truncation is a dense-path feature. Which path to use for a given size
+//! stays the caller's decision, with a default for callers that would rather
+//! not choose: [`SolverChoice::Auto`](crate::SolverChoice::Auto) keeps
+//! [`MeshSystem`](crate::MeshSystem) up to
+//! [`DENSE_PATH_MAX_FILAMENTS`](crate::DENSE_PATH_MAX_FILAMENTS) filaments
+//! and selects this path above it (measurements in `docs/benchmarks.md`).
 
 use std::time::Instant;
 

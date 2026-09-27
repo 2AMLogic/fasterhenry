@@ -18,6 +18,45 @@ breaking changes to the API or the command-line interface; patch releases
   pushing `vX.Y.Z` publishes both crates to crates.io via Trusted
   Publishing (GitHub OIDC, no stored registry token), after checking the
   tag matches the workspace version and is on `main`.
+- Dense/iterative size threshold, and the scaling measurement behind it
+  (issue #44, phase 3 of #24). `fasterhenry::DENSE_PATH_MAX_FILAMENTS`
+  (10 000) is the filament count at or below which the new
+  `SolverChoice::Auto` — the default for `fasterhenry_cli::run_reporting`
+  and the CLI's new `--solver auto` — keeps the dense `MeshSystem`;
+  above it it selects the matrix-free `IterativeSystem`.
+  `SolverChoice::Dense` / `SolverChoice::Iterative` (`--solver dense` /
+  `--solver iterative`) force either path at any size, `Solver` names the
+  resolved path, and `Discretization::filament_count` sizes a problem
+  without assembling it so a front end can choose before paying for
+  assembly. A deck that truncates coupling (`.couples`) stays dense at any
+  size; `--solver iterative` on one is an error rather than a silently
+  different approximation, and the CLI reports on stderr whenever a run
+  leaves the dense path. The threshold sits deliberately above the
+  measured ~3 000-filament wall-clock crossover — where the dense path
+  stops being tractable, not where it stops being fastest — because it is
+  exact where the pFFT far field approximates. New criterion bench
+  `fasterhenry/benches/scaling.rs` measures both paths end to end (960 to
+  99 224 filaments, wall time plus model and peak-RSS memory) and
+  `docs/benchmarks.md` records the numbers, hardware and date; a budgeted
+  regression guard for the matrix-free headline joins the dense one in
+  `fasterhenry/tests/perf_smoke.rs`. Determinism of the iterative path is
+  asserted directly: repeated solves are bit-identical and `Z(ω)`,
+  GMRES iteration counts and residuals are unchanged across rayon thread
+  counts.
+
+### Changed
+
+- Above `fasterhenry::DENSE_PATH_MAX_FILAMENTS` (10 000) filaments,
+  `fasterhenry run` and `fasterhenry_cli::run_reporting` now default to
+  the pFFT + GMRES path (`--solver auto`) instead of the dense one (issue
+  #44). Results agree with the dense path within the documented tolerance
+  (better than `1e-4` relative on `Z`), the CLI notes the choice on
+  stderr, `--solver dense` restores the previous behaviour, and decks with
+  `.couples` stay dense. At or below the threshold nothing changes.
+  `fasterhenry_cli::cli::Command::Run` gained a `solver` field, which is
+  source-breaking for code that constructs that variant or matches it
+  without `..`; the `cli` module is the binary's argument definition, not
+  a supported library API.
 
 ## [0.1.0] - 2026-09-25
 
