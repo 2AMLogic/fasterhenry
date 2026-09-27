@@ -2,6 +2,10 @@
 
 Loom rotates Claude OAuth accounts to spread load across weekly limits.
 
+For capacity *recipes* — adding accounts, ordering taps, bounding a metered
+backstop, and verifying which pool a role actually draws on — see
+[`configuring-resources.md`](configuring-resources.md).
+
 **Storage policy:** keep all real credentials outside repositories/worktrees,
 even ignored files. Provision with `tokens bootstrap --shared` or
 `tokens import-from-monitor --shared`; keep sources external and owner-only.
@@ -855,7 +859,11 @@ decisions shape how it is consumed:
   avoid. Instead, `monitor.rs` writes `.ranking.classes.json` beside
   `.ranking` (`tokens_pool::monitor_classes`, its own `schema` field), read
   only by the observability path — `.ranking`'s four-field shape and every
-  existing reader are untouched.
+  existing reader are untouched. The per-account weekly (7-day) utilization
+  follows the same rule (#9005): every `tokens check --ranking` run writes
+  `.ranking.weekly.json` (`tokens_pool::ranking_weekly`), read only by the
+  telemetry collector for `loom.tokens.usage_fraction_weekly`, and ignored
+  once `.ranking` is rewritten after it.
 - **Coverage stays honest.** Only the class actually in use appears in
   `models` (today: `fable` only). An absent class reads as "no data", never
   coerced to a fabricated `0.0` — `MonitorAccount::class_utilization` is a map,
@@ -1246,10 +1254,25 @@ dispatch for that pool when `total > 0 && usable == 0`
 - A hold outranks #5030's half-open recovery probe: a probe dispatched into a
   pool with zero spawnable accounts tests nothing and costs exactly the label
   flip and lease comment this exists to prevent.
-- **Not broadcast to peers.** Each host resolves its *own* pool (repo-local
-  shadow if it holds `.token` files, else shared — #3938/#7527), so one host's
-  exhaustion says nothing about a peer's; broadcasting it would suppress a peer
-  whose pool is healthy.
+- **Broadcast to peers, keyed by account set (#8001).** The arm/clear *edge* is
+  advertised over the peer-claim room (`ClaimKind::PoolHoldArmed` /
+  `PoolHoldCleared`), so a peer does not have to rediscover a dead pool the
+  expensive way — one doomed dispatch, one label flip and one permanent lease
+  comment at a time. The original "do not broadcast" caution is preserved as the
+  **key**, not as abstinence: each host resolves its *own* pool (repo-local
+  shadow if it holds `.token` files, else shared — #3938/#7527), so the ad is
+  keyed by `pool_account_fingerprint` — a hash of the pool's sorted account
+  names — never by the pool directory. A path key is wrong in both directions
+  (two hosts sharing accounts resolve different absolute paths; two hosts with
+  genuinely different repo-local shadow pools resolve the *same* relative path),
+  and the second failure is exactly the "suppress a peer whose pool is healthy"
+  hazard. Exhaustion is a property of the **accounts** — a `.bad_tokens` mark or
+  a `.ranking` hard exclusion records an upstream rate-limit state every host
+  holding that credential shares — so an account-set key matches precisely when
+  suppression is correct. Fail-open throughout: a dropped ad, a peer without
+  safehouse, or a host that has not received the ad yet degrades byte-for-byte
+  to the local-only pre-flight, which still stops that host on its own next
+  tick. See [`safehouse.md` → "Fleet-wide token-pool exhaustion hold"](safehouse.md).
 - `total == 0` (no pool provisioned at all) is a *different* condition with a
   different remedy (`loom-daemon tokens bootstrap`) and its own detection
   (#4642). It never arms this hold.
