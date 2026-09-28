@@ -98,7 +98,8 @@ breaking changes to the API or the command-line interface; patch releases
   other hole and contact shape keeps its line-numbered rejection, now
   tracked one issue per model change it needs: `hole point`/`hole circle`
   (has since been implemented — see #98's own entry below), #99
-  (`hole user1…user7`), #100 (`contact point`, `line`, `circle`, `trace`)
+  (`hole user1…user7`, since decided as a permanent rejection — see its
+  entry under "Changed"), #100 (`contact point`, `line`, `circle`, `trace`)
   and #101 (`contact equiv_rect`, `connection`, `initial_grid`,
   `initial_mesh_grid`).
 - Library: `fasterhenry::plane::Hole` is now an enum (`Rect`, `Point`,
@@ -115,9 +116,10 @@ breaking changes to the API or the command-line interface; patch releases
   on their own `z`, like every other hole/contact clause. This is a breaking
   change to `fasterhenry::plane::Hole`'s public shape: existing callers
   constructing `Hole { lo, hi }` now write `Hole::Rect { lo, hi }`. The enum
-  is `#[non_exhaustive]` from the start, so a future `hole user1`…`user7`
-  variant (#99, which keeps its line-numbered rejection for now) will not
-  need another breaking release the way this one did.
+  is `#[non_exhaustive]` from the start, so a future shape variant will not
+  need another breaking release the way this one did. (The variant this
+  anticipated for `hole user1`…`user7` is not being added — see #99's entry
+  under "Changed".)
 - Library: `ContactRegion::graded_per_axis`, a contact region whose outward
   decay ratio is chosen per axis — what an anisotropically refined region
   needs, and what `contact decay_rect` derives from the deck (issue #80).
@@ -147,6 +149,32 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader / library (decision, no new API): `hole user1 (…)` …
+  `hole user7 (…)` are rejected **permanently**, and no predicate or
+  callback variant is added to `fasterhenry::plane::Hole` (issue #99,
+  follow-up to #80). A user-defined hole is a generator compiled into the
+  tool itself, so the deck carries a number and a value list whose meaning
+  is stated nowhere in it — unlike the shapes #100/#101 track, it is not a
+  shape awaiting a plane-model change but one no reader can recover, so the
+  rejection is final and the line-numbered error now says so instead of
+  pointing at a tracking issue that could never close. The error names both
+  alternatives: the declarative `hole rect`/`point`/`circle` clauses, and —
+  for a shape none of those describe — building the plane through the
+  library. The library escape hatch needs no new API, because
+  `GroundPlane::mesh` does not depend on `GroundPlane::holes`: mesh the
+  plane, apply any rule to the cell centres it reports, and cut each
+  selected cell with a `Hole::Point` at its own centre (a centre lies
+  strictly inside its own cell, so each point removes exactly that cell —
+  the composition is exact, and holds on a graded mesh). That is now a
+  doctest on `Hole` and two unit tests in `fasterhenry/src/plane.rs`. A
+  `Hole::Predicate` variant was considered and declined: the form that could
+  carry a user hole's parameters (a boxed `Fn`) would cost `Hole` its `Copy`
+  and `PartialEq` derives for a capability the composition above already
+  provides exactly, and it would be public API with no caller. `Hole` stays
+  `#[non_exhaustive]`, so a measured need — the composition is `O(cells ×
+  holes)` — can still add it later. Reasoning recorded in
+  `docs/fasthenry-compat.md` § "Decision: `hole user1`…`user7` are rejected
+  permanently".
 - Deck reader: `rho=` is no longer rejected with a "use sigma = 1/rho" hint
   on `.default`, `E` and extension-form `G` lines.
 - No behavior change to existing valid decks from the #72 audit: the

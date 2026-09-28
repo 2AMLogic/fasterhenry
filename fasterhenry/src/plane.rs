@@ -99,10 +99,61 @@ use crate::geometry::{Geometry, GeometryError, Node, NodeId, SegmentDef};
 /// or need an undocumented guess (see [`GroundPlane::build_into`], which
 /// applies every hole in [`GroundPlane::holes`] cell by cell).
 ///
-/// `#[non_exhaustive]`: the deck reader documents several more hole shapes
-/// this type does not represent yet (`hole user1`…`user7`, issue #99), so a
-/// future variant should not be a breaking change the way this enum's own
-/// introduction was (issue #98 widened this from a rectangle-only struct).
+/// `#[non_exhaustive]`: this is a list of *shapes*, and the list is not
+/// claimed to be closed, so adding one should not be a breaking change the
+/// way this enum's own introduction was (issue #98 widened this from a
+/// rectangle-only struct).
+///
+/// # Arbitrary removal rules
+///
+/// There is deliberately **no** predicate or callback variant here (issue
+/// #99; the decision and its reasoning are recorded in
+/// `docs/fasthenry-compat.md` § *`hole user1`…`user7`*). A hole whose rule
+/// is "whatever this program decides, cell by cell" needs no new variant,
+/// because [`GroundPlane::mesh`] does not depend on
+/// [`GroundPlane::holes`]: mesh the plane first, apply your own rule to the
+/// cell centres the mesh reports, and cut each selected cell with a
+/// [`Hole::Point`] at its own centre. A centre lies strictly inside its own
+/// cell, so each such point removes exactly that one cell and no other —
+/// the composition is exact, not an approximation.
+///
+/// ```
+/// use fasterhenry::geometry::Geometry;
+/// use fasterhenry::plane::{GroundPlane, Hole};
+///
+/// let mut plane = GroundPlane {
+///     lo: [0.0, 0.0],
+///     hi: [10e-3, 6e-3],
+///     z_top: 0.0,
+///     thickness: 35e-6,
+///     nx: 5,
+///     ny: 3,
+///     sigma: 5.8e7,
+///     ..GroundPlane::default()
+/// };
+///
+/// // Any rule at all over a cell centre — here a diagonal cut that no
+/// // rectangle, point or circle describes.
+/// let cut = |centre: [f64; 2]| centre[1] > centre[0] / 2.0;
+///
+/// let mesh = plane.mesh()?;
+/// for i in 0..mesh.nx() {
+///     for j in 0..mesh.ny() {
+///         let centre = mesh.centre(i, j);
+///         if cut([centre[0], centre[1]]) {
+///             plane.holes.push(Hole::Point {
+///                 at: [centre[0], centre[1]],
+///             });
+///         }
+///     }
+/// }
+///
+/// let mut geometry = Geometry::new();
+/// let live = plane.build_into(&mut geometry)?;
+/// assert!(live[0][2].is_none()); // centre (1 mm, 5 mm): above the cut
+/// assert!(live[4][0].is_some()); // centre (9 mm, 1 mm): below it
+/// # Ok::<(), fasterhenry::plane::PlaneError>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Hole {
@@ -244,7 +295,9 @@ pub struct GroundPlane {
     pub ny: usize,
     /// Conductivity, S/m.
     pub sigma: f64,
-    /// Rectangular holes (x/y in plane coordinates).
+    /// Holes cut into the mesh (x/y in plane coordinates); see [`Hole`] for
+    /// each shape's removal rule, and for the way an arbitrary per-cell rule
+    /// composes from [`GroundPlane::mesh`] and [`Hole::Point`].
     pub holes: Vec<Hole>,
     /// Locally refined contact regions (x/y in plane coordinates).
     pub contacts: Vec<ContactRegion>,
@@ -582,6 +635,12 @@ fn axis_edges(
 impl GroundPlane {
     /// The plane's cell layout — uniform `nx × ny`, refined around every
     /// [`ContactRegion`].
+    ///
+    /// The layout does **not** depend on [`GroundPlane::holes`]: holes
+    /// remove cells from this mesh, they never move its edges. A caller may
+    /// therefore mesh a plane, decide from the cell centres which cells it
+    /// wants gone, and only then push the holes that remove them — see
+    /// [`Hole`] § *Arbitrary removal rules*.
     ///
     /// # Errors
     ///
@@ -940,6 +999,101 @@ mod tests {
         assert!(centres.iter().flatten().all(Option::is_none));
         assert_eq!(geometry.nodes().len(), 0);
         assert_eq!(geometry.segment_count(), 0);
+    }
+
+    /// The escape hatch issue #99 chose over a predicate variant: because
+    /// [`GroundPlane::mesh`] ignores [`GroundPlane::holes`], an arbitrary
+    /// per-cell rule is exactly expressible as one [`Hole::Point`] per
+    /// selected cell centre.
+    #[test]
+    fn an_arbitrary_rule_composes_from_mesh_and_point_holes() {
+        // Cuts the cells an arbitrary rule selects, and reports which
+        // survived, `[i][j]`.
+        let build = |rule: &dyn Fn(usize, usize) -> bool| {
+            let mut plane = test_plane();
+            let mesh = plane.mesh().unwrap();
+            for i in 0..mesh.nx() {
+                for j in 0..mesh.ny() {
+                    if rule(i, j) {
+                        let centre = mesh.centre(i, j);
+                        plane.holes.push(Hole::Point {
+                            at: [centre[0], centre[1]],
+                        });
+                    }
+                }
+            }
+            let mut geometry = Geometry::new();
+            let live = plane.build_into(&mut geometry).unwrap();
+            (live, geometry.nodes().len())
+        };
+
+        // A checkerboard: no rectangle, point or circle describes it, and
+        // each point removes exactly its own cell — never a neighbour.
+        let checker = |i: usize, j: usize| (i + j) % 2 == 0;
+        let (live, nodes) = build(&checker);
+        for (i, column) in live.iter().enumerate() {
+            for (j, cell) in column.iter().enumerate() {
+                assert_eq!(
+                    cell.is_none(),
+                    checker(i, j),
+                    "cell ({i}, {j}) follows the rule"
+                );
+            }
+        }
+        assert_eq!(nodes, 7); // 15 cells, 8 on the cut colour
+
+        // An always-true rule removes every cell; an always-false one
+        // removes none and leaves the unholed mesh untouched.
+        let (live, nodes) = build(&|_, _| true);
+        assert!(live.iter().flatten().all(Option::is_none));
+        assert_eq!(nodes, 0);
+        let (live, nodes) = build(&|_, _| false);
+        assert!(live.iter().flatten().all(Option::is_some));
+        assert_eq!(nodes, 15);
+    }
+
+    /// The same composition on a *graded* plane: the rule is applied to the
+    /// mesh the plane will actually be built with, so a contact region's
+    /// refinement does not change which cells the rule removes.
+    #[test]
+    fn the_arbitrary_rule_composition_holds_on_a_graded_mesh() {
+        let mut plane = test_plane();
+        plane
+            .contacts
+            .push(ContactRegion::centred([5e-3, 3e-3], 1e-3, 2, 2.0));
+        let mesh = plane.mesh().unwrap();
+        let (nx, ny) = (mesh.nx(), mesh.ny());
+        assert!(nx > 5 && ny > 3, "the contact region refined the mesh");
+
+        // Everything left of the plane's midline, however the mesh grades.
+        let cut = |centre: [f64; 2]| centre[0] < 5e-3;
+        let mut expected = 0;
+        for i in 0..nx {
+            for j in 0..ny {
+                let centre = mesh.centre(i, j);
+                if cut([centre[0], centre[1]]) {
+                    plane.holes.push(Hole::Point {
+                        at: [centre[0], centre[1]],
+                    });
+                    expected += 1;
+                }
+            }
+        }
+        assert!(expected > 0 && expected < nx * ny, "a genuine partition");
+
+        let mut geometry = Geometry::new();
+        let live = plane.build_into(&mut geometry).unwrap();
+        for (i, column) in live.iter().enumerate() {
+            for (j, cell) in column.iter().enumerate() {
+                let centre = mesh.centre(i, j);
+                assert_eq!(
+                    cell.is_none(),
+                    cut([centre[0], centre[1]]),
+                    "cell ({i}, {j}) follows the rule"
+                );
+            }
+        }
+        assert_eq!(geometry.nodes().len(), nx * ny - expected);
     }
 
     #[test]
