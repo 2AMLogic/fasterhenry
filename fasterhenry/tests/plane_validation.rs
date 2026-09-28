@@ -222,7 +222,7 @@ fn pypeec_plane_reference() -> Option<serde_json::Value> {
 fn slotted_plane(nx: usize, ny: usize, slotted: bool) -> (Geometry, Vec<Port>, Discretization) {
     let mut geometry = Geometry::new();
     let holes = if slotted {
-        vec![fasterhenry::plane::Hole {
+        vec![fasterhenry::plane::Hole::Rect {
             lo: [0.5e-3, 0.0],
             hi: [0.7e-3, 0.64e-3],
         }]
