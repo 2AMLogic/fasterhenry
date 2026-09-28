@@ -26,7 +26,7 @@ Status key:
 
 | Rule | Status | Notes |
 |---|---|---|
-| First line is a title, always ignored | Supported, differs | This reader has no implicit first line. `.title <text>` is an explicit, additive directive instead — kept deliberately: this parser's whole design rejects anything it cannot place (unknown fields, unknown directives, a missing `.units`) rather than silently reinterpreting a line, and unconditionally discarding line 1 is exactly the silent-reinterpretation failure mode the rest of the reader avoids — a deck that opens with `.units m` instead of a title line would have its unit directive silently swallowed. Reading genuine third-party decks (whose first line is prose, not a directive) needs a real compatibility mode, not a table entry; tracked as follow-up issue #83 rather than fixed here, since it is larger than this issue's scope. |
+| First line is a title, always ignored | Supported, differs (opt-in) | By default this reader has no implicit first line: line 1 is parsed like any other, so prose there is rejected, and `.title <text>` is an explicit, additive directive instead — kept as the default deliberately: this parser's whole design rejects anything it cannot place (unknown fields, unknown directives, a missing `.units`) rather than silently reinterpreting a line, and unconditionally discarding line 1 would silently swallow the unit directive of a deck that opens with `.units m`. For genuine third-party decks, `fasterhenry run --fasthenry-compat` (library: `inp::ParseOptions { fasthenry_compat: true }` with `inp::parse_with_options`, issue #83) reads the file's *physical* first line as an always-ignored title, whatever it holds — prose, nothing, a `*` comment, or directive-looking text — and it becomes the deck's title (none when blank). It is the physical first line rather than the first non-blank one, so a blank line 1 cannot cost the deck its first real directive; error line numbers still count it, and a `+` line straight after it is an error (a title is not continued). A `.title` directive later in the deck is still honored in this mode and replaces the line-1 title: it is additive and unambiguous, and disabling it would turn a line this reader otherwise accepts into an error for no safety gain. |
 | `*` starts a comment line | Supported | `inp.rs` drops any line whose trimmed text starts with `*` before it reaches directive parsing. |
 | `+` starts a continuation line | Supported | The rest of a `+` line's tokens append to the previous line; a deck that opens with a `+` line is an error (there is no previous line to continue). |
 | Blank lines | Supported | Dropped like comments, anywhere in the file, including trailing lines after `.end`. |
@@ -129,5 +129,5 @@ as a result of this table beyond what is listed below.
 ## Follow-ups filed
 
 - Issue #83: reading genuine third-party decks whose first line is prose
-  (not `.title`), as a real compatibility mode rather than a documented
-  difference — see "Deck framing" above.
+  (not `.title`) — resolved by the opt-in `--fasthenry-compat` mode; see
+  "Deck framing" above.

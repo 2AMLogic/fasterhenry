@@ -3,7 +3,8 @@
 //! document (`tests/data/spiral.json`) must produce identical sweeps.
 
 use fasterhenry::{Solver, SolverChoice, DENSE_PATH_MAX_FILAMENTS};
-use fasterhenry_cli::{read_inputs, run, run_reporting_with, solver_for};
+use fasterhenry_cli::inp::ParseOptions;
+use fasterhenry_cli::{read_inputs, read_inputs_with, run, run_reporting_with, solver_for};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
@@ -401,6 +402,34 @@ fn fasthenry_and_extension_plane_syntax_agree() {
         z_extension.without_timing(),
         "the two plane syntaxes must produce identical sweeps"
     );
+}
+
+/// `--fasthenry-compat` end to end through the file reader: the spiral
+/// fixture with a prose first line is rejected by default and, in compat
+/// mode, reads as exactly the fixture without it.
+#[test]
+fn fasthenry_compat_reads_prose_first_line_through_read_inputs_with() {
+    let original = std::fs::read_to_string(fixture("spiral.inp")).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "fasterhenry-compat-{}-spiral.inp",
+        std::process::id()
+    ));
+    std::fs::write(&path, format!("Two-turn spiral, prose title\n{original}")).unwrap();
+
+    let default = read_inputs(&path);
+    let compat = read_inputs_with(
+        &path,
+        ParseOptions {
+            fasthenry_compat: true,
+        },
+    );
+    std::fs::remove_file(&path).ok();
+
+    let error = default.expect_err("prose line 1 is rejected by default");
+    assert!(error.contains("line 1"), "{error}");
+    let compat = compat.expect("compat mode skips the prose title");
+    let plain = read_inputs(&fixture("spiral.inp")).unwrap();
+    assert_eq!(compat, plain);
 }
 
 /// Parse helper for inline deck text (the file-based one needs a path).

@@ -37,7 +37,8 @@
 //!
 //! Where this reader knowingly departs from the public format description —
 //! `.title` as an explicit directive rather than an always-ignored first
-//! line, `.units` being mandatory, `.end` rejecting trailing content — the
+//! line (unless [`ParseOptions::fasthenry_compat`] is set; see
+//! [`parse_with_options`]), `.units` being mandatory, `.end` rejecting trailing content — the
 //! reasoning is recorded field by field in
 //! [`docs/fasthenry-compat.md`](https://github.com/2AMLogic/fasterhenry/blob/main/docs/fasthenry-compat.md),
 //! alongside every directive this reader does and does not accept.
@@ -203,7 +204,8 @@ use fasterhenry::solve::{AxisGrading, Discretization, Subdivision};
 /// A parsed `.inp` deck: everything [`fasterhenry::solve::solve`] needs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Deck {
-    /// The deck's `.title` directive, if any.
+    /// The deck's title, if any: its last `.title` directive, else (in
+    /// [`ParseOptions::fasthenry_compat`] mode) its non-blank first line.
     pub title: Option<String>,
     /// Nodes and segments, positions in metres.
     pub geometry: Geometry,
@@ -1074,13 +1076,64 @@ impl Names {
     }
 }
 
-/// Parses a whole deck. See the [module documentation](self) for the subset.
+/// How [`parse_with_options`] reads a deck. The [`Default`] is this
+/// reader's own, safety-first framing; see [`ParseOptions::fasthenry_compat`]
+/// for the opt-in alternative.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParseOptions {
+    /// Read the deck's first physical line as an always-ignored title, as
+    /// the public FastHenry format describes, instead of parsing it.
+    ///
+    /// Off (the default), there is no implicit first line: line 1 is parsed
+    /// like every other line, so prose there is rejected as an unrecognized
+    /// line, and `.title <text>` is the only way to set [`Deck::title`].
+    ///
+    /// On, line 1 of the file — whatever it holds, including nothing, a `*`
+    /// comment, or something that looks like a directive — is taken before
+    /// comment/blank/continuation folding and never dispatched; its words,
+    /// single-spaced, become [`Deck::title`] (`None` when blank). It is the *physical*
+    /// first line, not the first non-blank one: otherwise a deck with a
+    /// blank line 1 would silently lose its first real directive. Line
+    /// numbers in errors still count the title line, and a `+` line right
+    /// after it is an error (a title is not continued).
+    ///
+    /// `.title` interaction: a `.title` directive later in the deck is still
+    /// honored in compat mode and replaces the line-1 title. It is kept
+    /// rather than disabled because it is additive and unambiguous — a deck
+    /// written for this reader that also carries a prose first line reads
+    /// the same either way — whereas disabling it would turn a line this
+    /// reader otherwise accepts into an error for no gain in safety.
+    pub fasthenry_compat: bool,
+}
+
+/// Parses a whole deck with the default [`ParseOptions`]. See the [module
+/// documentation](self) for the subset.
 pub fn parse(text: &str) -> Result<Deck, ParseError> {
+    parse_with_options(text, ParseOptions::default())
+}
+
+/// Parses a whole deck under `options`. See the [module documentation](self)
+/// for the subset and [`ParseOptions`] for what each option changes.
+pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, ParseError> {
+    let mut raw_lines = text.lines().enumerate();
+    let mut title = None;
+    let mut last_number = 0;
+    if options.fasthenry_compat {
+        // The public format's always-ignored first line: taken before any
+        // folding so that no content on it can reach the dispatch below.
+        if let Some((_, first)) = raw_lines.next() {
+            last_number = 1;
+            let first = first.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !first.is_empty() {
+                title = Some(first);
+            }
+        }
+    }
+
     // Fold `+` continuation lines into their first line, keeping the first
     // line's number for error reporting; `*` comments and blank lines drop.
     let mut lines: Vec<(usize, Vec<&str>)> = Vec::new();
-    let mut last_number = 0;
-    for (index, raw) in text.lines().enumerate() {
+    for (index, raw) in raw_lines {
         let number = index + 1;
         last_number = number;
         let trimmed = raw.trim();
@@ -1103,7 +1156,6 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
         }
     }
 
-    let mut title = None;
     let mut unit: Option<f64> = None;
     let mut defaults = Defaults::default();
     let mut names = Names::default();
@@ -1944,6 +1996,104 @@ e1 n1 n2 w=1e-3 h=1e-4 sigma=5.8e7
             deck.discretization,
             Discretization::Uniform(Subdivision::SINGLE)
         );
+    }
+
+    /// The body of a valid deck, with no title line of any kind.
+    const COMPAT_BODY: &str = "\
+.units m
+n1 x=0 y=0 z=0
+n2 x=1e-3 y=0 z=0
+e1 n1 n2 w=1e-3 h=1e-4 sigma=5.8e7
+.external n1 n2
+.freq fmin=1e3 fmax=1e3 ndec=1
+.end
+";
+
+    const COMPAT: ParseOptions = ParseOptions {
+        fasthenry_compat: true,
+    };
+
+    fn parse_compat(text: &str) -> Result<Deck, ParseError> {
+        parse_with_options(text, COMPAT)
+    }
+
+    #[test]
+    fn default_mode_rejects_prose_first_line() {
+        let error = parse(&format!("A two-node test trace\n{COMPAT_BODY}"))
+            .expect_err("prose on line 1 is not a directive by default");
+        assert_eq!(error.line, 1);
+        assert!(error.message.contains("unrecognized line 'A'"), "{error}");
+        // `parse` is exactly the default options.
+        assert_eq!(
+            parse(COMPAT_BODY).unwrap(),
+            parse_with_options(COMPAT_BODY, ParseOptions::default()).unwrap()
+        );
+        // And line 1 still participates in normal parsing: no implicit title.
+        assert_eq!(parse_ok(COMPAT_BODY).title, None);
+    }
+
+    #[test]
+    fn compat_mode_ignores_prose_first_line() {
+        let deck = parse_compat(&format!("A two-node   test trace\n{COMPAT_BODY}"))
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(deck.title.as_deref(), Some("A two-node test trace"));
+        let plain = parse_ok(COMPAT_BODY);
+        assert_eq!(deck.geometry, plain.geometry);
+        assert_eq!(deck.ports, plain.ports);
+        assert_eq!(deck.frequencies, plain.frequencies);
+    }
+
+    #[test]
+    fn compat_mode_ignores_directive_like_first_line() {
+        // Line 1 is skipped whatever it holds: a `.units` there is swallowed,
+        // so the deck then lacks `.units` — the documented cost of the mode.
+        let error = parse_compat(COMPAT_BODY).expect_err(".units on line 1 is the title");
+        assert!(error.message.contains(".units"), "{error}");
+        // A `*` comment or a `.title` on line 1 is likewise just title text.
+        let deck = parse_compat(&format!("* comment-looking title\n{COMPAT_BODY}")).unwrap();
+        assert_eq!(deck.title.as_deref(), Some("* comment-looking title"));
+        let deck = parse_compat(&format!(".title x\n{COMPAT_BODY}")).unwrap();
+        assert_eq!(deck.title.as_deref(), Some(".title x"));
+    }
+
+    #[test]
+    fn compat_mode_honors_later_title_directive() {
+        let body = COMPAT_BODY.replace(".units m", ".units m\n.title explicit  name");
+        let deck = parse_compat(&format!("prose title\n{body}")).unwrap();
+        assert_eq!(deck.title.as_deref(), Some("explicit name"));
+    }
+
+    #[test]
+    fn compat_mode_blank_first_line_is_an_empty_title() {
+        for first in ["", "   ", "\t "] {
+            let deck = parse_compat(&format!("{first}\n{COMPAT_BODY}"))
+                .unwrap_or_else(|error| panic!("{first:?}: {error}"));
+            assert_eq!(deck.title, None, "{first:?}");
+        }
+    }
+
+    #[test]
+    fn compat_mode_keeps_physical_line_numbers() {
+        let body = COMPAT_BODY.replace("n2 x=1e-3", "n2 bogus=1");
+        let error = parse_compat(&format!("title\n{body}")).unwrap_err();
+        assert_eq!(error.line, 4, "{error}");
+        // A continuation cannot extend the title line.
+        let error = parse_compat(&format!("title\n+ more\n{COMPAT_BODY}")).unwrap_err();
+        assert_eq!(error.line, 2);
+        assert!(error.message.contains("continuation"), "{error}");
+    }
+
+    #[test]
+    fn compat_mode_title_only_deck_has_no_end() {
+        for text in ["just a title", "just a title\n", "just a title\n\n* note\n"] {
+            let error = parse_compat(text).expect_err("no .end");
+            assert!(
+                error.message.contains("no .end directive"),
+                "{text:?}: {error}"
+            );
+        }
+        let error = parse_compat("").expect_err("empty deck");
+        assert!(error.message.contains("no .end directive"), "{error}");
     }
 
     #[test]

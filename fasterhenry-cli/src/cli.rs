@@ -60,6 +60,13 @@ pub enum Command {
         /// (`.couples`) is dense-only.
         #[arg(long, value_enum, default_value_t = SolverArg::Auto)]
         solver: SolverArg,
+        /// Read a `.inp`/`.fh` deck's first line as an always-ignored title,
+        /// as the public FastHenry format does, for third-party decks whose
+        /// line 1 is prose. Off by default: line 1 is parsed like any other
+        /// and `.title <text>` sets the title. A later `.title` is still
+        /// honored in this mode.
+        #[arg(long)]
+        fasthenry_compat: bool,
     },
 }
 
