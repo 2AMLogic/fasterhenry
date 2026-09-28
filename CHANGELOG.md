@@ -95,6 +95,20 @@ breaking changes to the API or the command-line interface; patch releases
   variant (issue #71). Code that matches `Discretization` exhaustively
   without a `_` arm no longer compiles, so the next release must be a minor
   bump (0.2.0).
+- Library (breaking): `Discretization`, `SolveError`, `MeshError`,
+  `PfftError`, `KernelError`, `PlaneError` and `inductance::Method` are now
+  `#[non_exhaustive]` (issue #87). A `match` on any of them outside this crate
+  now needs a `_` arm. After this change, adding a discretization mode, a
+  failure mode or an evaluation method is no longer a breaking change, which
+  the 0.2.0 deck-compatibility work (#76) is expected to do. Every public
+  error enum is now non-exhaustive, like `SegmentError`, `GeometryError`,
+  `DiscretizeError` and `CouplingError` already were. The attribute is on the
+  enums, not the variants, so downstream code can still construct every
+  variant directly (for example `Discretization::PerSegment(…)`). `Solver`,
+  `SolverChoice`, `GridSpacing` and `inductance::Execution` stay exhaustive
+  on purpose. They are closed choices, and when a new solve path arrives the
+  code that dispatches on it should fail to compile rather than fall through
+  a wildcard.
 
 ## [0.1.1] - 2026-09-27
 

@@ -89,6 +89,7 @@ const CHEAP_POINT_PAIRS: usize = 4096;
 
 /// Why a partial inductance could not be computed.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum KernelError {
     /// Two parallel filaments with differently oriented cross-sections
     /// overlap in such a way that two of the sample lines used to integrate
@@ -125,6 +126,7 @@ impl KernelError {
 
 /// How a partial inductance was evaluated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Method {
     /// The filaments are orthogonal, so `l̂ᵢ·l̂ⱼ = 0` and the result is
     /// exactly zero.

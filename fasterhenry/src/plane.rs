@@ -168,6 +168,7 @@ pub struct GroundPlane {
 
 /// Why a ground plane could not be built.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum PlaneError {
     /// The discretization is degenerate.
     #[error("ground plane needs nx, ny >= 1 (got {nx}, {ny})")]

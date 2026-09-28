@@ -232,6 +232,7 @@ impl Default for PfftParams {
 
 /// Why a [`PfftOperator`] could not be built.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum PfftError {
     /// A near-field pair's exact partial inductance could not be computed.
     #[error(transparent)]
