@@ -30,6 +30,46 @@ jobs:
           fi
           echo "clean"
 
+  licenses:
+    name: Dependency licenses (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # One pin for the whole job: the download URL and the checksum below both
+      # read it, so they cannot drift apart. Bump both together.
+      CARGO_DENY_VERSION: "0.18.2"
+      CARGO_DENY_SHA256: "43c4a79c4b9fd1fcb3dddb305a1b4d8f7ac4a72accd61bb50a0b698789ca894c"
+    steps:
+      - uses: actions/checkout@v4
+      # cargo-deny shells out to `cargo metadata` to walk the graph, so a
+      # toolchain is still required even though this job compiles nothing.
+      - uses: dtolnay/rust-toolchain@stable
+      # Deliberately no Swatinem/rust-cache here, unlike the `rust` and
+      # `package` jobs. This job builds no crates, so the only thing a cache
+      # entry would hold is the registry index -- which cargo-deny re-fetches
+      # cheaply over the sparse protocol anyway. A cache entry per job is not
+      # free: see the `rust` job's comment, this repo sits at the 10 GB
+      # per-repo cache cap, and a save on main would spend some of it here for
+      # no measurable gain.
+      #
+      # The binary is the upstream prebuilt release, pinned by version AND by
+      # checksum: a supply-chain gate that fetched an unverified binary over
+      # the network would be checking everyone's dependencies but its own.
+      - name: install cargo-deny ${{ env.CARGO_DENY_VERSION }}
+        run: |
+          set -euo pipefail
+          tarball="cargo-deny-$CARGO_DENY_VERSION-x86_64-unknown-linux-musl"
+          curl -fsSL --retry 3 -o /tmp/cargo-deny.tar.gz \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/$CARGO_DENY_VERSION/$tarball.tar.gz"
+          echo "$CARGO_DENY_SHA256  /tmp/cargo-deny.tar.gz" | sha256sum --check --strict
+          mkdir -p /tmp/cargo-deny-bin
+          tar -xzf /tmp/cargo-deny.tar.gz -C /tmp/cargo-deny-bin --strip-components=1 "$tarball/cargo-deny"
+          echo /tmp/cargo-deny-bin >> "$GITHUB_PATH"
+      # The gate itself. Same command a contributor runs locally; the
+      # allowlist and the reasoning behind each entry live in deny.toml.
+      - name: cargo deny check licenses
+        run: cargo deny check licenses --show-stats
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -1,0 +1,64 @@
+# cargo-deny configuration — license gate for the dependency tree.
+#
+# fasterhenry and fasterhenry-cli are published under MIT (see LICENSE). The
+# CLI is also distributed as a binary, which links every transitive dependency
+# into the shipped artifact. Both facts mean a dependency's license is our
+# license problem: a copyleft crate anywhere in the graph would impose terms
+# the MIT LICENSE file does not carry.
+#
+# The one-off audits at 0.1.0 and 0.1.1 both found the tree fully permissive.
+# This file makes that a CI gate instead of a thing somebody remembers to
+# re-check, so a dependency bump that pulls in a copyleft or unknown license
+# fails the PR rather than shipping quietly.
+#
+# Run it locally exactly as CI does:
+#
+#     cargo deny check licenses
+#
+# Dev-dependencies are checked too (`graph.exclude-dev` is left at its default
+# of false). They are not linked into anything we publish, but a copyleft
+# dev-dependency is still worth knowing about before it becomes a normal one.
+
+[licenses]
+# Only these SPDX identifiers may satisfy a dependency's license expression.
+# cargo-deny evaluates the real SPDX expression, so `A OR B` passes when either
+# side is allowed and `A AND B` passes only when both are. Every entry below is
+# allowed on its own merits, not merely as one arm of some current dual-license
+# crate: a future dependency carrying only that license is an intentional pass.
+allow = [
+    # Our own license. No additional obligation beyond the notice we already
+    # ship in LICENSE.
+    "MIT",
+    # Permissive, MIT-compatible. Adds a patent grant and a notice/attribution
+    # requirement; satisfied for a binary distribution by shipping the
+    # dependency's license text. Most of the tree is `MIT OR Apache-2.0`.
+    "Apache-2.0",
+    # Permissive, attribution-only, no source-disclosure obligation. Reaches
+    # the tree today only via `Zlib OR Apache-2.0 OR MIT` crates, which would
+    # pass on the Apache-2.0/MIT arm anyway — listed so a Zlib-only crate is a
+    # deliberate pass rather than a surprise failure.
+    "Unlicense",
+    # Public-domain dedication; imposes nothing at all. Reaches the tree today
+    # only via `Unlicense OR MIT`, same reasoning as Zlib above.
+    "Zlib",
+    # Unicode data license (Unicode character tables). Permissive,
+    # attribution-only. Required, not optional: `icu_*`/`zerovec`-style crates
+    # declare `(MIT OR Apache-2.0) AND Unicode-3.0`, an AND expression that
+    # cannot be satisfied without it.
+    "Unicode-3.0",
+]
+
+# A crate with no license expression at all, or one cargo-deny cannot parse,
+# is an error rather than something to wave through. There is no such crate in
+# the tree today; the check exists to keep it that way.
+confidence-threshold = 0.93
+
+# No per-crate exceptions. Anything that needs one is a decision to make in a
+# PR that adds it here with a reason, not something to grant silently.
+exceptions = []
+
+[licenses.private]
+# The workspace crates themselves are MIT and published, so there is nothing
+# to ignore here; a private/unpublished workspace member would still be
+# checked.
+ignore = false

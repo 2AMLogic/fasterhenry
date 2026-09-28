@@ -134,3 +134,14 @@ cd fasterhenry
 ## License
 
 MIT — see `LICENSE`.
+
+Dependencies are restricted to permissive licenses (MIT, Apache-2.0, Zlib,
+Unlicense, Unicode-3.0), so nothing in the tree adds an obligation the MIT
+notice above does not already carry — including for the distributed
+`fasterhenry` binary, which links every transitive dependency. The policy is
+enforced in CI by `cargo deny check licenses`; the allowlist and the reason
+each license is on it are in `deny.toml`. Run it locally the same way:
+
+```bash
+cargo deny check licenses
+```
