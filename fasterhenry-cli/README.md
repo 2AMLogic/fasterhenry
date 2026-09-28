@@ -87,8 +87,10 @@ when built outside a repository, e.g. from a crates.io tarball).
 
 The deck reader covers a subset of the public FastHenry `.inp` format:
 `.units`, `.default`, `N` nodes, `E` segments (with `nwinc`/`nhinc`
-filament counts), `.external` ports, `.freq`, `.equiv`, `G` ground planes
-with holes and contact refinement, `.couples` coupling truncation, and
+filament counts, `rw`/`rh` filament grading ratios toward the surfaces, and
+a `wx`/`wy`/`wz` width direction), `.external` ports, `.freq`, `.equiv`, `G`
+ground planes with holes and contact refinement, `.couples` coupling
+truncation, and
 `.end`. Anything outside it is rejected with a line-numbered error rather
 than guessed at; `src/inp.rs` documents the exact syntax and semantics
 (note that `.units` is mandatory — one of `km`, `m`, `cm`, `mm`, `um`, `in`

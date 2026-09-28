@@ -14,7 +14,7 @@
 //! | Line | Meaning |
 //! |------|---------|
 //! | `.units km\|m\|cm\|mm\|um\|in\|mils` | Length unit for every coordinate and dimension (`mil` also accepted) |
-//! | `.default <field>=<v> …` | Defaults for later lines: `x`, `y`, `z`, `w`, `h`, `nwinc`, `nhinc`, `sigma` or `rho` |
+//! | `.default <field>=<v> …` | Defaults for later lines: `x`, `y`, `z`, `w`, `h`, `nwinc`, `nhinc`, `rw`, `rh`, `wx`, `wy`, `wz`, `sigma` or `rho` |
 //! | `N<name> [x]=<v> [y]=<v> [z]=<v>` | Node; each coordinate falls back to its `.default` |
 //! | `E<name> N<a> N<b> [field]=<v> …` | Segment between two nodes; fields as for `.default` minus `x`/`y`/`z`, plus `group=<name>` |
 //! | `.external N<+> N<-> [name]` | A port: current in at `N<+>`, out at `N<->`, labelled `name` (extension; default `<+>/<->`) |
@@ -118,6 +118,35 @@
 //!   resistivity are per deck unit** — `sigma=5.8e4` under `.units mm` is
 //!   copper (5.8e4 S/mm = 5.8e7 S/m), and so is `rho=1.7241e-5`
 //!   (Ω·mm = 1.7241e-8 Ω·m). `rho=r` is exactly `sigma=1/r`.
+//! * **`nwinc`/`nhinc` and `rw`/`rh` cut the cross-section into
+//!   filaments.** `nwinc` filaments go across the width and `nhinc` across
+//!   the height (default 1 each). `rw` and `rh` are the ratio of adjacent
+//!   filament extents along the width and the height respectively, each
+//!   axis independently: every filament is `rw` (or `rh`) times as wide
+//!   (or high) as its neighbour one step nearer the conductor surface, so
+//!   the thinnest filaments line both surfaces and the fattest fill the
+//!   core — `nwinc=5 rw=2` cuts the width in the proportions 1:2:4:2:1, and
+//!   `nwinc=4 rw=3` in 1:3:3:1. This is the library's graded
+//!   discretization (`fasterhenry::discretize_graded_per_axis`), per
+//!   segment. A ratio must be at least 1 (1 is a uniform axis; a ratio
+//!   below 1, coarsening *toward* the surface, is rejected rather than
+//!   guessed at), and it has no effect on an axis with a single filament.
+//!   **An omitted ratio means a uniform axis** (ratio 1): this reader's
+//!   long-standing behaviour, kept so that a deck without `rw`/`rh` solves
+//!   exactly as before. Set `rw`/`rh` explicitly (on the segment or in
+//!   `.default`) to request a graded grid.
+//! * **`wx`/`wy`/`wz` orient the cross-section.** Together they are a
+//!   vector along the segment's *width* (dimensionless: it is not scaled by
+//!   `.units`, and need be neither normalized nor exactly perpendicular to
+//!   the segment — only its component perpendicular to the centreline
+//!   counts). The height then runs along `length × width`. As soon as one
+//!   component is given (on the segment or in `.default`), the vector is
+//!   explicit and any component given nowhere is 0; each component falls
+//!   back to its own `.default`. A zero vector, or one parallel to the
+//!   segment, fixes no orientation and is an error on the `E` line. Without
+//!   any of the three, the default rule applies: the width lies in the x–y
+//!   plane, perpendicular to the segment (`+x` for a segment along z) —
+//!   see `fasterhenry::Segment::basis`.
 //! * **`.freq fmin fmax ndec`** samples `ndec` points per decade,
 //!   log-spaced: `f(k) = fmin · 10^(k/ndec)` for `k = 0 … n−1`, with
 //!   `n = floor(ndec · log10(fmax/fmin)) + 1`; `fmin` is always the first
@@ -160,15 +189,16 @@
 //!   in the deck, with the leading `G` optional.
 //! * Everything else is rejected with an error carrying the line number.
 //!   Deck-level problems that belong to no single line (missing `.units`, a
-//!   geometry validation failure) report line 0.
+//!   ground-plane assembly failure) report line 0; a segment the geometry
+//!   rejects is reported on its own `E` line.
 
 use std::collections::HashMap;
 
 use fasterhenry::coupling::Coupling;
-use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
+use fasterhenry::geometry::{Geometry, Node, NodeId, Segment, SegmentDef, SegmentError};
 use fasterhenry::mesh::Port;
 use fasterhenry::plane::{ContactRegion, GroundPlane, Hole};
-use fasterhenry::solve::{Discretization, Subdivision};
+use fasterhenry::solve::{AxisGrading, Discretization, Subdivision};
 
 /// A parsed `.inp` deck: everything [`fasterhenry::solve::solve`] needs.
 #[derive(Clone, Debug, PartialEq)]
@@ -180,13 +210,28 @@ pub struct Deck {
     /// Ports from `.external`, in deck order.
     pub ports: Vec<Port>,
     /// Filament subdivisions ([`Discretization::Uniform`] when every segment
-    /// agrees, [`Discretization::PerSegment`] as soon as one differs).
+    /// agrees, [`Discretization::PerSegment`] as soon as one differs, and
+    /// [`Discretization::PerSegmentGraded`] as soon as any segment grades an
+    /// axis with `rw`/`rh`).
     pub discretization: Discretization,
     /// Segment groups from `group=` and the couplings from `.couples`;
     /// [`Coupling::all_pairs`] for a deck that declares neither.
     pub coupling: Coupling,
     /// Frequencies in hertz from `.freq`.
     pub frequencies: Vec<f64>,
+}
+
+/// An `E` line pending assembly: its node slots, cross-section, optional
+/// width direction, and the line it was declared on (for errors).
+#[derive(Clone, Copy, Debug)]
+struct SegmentSpec {
+    a: usize,
+    b: usize,
+    width: f64,
+    height: f64,
+    sigma: f64,
+    width_dir: Option<[f64; 3]>,
+    line: usize,
 }
 
 /// A `G` line pending assembly: the plane, the name `.hole` / `.contact`
@@ -279,7 +324,8 @@ fn one_conductivity(fields: &[&str], line: usize) -> Result<(), ParseError> {
 }
 
 /// Per-line field defaults set by `.default`; lengths are already scaled to
-/// metres when stored, sigma (given directly or as `rho`) to S/m.
+/// metres when stored, sigma (given directly or as `rho`) to S/m. Ratios and
+/// width-direction components are dimensionless.
 #[derive(Clone, Copy, Debug, Default)]
 struct Defaults {
     x: Option<f64>,
@@ -289,7 +335,68 @@ struct Defaults {
     h: Option<f64>,
     nwinc: Option<usize>,
     nhinc: Option<usize>,
+    rw: Option<f64>,
+    rh: Option<f64>,
+    width_dir: [Option<f64>; 3],
     sigma: Option<f64>,
+}
+
+/// The fields `.default` accepts, for error messages.
+const DEFAULT_FIELDS: &str = "x, y, z, w, h, nwinc, nhinc, rw, rh, wx, wy, wz, sigma, rho";
+
+/// The fields an `E` line accepts, for error messages.
+const SEGMENT_FIELDS: &str = "w, h, nwinc, nhinc, rw, rh, wx, wy, wz, sigma, rho, group";
+
+/// Index of a width-direction component key (`wx`, `wy`, `wz`).
+fn width_dir_axis(key: &str) -> Option<usize> {
+    match key {
+        "wx" => Some(0),
+        "wy" => Some(1),
+        "wz" => Some(2),
+        _ => None,
+    }
+}
+
+/// A filament grading ratio (`rw`/`rh`): the ratio of adjacent filament
+/// extents, coarsening from the surface inward, so at least 1.
+fn check_ratio(key: &str, value: f64, line: usize) -> Result<f64, ParseError> {
+    if value <= 0.0 {
+        return Err(err(
+            line,
+            format!("'{key}' must be positive (a ratio of adjacent filament extents), got {value}"),
+        ));
+    }
+    if value < 1.0 {
+        return Err(err(
+            line,
+            format!(
+                "'{key}' must be ≥ 1, got {value}: filaments grow from the surface inward by this ratio (1 is uniform); coarsening toward the surface is not supported"
+            ),
+        ));
+    }
+    Ok(value)
+}
+
+/// The explicit width direction of a segment, if any component is set on the
+/// line or in `.default`; unset components are 0. A zero vector is an error.
+fn resolve_width_dir(
+    components: [Option<f64>; 3],
+    segment: &str,
+    line: usize,
+) -> Result<Option<[f64; 3]>, ParseError> {
+    if components.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let direction = components.map(|component| component.unwrap_or(0.0));
+    if direction.iter().all(|&component| component == 0.0) {
+        return Err(err(
+            line,
+            format!(
+                "segment '{segment}': width direction (wx, wy, wz) = (0, 0, 0) is the zero vector and fixes no orientation"
+            ),
+        ));
+    }
+    Ok(Some(direction))
 }
 
 /// A `<field>=<value>` token, keys lowercased.
@@ -297,7 +404,7 @@ fn parse_field(token: &str, line: usize) -> Result<(String, String), ParseError>
     let (key, value) = token.split_once('=').ok_or_else(|| {
         err(
             line,
-            format!("expected <field>=<value>, got '{token}' (supported: x, y, z, w, h, nwinc, nhinc, sigma, rho)"),
+            format!("expected <field>=<value>, got '{token}' (supported: {DEFAULT_FIELDS})"),
         )
     })?;
     if key.is_empty() || value.is_empty() {
@@ -331,8 +438,8 @@ fn parse_count(text: &str, what: &str, line: usize) -> Result<usize, ParseError>
 
 /// The value side of a `<field>=<value>` pair: a length (scaled), a
 /// conductivity (per deck unit, converted to S/m), a resistivity (per deck
-/// unit, converted to a conductivity in S/m), a count, or a dimensionless
-/// ratio.
+/// unit, converted to a conductivity in S/m), a count, a dimensionless
+/// ratio, or a (dimensionless) width-direction component.
 fn parse_value(key: &str, value: &str, unit: f64, line: usize) -> Result<f64, ParseError> {
     match key {
         "sigma" => Ok(parse_number(value, line)? / unit),
@@ -350,7 +457,8 @@ fn parse_value(key: &str, value: &str, unit: f64, line: usize) -> Result<f64, Pa
             Ok(1.0 / rho / unit)
         }
         "nwinc" | "nhinc" | "nx" | "ny" => Ok(parse_count(value, key, line)? as f64),
-        "ratio" => parse_number(value, line),
+        "ratio" | "wx" | "wy" | "wz" => parse_number(value, line),
+        "rw" | "rh" => check_ratio(key, parse_number(value, line)?, line),
         _ => Ok(parse_number(value, line)? * unit),
     }
 }
@@ -370,14 +478,18 @@ fn set_default(
         "h" => defaults.h = Some(value.abs()),
         "nwinc" => defaults.nwinc = Some(value as usize),
         "nhinc" => defaults.nhinc = Some(value as usize),
+        "rw" => defaults.rw = Some(value),
+        "rh" => defaults.rh = Some(value),
+        "wx" | "wy" | "wz" => {
+            let axis = width_dir_axis(key).expect("matched a width-direction key");
+            defaults.width_dir[axis] = Some(value);
+        }
         // Already converted to S/m by parse_value either way.
         "sigma" | "rho" => defaults.sigma = Some(value),
         other => {
             return Err(err(
                 line,
-                format!(
-                    "unknown field '{other}' (supported: x, y, z, w, h, nwinc, nhinc, sigma, rho)"
-                ),
+                format!("unknown field '{other}' (supported: {DEFAULT_FIELDS})"),
             ));
         }
     }
@@ -996,8 +1108,8 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     let mut defaults = Defaults::default();
     let mut names = Names::default();
     let mut positions: Vec<[f64; 3]> = Vec::new();
-    let mut segment_defs: Vec<(usize, usize, f64, f64, f64)> = Vec::new();
-    let mut subdivisions: Vec<Subdivision> = Vec::new();
+    let mut segment_defs: Vec<SegmentSpec> = Vec::new();
+    let mut subdivisions: Vec<AxisGrading> = Vec::new();
     let mut segment_groups: Vec<String> = Vec::new();
     // `.couples`: the declared cross-group pairs, the line of the first
     // directive (for error reporting), and whether `all` was declared.
@@ -1287,6 +1399,9 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                 let mut h = defaults.h;
                 let mut nwinc = defaults.nwinc;
                 let mut nhinc = defaults.nhinc;
+                let mut rw = defaults.rw;
+                let mut rh = defaults.rh;
+                let mut width_dir = defaults.width_dir;
                 let mut sigma = defaults.sigma;
                 let mut group = String::new();
                 for token in &tokens[3..] {
@@ -1303,6 +1418,13 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         "h" => h = Some(value.abs()),
                         "nwinc" => nwinc = Some(value as usize),
                         "nhinc" => nhinc = Some(value as usize),
+                        "rw" => rw = Some(value),
+                        "rh" => rh = Some(value),
+                        "wx" | "wy" | "wz" => {
+                            let axis = width_dir_axis(&key).expect("matched a width-direction key");
+                            width_dir[axis] = Some(value);
+                        }
+                        // Already converted to S/m by parse_value either way.
                         "sigma" | "rho" => sigma = Some(value),
                         "x" | "y" | "z" => {
                             return Err(err(
@@ -1313,7 +1435,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         other => {
                             return Err(err(
                                 number,
-                                format!("unknown field '{other}' (supported: w, h, nwinc, nhinc, sigma, rho, group)"),
+                                format!("unknown field '{other}' (supported: {SEGMENT_FIELDS})"),
                             ));
                         }
                     }
@@ -1339,8 +1461,44 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         ));
                     }
                 };
-                segment_defs.push((a, b, w, h, sigma));
-                subdivisions.push(Subdivision::new(nwinc.unwrap_or(1), nhinc.unwrap_or(1)));
+                let width_dir = resolve_width_dir(width_dir, head, number)?;
+                if let Some(direction) = width_dir {
+                    // Parallel to the declared centreline: caught here, on
+                    // this line, by the library's own orientation check.
+                    let [pa, pb] = [positions[a], positions[b]];
+                    let probe = Segment::new(
+                        Node::new(pa[0], pa[1], pa[2]),
+                        Node::new(pb[0], pb[1], pb[2]),
+                        w,
+                        h,
+                        sigma,
+                    )
+                    .with_width_dir(direction);
+                    if let Err(SegmentError::InvalidWidthDirection) = probe.basis() {
+                        return Err(err(
+                            number,
+                            format!(
+                                "segment '{head}': width direction (wx, wy, wz) = ({}, {}, {}) is parallel to the segment and fixes no orientation",
+                                direction[0], direction[1], direction[2]
+                            ),
+                        ));
+                    }
+                }
+                segment_defs.push(SegmentSpec {
+                    a,
+                    b,
+                    width: w,
+                    height: h,
+                    sigma,
+                    width_dir,
+                    line: number,
+                });
+                subdivisions.push(AxisGrading::new(
+                    nwinc.unwrap_or(1),
+                    nhinc.unwrap_or(1),
+                    rw.unwrap_or(1.0),
+                    rh.unwrap_or(1.0),
+                ));
                 segment_groups.push(group);
             }
             Some('g') => {
@@ -1573,9 +1731,9 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
         Ok((snap(slot)?, resolve(slot)))
     };
     type End = (Option<usize>, usize);
-    let segment_ends: Vec<(End, End, (f64, f64, f64))> = segment_defs
+    let segment_ends: Vec<(End, End, &SegmentSpec)> = segment_defs
         .iter()
-        .map(|&(a, b, w, h, sigma)| Ok((endpoint(a)?, endpoint(b)?, (w, h, sigma))))
+        .map(|spec| Ok((endpoint(spec.a)?, endpoint(spec.b)?, spec)))
         .collect::<Result<_, ParseError>>()?;
     let port_ends: Vec<(End, End)> = ports
         .iter()
@@ -1619,19 +1777,22 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     let final_id = |endpoint: &(Option<usize>, usize)| -> usize {
         endpoint.0.unwrap_or(live_to_id[endpoint.1])
     };
-    for ((a, b, (w, h, sigma)), _) in segment_ends.iter().zip(0..) {
-        geometry
-            .add_segment(SegmentDef::new(
-                NodeId(final_id(a)),
-                NodeId(final_id(b)),
-                *w,
-                *h,
-                *sigma,
-            ))
-            .map_err(|error| ParseError {
-                line: 0,
-                message: error.to_string(),
-            })?;
+    for (a, b, spec) in &segment_ends {
+        let mut def = SegmentDef::new(
+            NodeId(final_id(a)),
+            NodeId(final_id(b)),
+            spec.width,
+            spec.height,
+            spec.sigma,
+        );
+        if let Some(direction) = spec.width_dir {
+            def = def.with_width_dir(direction);
+        }
+        // A segment the geometry rejects is reported on its own `E` line.
+        geometry.add_segment(def).map_err(|error| ParseError {
+            line: spec.line,
+            message: error.to_string(),
+        })?;
     }
     for (port, (positive, negative)) in ports.iter_mut().zip(&port_ends) {
         port.positive = NodeId(final_id(positive));
@@ -1639,14 +1800,28 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     }
 
     let discretization = {
-        let mut all = plane_subdivisions;
+        let mut all: Vec<AxisGrading> = plane_subdivisions
+            .into_iter()
+            .map(AxisGrading::from)
+            .collect();
         all.extend(subdivisions);
-        let subdivisions = all;
-        let first = subdivisions[0];
-        if subdivisions.iter().all(|&sub| sub == first) {
-            Discretization::Uniform(first)
+        // A ratio only matters on an axis cut into more than one filament.
+        let graded = all.iter().any(|grid| {
+            (grid.nw > 1 && grid.width_ratio != 1.0) || (grid.nh > 1 && grid.height_ratio != 1.0)
+        });
+        if graded {
+            Discretization::PerSegmentGraded(all)
         } else {
-            Discretization::PerSegment(subdivisions)
+            let subdivisions: Vec<Subdivision> = all
+                .iter()
+                .map(|grid| Subdivision::new(grid.nw, grid.nh))
+                .collect();
+            let first = subdivisions[0];
+            if subdivisions.iter().all(|&sub| sub == first) {
+                Discretization::Uniform(first)
+            } else {
+                Discretization::PerSegment(subdivisions)
+            }
         }
     };
 
@@ -2836,6 +3011,198 @@ e1 n1 n2 W=1 H=1 SIGMA=1
         );
         assert_eq!(deck.geometry.segment_count(), 1);
         assert_eq!(deck.ports.len(), 1);
+    }
+
+    /// A go-and-return loop of two long bars (y = 0 and y = 3 mm) joined by a
+    /// square rung, driven at its open end. `{BARS}` is spliced into both
+    /// long-bar `E` lines, so it sets their cross-section and orientation;
+    /// their mutual coupling makes the impedance depend on which way the
+    /// cross-section faces.
+    fn loop_deck(defaults: &str, bars: &str) -> String {
+        format!(
+            "\
+.units mm
+.default z=0 sigma=5.8e4 {defaults}
+n1 x=0 y=0
+n2 x=10 y=0
+n3 x=10 y=3
+n4 x=0 y=3
+e1 n1 n2 {bars}
+e2 n2 n3 w=0.5 h=0.5 wx=1 wy=0 wz=0 nwinc=1 nhinc=1 rw=1 rh=1
+e3 n3 n4 {bars}
+.external n1 n4
+.freq fmin=1e8 fmax=1e8 ndec=1
+.end
+"
+        )
+    }
+
+    /// The loop's `Z` as `(R, X)`.
+    fn loop_impedance(deck: &Deck) -> (f64, f64) {
+        let result = fasterhenry::solve::solve(
+            &deck.geometry,
+            &deck.ports,
+            &deck.discretization,
+            &deck.frequencies,
+        )
+        .unwrap();
+        let z = result.impedance_ohm[0][(0, 0)];
+        (z.re, z.im)
+    }
+
+    fn z_distance(a: (f64, f64), b: (f64, f64)) -> f64 {
+        (a.0 - b.0).hypot(a.1 - b.1) / b.0.hypot(b.1)
+    }
+
+    fn assert_same_z(a: (f64, f64), b: (f64, f64)) {
+        assert!(z_distance(a, b) <= 1e-9, "{a:?} vs {b:?}");
+    }
+
+    /// `wx/wy/wz` rotates the cross-section: a flat 1 mm × 0.1 mm bar turned
+    /// on edge by pointing its width along z is the same conductor as a
+    /// 0.1 mm × 1 mm bar in the default orientation (width in the x–y
+    /// plane), so the two decks give the same `Z` — and a different one
+    /// from the flat bar. The rung's explicit `wx=1` (perpendicular to it,
+    /// along y) is the default orientation spelled out.
+    #[test]
+    fn width_direction_rotates_the_cross_section() {
+        let on_edge = parse_ok(&loop_deck("", "w=1 h=0.1 nwinc=3 nhinc=2 wx=0 wy=0 wz=1"));
+        let tall = parse_ok(&loop_deck("", "w=0.1 h=1 nwinc=2 nhinc=3"));
+        let flat = parse_ok(&loop_deck("", "w=1 h=0.1 nwinc=3 nhinc=2"));
+
+        let segment = on_edge.geometry.segment(0).unwrap();
+        assert_eq!(segment.width_dir, Some([0.0, 0.0, 1.0]));
+        let basis = segment.basis().unwrap();
+        assert!(basis.width.x.abs() + basis.width.y.abs() + (basis.width.z - 1.0).abs() < 1e-15);
+        assert_eq!(tall.geometry.segment(0).unwrap().width_dir, None);
+
+        let z_on_edge = loop_impedance(&on_edge);
+        assert_same_z(z_on_edge, loop_impedance(&tall));
+        let z_flat = loop_impedance(&flat);
+        assert!(
+            z_distance(z_on_edge, z_flat) > 1e-4,
+            "orientation must matter: {z_on_edge:?} vs {z_flat:?}"
+        );
+
+        // The same through `.default`, with only one component given (the
+        // others are 0) — and a line value overriding its default.
+        let via_default = parse_ok(&loop_deck("wz=1", "w=1 h=0.1 nwinc=3 nhinc=2"));
+        assert_eq!(
+            via_default.geometry.segment(0).unwrap().width_dir,
+            Some([0.0, 0.0, 1.0])
+        );
+        assert_same_z(loop_impedance(&via_default), z_on_edge);
+        let overridden = parse_ok(&loop_deck("wz=1", "w=1 h=0.1 nwinc=3 nhinc=2 wy=1 wz=0"));
+        assert_eq!(
+            overridden.geometry.segment(0).unwrap().width_dir,
+            Some([0.0, 1.0, 0.0])
+        );
+        assert_same_z(loop_impedance(&overridden), z_flat);
+    }
+
+    /// `rw`/`rh` produce the graded grid of the library's graded
+    /// discretization, per segment and per axis, on `E` lines and through
+    /// `.default` alike.
+    #[test]
+    fn filament_ratios_grade_the_grid_like_the_library() {
+        let bars = "w=1 h=0.1 nwinc=5 nhinc=4 rw=2 rh=3";
+        let deck = parse_ok(&loop_deck("", bars));
+        let rung = AxisGrading::new(1, 1, 1.0, 1.0);
+        let bar = AxisGrading::new(5, 4, 2.0, 3.0);
+        assert_eq!(
+            deck.discretization,
+            Discretization::PerSegmentGraded(vec![bar, rung, bar])
+        );
+        // The bar's filaments are exactly the library's graded grid called
+        // directly: widths 1:2:4:2:1 across the width, 1:3:3:1 across the
+        // height.
+        let segment = deck.geometry.segment(0).unwrap();
+        let filaments = fasterhenry::discretize_graded_per_axis(&segment, 5, 4, 2.0, 3.0).unwrap();
+        let widths = fasterhenry::filament::graded_extents(1e-3, 5, 2.0).unwrap();
+        let heights = fasterhenry::filament::graded_extents(0.1e-3, 4, 3.0).unwrap();
+        assert!((widths[0] - 1e-3 / 10.0).abs() < 1e-18);
+        assert!((heights[0] - 0.1e-3 / 8.0).abs() < 1e-18);
+        for (index, filament) in filaments.iter().enumerate() {
+            assert!((filament.width() - widths[index % 5]).abs() < 1e-18);
+            assert!((filament.height() - heights[index / 5]).abs() < 1e-18);
+        }
+
+        // Equal ratios solve exactly as the library's shared-ratio
+        // `Discretization::graded`, called directly on the same geometry.
+        let shared = parse_ok(
+            "\
+.units mm
+n1 x=0 y=0 z=0
+n2 x=10 y=0 z=0
+e1 n1 n2 w=1 h=0.1 sigma=5.8e4 nwinc=3 nhinc=3 rw=2 rh=2
+.external n1 n2
+.freq fmin=1e8 fmax=1e8 ndec=1
+.end
+",
+        );
+        let direct = fasterhenry::solve::solve(
+            &shared.geometry,
+            &shared.ports,
+            &Discretization::graded(3, 3, 2.0),
+            &shared.frequencies,
+        )
+        .unwrap()
+        .impedance_ohm[0][(0, 0)];
+        assert_eq!(loop_impedance(&shared), (direct.re, direct.im));
+        let uniform = fasterhenry::solve::solve(
+            &shared.geometry,
+            &shared.ports,
+            &Discretization::uniform(3, 3),
+            &shared.frequencies,
+        )
+        .unwrap()
+        .impedance_ohm[0][(0, 0)];
+        assert_ne!(loop_impedance(&shared), (uniform.re, uniform.im));
+
+        // Through `.default`, with a line value overriding one ratio.
+        let defaulted = parse_ok(&loop_deck("rw=2 rh=3", "w=1 h=0.1 nwinc=5 nhinc=4"));
+        assert_eq!(defaulted.discretization, deck.discretization);
+        let overridden = parse_ok(&loop_deck("rw=2 rh=3", "w=1 h=0.1 nwinc=5 nhinc=4 rh=1"));
+        assert_eq!(
+            overridden.discretization,
+            Discretization::PerSegmentGraded(vec![
+                AxisGrading::new(5, 4, 2.0, 1.0),
+                rung,
+                AxisGrading::new(5, 4, 2.0, 1.0),
+            ])
+        );
+
+        // A ratio on single-filament axes changes nothing, so the deck stays
+        // on the uniform discretization it always had.
+        let inert = parse_ok(&loop_deck("rw=2 rh=2", "w=1 h=0.1"));
+        assert_eq!(
+            inert.discretization,
+            Discretization::Uniform(Subdivision::SINGLE)
+        );
+    }
+
+    #[test]
+    fn invalid_ratios_and_width_directions_carry_their_line() {
+        // (deck defaults, bar fields, expected line, message fragment)
+        for (defaults, bars, line, fragment) in [
+            ("rw=0", "w=1 h=0.1", 2, "'rw' must be positive"),
+            ("", "w=1 h=0.1 rh=-2", 7, "'rh' must be positive"),
+            ("", "w=1 h=0.1 rw=0.5", 7, "'rw' must be ≥ 1"),
+            ("", "w=1 h=0.1 rw=abc", 7, "not a number"),
+            ("", "w=1 h=0.1 wx=0 wy=0 wz=0", 7, "zero vector"),
+            ("wx=0", "w=1 h=0.1", 7, "zero vector"),
+            // Both long bars run along x, so an x width direction is parallel.
+            ("", "w=1 h=0.1 wx=1", 7, "parallel to the segment"),
+            ("wx=-2.5", "w=1 h=0.1", 7, "parallel to the segment"),
+        ] {
+            let error = parse(&loop_deck(defaults, bars)).unwrap_err();
+            assert_eq!(error.line, line, "{defaults} / {bars}: {}", error.message);
+            assert!(
+                error.message.contains(fragment),
+                "{defaults} / {bars}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]
