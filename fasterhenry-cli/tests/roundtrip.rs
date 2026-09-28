@@ -355,6 +355,54 @@ Gp 0 0 0 10 6 0 0.035 nx=5 ny=3
     );
 }
 
+/// The FastHenry corner-point `G` grammar and this crate's own extension
+/// grammar are two spellings of one plane: the self-authored fixture pair
+/// `plane_fasthenry.inp` / `plane_extension.inp` — same mesh, same hole,
+/// same contact region, same two via landings — must produce the same
+/// geometry and the same `Z(ω)`.
+///
+/// The fixtures also cover the two ways a deck reaches a plane from the
+/// FastHenry syntax: one via references an in-plane node directly, the
+/// other joins its own node to one with `.equiv`.
+#[test]
+fn fasthenry_and_extension_plane_syntax_agree() {
+    let fasthenry = read_inputs(&fixture("plane_fasthenry.inp")).expect("FastHenry-form deck");
+    let extension = read_inputs(&fixture("plane_extension.inp")).expect("extension-form deck");
+
+    // Same plane mesh, same snapped landings, same declared nodes: the two
+    // grammars build one geometry, not two similar ones.
+    assert_eq!(fasthenry.geometry, extension.geometry);
+    assert_eq!(fasthenry.ports, extension.ports);
+    assert_eq!(fasthenry.discretization, extension.discretization);
+    assert_eq!(fasthenry.frequencies_hz, extension.frequencies_hz);
+
+    let z_fasthenry = run(&fasthenry, None).expect("FastHenry-form solve");
+    let z_extension = run(&extension, None).expect("extension-form solve");
+    assert_eq!(
+        z_fasthenry.frequencies_hz, z_extension.frequencies_hz,
+        "the two fixtures declare the same sweep"
+    );
+    for (index, (from_fh, from_ext)) in z_fasthenry
+        .impedance_ohm
+        .iter()
+        .zip(&z_extension.impedance_ohm)
+        .enumerate()
+    {
+        let (a, b) = (from_fh[(0, 0)], from_ext[(0, 0)]);
+        let scale = a.norm().max(b.norm()).max(f64::MIN_POSITIVE);
+        assert!(
+            (a - b).norm() / scale < 1e-12,
+            "frequency {index}: Z differs between the two plane syntaxes ({a} vs {b})"
+        );
+    }
+    // Identical inputs through one deterministic solver: bit for bit, too.
+    assert_eq!(
+        z_fasthenry.without_timing(),
+        z_extension.without_timing(),
+        "the two plane syntaxes must produce identical sweeps"
+    );
+}
+
 /// Parse helper for inline deck text (the file-based one needs a path).
 fn read_inputs_from_text(text: &str) -> Result<fasterhenry_cli::Problem, String> {
     fasterhenry_cli::inp::parse(text)

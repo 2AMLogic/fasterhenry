@@ -1,0 +1,18 @@
+* The same problem as `tests/data/plane_fasthenry.inp`, written in this
+* crate's own `G` / `.hole` / `.contact` extension syntax. The extension
+* form names the plane's TOP surface, so its z is the corner-point form's
+* mid-thickness z plus half the thickness (0 + 0.035/2 = 0.0175 mm).
+.units mm
+.default sigma=5.8e4
+Gplane 0 0 0.0175 10 6 0.0175 0.035 nx=5 ny=3
+.hole Gplane 0.5 4.5 1.5 5.5
+.contact Gplane 4 2 6 4
+Ntop1 x=1 y=1 z=0.5
+Nland1 x=1 y=1 z=0
+Ntop2 x=9 y=5 z=0.5
+Nland2 x=9 y=5 z=0
+Evia1 Ntop1 Nland1 w=0.2 h=0.2
+Evia2 Ntop2 Nland2 w=0.2 h=0.2
+.external Ntop1 Ntop2 plane
+.freq fmin=1e6 fmax=1e8 ndec=1
+.end

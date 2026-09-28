@@ -1,0 +1,26 @@
+* Self-authored deck: a copper ground plane in the FastHenry corner-point
+* `G` syntax, driven between two via landings. The plane carries a
+* rectangular hole and a locally refined contact region, declared as part
+* of the plane statement; one via reaches the plane through an in-plane
+* node directly, the other through a `.equiv` join.
+*
+* `tests/data/plane_extension.inp` is the same problem written in this
+* crate's own `G` / `.hole` / `.contact` syntax; `tests/roundtrip.rs`
+* requires the two to produce the same geometry and the same Z(omega).
+.units mm
+.default sigma=5.8e4
+Gplane x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.035 seg1=5 seg2=3 sigma=5.8e4
++ hole rect (0.5, 4.5, 0, 1.5, 5.5, 0)
++ contact rect (4, 2, 0, 6, 4, 0)
++ Nland1 (1, 1, 0)
++ Nland2 (9, 5, 0)
+Ntop1 x=1 y=1 z=0.5
+Ntop2 x=9 y=5 z=0.5
+Nfoot2 x=9 y=5 z=0
+Evia1 Ntop1 Nland1 w=0.2 h=0.2
+Evia2 Ntop2 Nfoot2 w=0.2 h=0.2
+.equiv Nland2 Nfoot2
+.external Ntop1 Ntop2 plane
+.freq fmin=1e6 fmax=1e8 ndec=1
+.end

@@ -88,12 +88,53 @@ when built outside a repository, e.g. from a crates.io tarball).
 The deck reader covers a subset of the public FastHenry `.inp` format:
 `.units`, `.default`, `N` nodes, `E` segments (with `nwinc`/`nhinc`
 filament counts), `.external` ports, `.freq`, `.equiv`, `G` ground planes
-with `.hole` and `.contact` refinement, `.couples` coupling truncation, and
+with holes and contact refinement, `.couples` coupling truncation, and
 `.end`. Anything outside it is rejected with a line-numbered error rather
 than guessed at; `src/inp.rs` documents the exact syntax and semantics
 (note that `.units` is mandatory and conductivity is given as `sigma`, not
 `rho`). The JSON problem document is the library's own (validated) types;
 `src/problem.rs` documents it.
+
+### Ground planes: two `G` grammars
+
+A ground plane may be declared either in FastHenry's corner-point syntax or
+in this crate's own shorthand, and one deck may mix them freely — the two
+are told apart by the shape of the first token after the plane's name, not
+by a deck-wide mode. Both build the same plane, so `.hole`, `.contact`,
+`.equiv` and endpoint landing behave identically whichever form declared
+it.
+
+```text
+* FastHenry corner-point form: three corners, thickness, cells per edge,
+* with in-plane nodes, holes and contacts declared on the statement.
+Gplane x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.035 seg1=5 seg2=3 sigma=5.8e4
++ hole rect (0.5, 4.5, 0, 1.5, 5.5, 0)
++ contact rect (4, 2, 0, 6, 4, 0)
++ Nland1 (1, 1, 0)
+
+* The same plane in this crate's shorthand — which names the plane's TOP
+* surface where the corner-point form names its mid-thickness surface.
+Gplane 0 0 0.0175 10 6 0.0175 0.035 nx=5 ny=3
+.hole Gplane 0.5 4.5 1.5 5.5
+.contact Gplane 4 2 6 4
+```
+
+In-plane nodes (`N<name> (x, y, z)`) are ordinary deck nodes that belong to
+their plane: reference one from a segment or `.external`, or join it to a
+segment's node with `.equiv`, and the connection lands on the nearest cell
+of *that* plane whichever side `.equiv` named first.
+
+`seg1`/`seg2` become the background cell counts of this engine's own
+cell-centre PEEC mesh (the `nx`/`ny` of the shorthand form), so equal
+counts mean equal resolution rather than an identical node set. Every other
+documented plane parameter is either mapped or **rejected by name** with the
+statement's line number — `rho` (use `sigma`), `rh`, `segwid1`/`segwid2`,
+`relx`/`rely`/`relz`, `file`, and every hole or contact shape other than
+`rect`. Nothing on a `G` statement is silently ignored.
+`tests/data/plane_fasthenry.inp` and `tests/data/plane_extension.inp` are
+the same problem in the two syntaxes, and a test requires them to produce
+the same `Z(ω)`.
 
 Results are written as JSON with provenance (version, counts, timing).
 Two further outputs are optional:

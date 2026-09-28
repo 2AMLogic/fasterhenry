@@ -19,10 +19,11 @@
 //! | `E<name> N<a> N<b> [field]=<v> …` | Segment between two nodes; fields as for `.default` minus `x`/`y`/`z`, plus `group=<name>` |
 //! | `.external N<+> N<-> [name]` | A port: current in at `N<+>`, out at `N<->`, labelled `name` (extension; default `<+>/<->`) |
 //! | `.freq fmin=<v> fmax=<v> ndec=<n>` | Frequency sweep in hertz (see below) |
-//! | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=]` | Ground plane: extent, top surface `z`, thickness `t` down, `nx × ny` cells |
+//! | `G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=… thick=… seg1=… seg2=… [sigma=] [nhinc=]` | Ground plane, FastHenry corner-point form (see below) |
+//! | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=]` | Ground plane, extension form: extent, top surface `z`, thickness `t` down, `nx × ny` cells |
 //! | `.hole G<name> x1 y1 x2 y2` | Rectangular hole in that plane's footprint |
 //! | `.contact G<name> x1 y1 x2 y2 [nx=] [ny=] [ratio=]` | Contact region: refine that rectangle to `nx × ny` cells, decaying outward by `ratio` |
-//! | `.equiv N<a> N<b>` | Electrically join two nodes into one |
+//! | `.equiv N<a> N<b> [N<c> …]` | Electrically join two or more nodes into one |
 //! | `.couples all \| <group> <group> …` | Which segment groups couple; default (no line) is all pairs |
 //! | `.end` | End of deck (required) |
 //!
@@ -31,6 +32,68 @@
 //! element names are case-sensitive alphanumeric tokens (`N1`, `Ea3`).
 //! `rho=` (resistivity) is not accepted: this engine takes conductivity —
 //! use `sigma = 1/rho`.
+//!
+//! # Ground planes: two `G` grammars
+//!
+//! A `G` statement may be written either way, and a deck may mix them; the
+//! two are told apart by the shape of the first token after the name (a
+//! bare number starts the extension form, `x1=…` the corner-point form),
+//! never by a deck-wide mode. Both produce the same
+//! [`fasterhenry::plane::GroundPlane`], so `.hole`, `.contact`, `.equiv`
+//! and endpoint landing behave identically whichever form declared the
+//! plane.
+//!
+//! ## FastHenry corner-point form
+//!
+//! ```text
+//! G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=…
+//! +       thick=… seg1=… seg2=… [sigma=…] [nhinc=…]
+//! +       N<name> (x, y, z) …
+//! +       hole rect (x1, y1, z1, x2, y2, z2) …
+//! +       contact rect (x1, y1, z1, x2, y2, z2) …
+//! ```
+//!
+//! * **The three corner points** give one corner and its two neighbours:
+//!   `p1 → p2` is the first edge (cut into `seg1` cells), `p2 → p3` the
+//!   second (`seg2` cells). This engine's plane is an axis-aligned
+//!   rectangle parallel to the xy plane, so `z1 = z2 = z3` is required and
+//!   each edge must run along x or y; a tilted or rotated plane is
+//!   rejected by name rather than silently squared off.
+//! * **`thick=`** is the thickness, and the corner points give the plane's
+//!   **mid-thickness** surface — as a segment's nodes give its axis. The
+//!   extension form instead names the **top** surface, so the same plane is
+//!   `z1 = z_mid + thick/2` there.
+//! * **`seg1`/`seg2`** become the background cell counts of this engine's
+//!   cell-centre mesh (`nx`/`ny`). The mesh itself is this project's own
+//!   PEEC discretization, not FastHenry's panel mesh (see the
+//!   `fasterhenry::plane` module documentation), so equal cell counts mean
+//!   equal resolution, not an identical node set.
+//! * **`sigma=`** is per deck unit exactly as elsewhere, and falls back to
+//!   `.default sigma=`. **`nhinc=`** cuts every bar of the plane into that
+//!   many filaments through the thickness.
+//! * **`N<name> (x, y, z)`** declares an in-plane node. It is an ordinary
+//!   deck node that belongs to this plane: reference it from a segment or
+//!   `.external`, or join it to a segment node with `.equiv`, and the
+//!   connection lands on the nearest live cell-centre node of *that* plane
+//!   — whichever side `.equiv` named first. Joining in-plane nodes of two
+//!   *different* planes is rejected (connect the planes with a segment).
+//! * **`hole rect`** maps onto [`fasterhenry::plane::Hole`] and **`contact
+//!   rect`** onto [`fasterhenry::plane::ContactRegion`] (2 × 2 fine cells
+//!   at ratio 2 — use `.contact` to choose other values). The `z`
+//!   coordinates are redundant for a plane parallel to xy, but are checked
+//!   against the plane's own slab so a rectangle meant for another plane
+//!   cannot land here silently. Every other documented shape (`point`,
+//!   `circle`, `decay_rect`, `trace`, the `initial_*` and `equiv_*` forms,
+//!   the user-defined `user1…user7`) is **rejected by name**: this engine's
+//!   holes and contacts are axis-aligned rectangles, and a shape it cannot
+//!   represent must not be quietly approximated by one. Representing them
+//!   needs a change to the plane model, tracked separately (issue #80).
+//! * The remaining documented plane parameters are rejected by name too,
+//!   each with the reason and the alternative: `rho` (use `sigma`), `rh`
+//!   (plane filaments are uniform), `segwid1`/`segwid2` (bar widths follow
+//!   the cells), `relx`/`rely`/`relz` (name the in-plane nodes instead),
+//!   and `file` (an output option this engine does not have). Nothing on a
+//!   `G` statement is silently ignored.
 //!
 //! # Semantics
 //!
@@ -46,9 +109,13 @@
 //!   point and `fmax` is reached when the decades divide evenly.
 //!   `fmin = fmax` (any `ndec`) is the single-frequency case; `fmin = 0` is
 //!   allowed only there (the DC solve).
-//! * **`.equiv a b`** makes `b` an alias of `a`: every reference — declared
-//!   before or after the directive — resolves to `a`, and `b`'s node does
-//!   not appear in the resulting geometry.
+//! * **`.equiv a b …`** makes every later name an alias of `a`: every
+//!   reference — declared before or after the directive — resolves to `a`,
+//!   and the aliased nodes do not appear in the resulting geometry. One
+//!   exception to "the first name wins": if any node in the joined set is an
+//!   in-plane node, the whole set lands on that plane (see above), because
+//!   joining a via's node to a plane node is what wires a deck into a plane
+//!   and the result must not depend on the argument order.
 //! * **`.couples` truncates, and defaults to truncating nothing.** Without a
 //!   `.couples` line — and with `.couples all` — every pair of conductors is
 //!   coupled, exactly as before. A `.couples g1 g2 …` line switches the deck
@@ -107,12 +174,14 @@ pub struct Deck {
     pub frequencies: Vec<f64>,
 }
 
-/// A `G` line pending assembly: the plane and the name `.hole` /
-/// `.contact` refers to.
+/// A `G` line pending assembly: the plane, the name `.hole` / `.contact`
+/// refers to, and the filament count its bars carry through the thickness.
 #[derive(Clone, Debug)]
 struct PlaneSpec {
     name: String,
     plane: GroundPlane,
+    /// Filaments across each plane bar's thickness (`nhinc=`; 1 by default).
+    nhinc: usize,
 }
 
 /// The declared plane a `.hole` / `.contact` line names; the leading `G` is
@@ -263,6 +332,537 @@ fn set_default(
     Ok(())
 }
 
+/// One item in the body of a FastHenry-form `G` ground-plane statement.
+#[derive(Clone, Debug)]
+enum PlaneItem {
+    /// `<key>=<value>`, the key lowercased.
+    Field(String, String),
+    /// `N<name> (x, y, z)`: an in-plane node declaration.
+    Node(String, Vec<String>),
+    /// `hole <shape> (…)` or `contact <shape> (…)`, both lowercased.
+    Clause {
+        kind: String,
+        shape: String,
+        values: Vec<String>,
+    },
+}
+
+fn skip_space(chars: &[char], at: &mut usize) {
+    while chars.get(*at).is_some_and(|c| c.is_whitespace()) {
+        *at += 1;
+    }
+}
+
+/// A bare word: everything up to whitespace or one of `= ( ) ,`.
+fn read_word(chars: &[char], at: &mut usize) -> String {
+    let start = *at;
+    while chars
+        .get(*at)
+        .is_some_and(|c| !c.is_whitespace() && !matches!(c, '=' | '(' | ')' | ','))
+    {
+        *at += 1;
+    }
+    chars[start..*at].iter().collect()
+}
+
+/// A parenthesised value list, separated by commas and/or whitespace.
+fn read_list(
+    chars: &[char],
+    at: &mut usize,
+    what: &str,
+    line: usize,
+) -> Result<Vec<String>, ParseError> {
+    skip_space(chars, at);
+    if chars.get(*at) != Some(&'(') {
+        return Err(err(
+            line,
+            format!("{what} needs a parenthesised value list, as in '(x, y, z)'"),
+        ));
+    }
+    *at += 1;
+    let mut values = Vec::new();
+    loop {
+        skip_space(chars, at);
+        match chars.get(*at) {
+            None => return Err(err(line, format!("{what} has an unterminated '('"))),
+            Some(&')') => {
+                *at += 1;
+                return Ok(values);
+            }
+            Some(&',') => *at += 1,
+            Some(&other) => {
+                let word = read_word(chars, at);
+                if word.is_empty() {
+                    return Err(err(
+                        line,
+                        format!("{what}: unexpected '{other}' inside (…)"),
+                    ));
+                }
+                values.push(word);
+            }
+        }
+    }
+}
+
+/// Splits the body of a FastHenry-form `G` statement into its items.
+///
+/// Deliberately tolerant of the layouts the documented format allows:
+/// whitespace around `=`, and value lists in parentheses separated by
+/// commas, whitespace, or both. Continuation (`+`) lines have already been
+/// folded into one token list by [`parse`], so the whole statement arrives
+/// here as one string carrying one line number.
+fn scan_plane_items(body: &str, line: usize) -> Result<Vec<PlaneItem>, ParseError> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut at = 0usize;
+    let mut items = Vec::new();
+    loop {
+        skip_space(&chars, &mut at);
+        let Some(&here) = chars.get(at) else {
+            return Ok(items);
+        };
+        let word = read_word(&chars, &mut at);
+        if word.is_empty() {
+            return Err(err(
+                line,
+                format!("unexpected '{here}' in ground-plane statement"),
+            ));
+        }
+        if word.eq_ignore_ascii_case("hole") || word.eq_ignore_ascii_case("contact") {
+            skip_space(&chars, &mut at);
+            let shape = read_word(&chars, &mut at);
+            if shape.is_empty() {
+                return Err(err(
+                    line,
+                    format!(
+                        "'{word}' needs a shape name, as in '{} rect (…)'",
+                        word.to_ascii_lowercase()
+                    ),
+                ));
+            }
+            let what = format!(
+                "'{} {}'",
+                word.to_ascii_lowercase(),
+                shape.to_ascii_lowercase()
+            );
+            let values = read_list(&chars, &mut at, &what, line)?;
+            items.push(PlaneItem::Clause {
+                kind: word.to_ascii_lowercase(),
+                shape: shape.to_ascii_lowercase(),
+                values,
+            });
+            continue;
+        }
+        let mut probe = at;
+        skip_space(&chars, &mut probe);
+        match chars.get(probe) {
+            Some(&'=') => {
+                at = probe + 1;
+                skip_space(&chars, &mut at);
+                let value = read_word(&chars, &mut at);
+                if value.is_empty() {
+                    return Err(err(line, format!("'{word}=' has no value")));
+                }
+                items.push(PlaneItem::Field(word.to_ascii_lowercase(), value));
+            }
+            Some(&'(') => {
+                at = probe;
+                let what = format!("in-plane node '{word}'");
+                let values = read_list(&chars, &mut at, &what, line)?;
+                items.push(PlaneItem::Node(word, values));
+            }
+            _ => {
+                return Err(err(
+                    line,
+                    format!(
+                        "'{word}' is not a ground-plane parameter (expected <field>=<value>, 'N<name> (x, y, z)', 'hole <shape> (…)' or 'contact <shape> (…)')"
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+/// An in-plane node declared inside a `G` statement: name and position (m).
+type PlaneNode = (String, [f64; 3]);
+
+/// The `(x, y, z)` of a clause or node value list.
+fn triple(values: &[String], what: &str, unit: f64, line: usize) -> Result<[f64; 3], ParseError> {
+    if values.len() != 3 {
+        return Err(err(
+            line,
+            format!("{what} takes 3 values (x, y, z), got {}", values.len()),
+        ));
+    }
+    Ok([
+        parse_number(&values[0], line)? * unit,
+        parse_number(&values[1], line)? * unit,
+        parse_number(&values[2], line)? * unit,
+    ])
+}
+
+/// The two opposite corners of a `rect` clause: `(x1, y1, z1, x2, y2, z2)`.
+fn rect_corners(
+    values: &[String],
+    what: &str,
+    unit: f64,
+    line: usize,
+) -> Result<[[f64; 3]; 2], ParseError> {
+    if values.len() != 6 {
+        return Err(err(
+            line,
+            format!(
+                "{what} takes 6 values (x1, y1, z1, x2, y2, z2), got {}",
+                values.len()
+            ),
+        ));
+    }
+    Ok([
+        triple(&values[..3], what, unit, line)?,
+        triple(&values[3..], what, unit, line)?,
+    ])
+}
+
+/// Parses a FastHenry-form `G` ground-plane statement — the corner-point
+/// grammar — into the same [`PlaneSpec`] the extension form produces, plus
+/// its in-plane node declarations. See the [module documentation](self).
+///
+/// Every documented parameter is either mapped onto
+/// [`fasterhenry::plane::GroundPlane`] or rejected by name: nothing on the
+/// statement is silently dropped.
+fn parse_plane_statement(
+    head: &str,
+    body: &str,
+    unit: f64,
+    defaults: &Defaults,
+    line: usize,
+) -> Result<(PlaneSpec, Vec<PlaneNode>), ParseError> {
+    // Corner points, indexed [point][axis]; `None` until the deck sets it.
+    let mut corners: [[Option<f64>; 3]; 3] = [[None; 3]; 3];
+    let mut thickness: Option<f64> = None;
+    let mut segments: [Option<usize>; 2] = [None, None];
+    let mut sigma = defaults.sigma;
+    let mut nhinc = 1usize;
+    let mut nodes: Vec<PlaneNode> = Vec::new();
+    // Hole and contact rectangles, kept raw until the plane's own geometry
+    // is known (their z is checked against the plane's slab).
+    let mut hole_rects: Vec<[[f64; 3]; 2]> = Vec::new();
+    let mut contact_rects: Vec<[[f64; 3]; 2]> = Vec::new();
+
+    for item in scan_plane_items(body, line)? {
+        match item {
+            PlaneItem::Field(key, raw) => {
+                // `x1` … `z3`: one corner coordinate each.
+                if let Some(slot) = corner_slot(&key) {
+                    corners[slot.0][slot.1] = Some(parse_number(&raw, line)? * unit);
+                    continue;
+                }
+                match key.as_str() {
+                    "thick" => thickness = Some(parse_number(&raw, line)?.abs() * unit),
+                    "seg1" => segments[0] = Some(parse_count(&raw, "seg1", line)?),
+                    "seg2" => segments[1] = Some(parse_count(&raw, "seg2", line)?),
+                    "sigma" => sigma = Some(parse_number(&raw, line)? / unit),
+                    "nhinc" => nhinc = parse_count(&raw, "nhinc", line)?,
+                    "rho" => {
+                        return Err(err(
+                            line,
+                            "'rho' (resistivity) is not accepted; this engine takes conductivity: sigma = 1/rho (per deck unit)",
+                        ));
+                    }
+                    "rh" => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': 'rh' (filaments graded through the thickness) is not supported; plane filaments are uniform, so use 'nhinc' alone"
+                            ),
+                        ));
+                    }
+                    "segwid1" | "segwid2" => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': '{key}' (an explicit plane-segment width) is not supported; this engine's plane bars take their width from the cell they span (set seg1/seg2, or refine locally with '.contact')"
+                            ),
+                        ));
+                    }
+                    "relx" | "rely" | "relz" => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': '{key}' (a reference point for the plane's internal node numbering) is not supported; name the in-plane nodes you need with 'N<name> (x, y, z)'"
+                            ),
+                        ));
+                    }
+                    "file" => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': 'file' (dump the plane's discretization) is an output option this engine does not have"
+                            ),
+                        ));
+                    }
+                    "nx" | "ny" => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': the corner-point form counts cells with 'seg1'/'seg2' ('{key}' belongs to the 'G<name> x1 y1 z1 x2 y2 z2 t' extension form)"
+                            ),
+                        ));
+                    }
+                    other => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, nhinc)"
+                            ),
+                        ));
+                    }
+                }
+            }
+            PlaneItem::Node(name, values) => {
+                if !name.starts_with(['n', 'N']) {
+                    return Err(err(
+                        line,
+                        format!(
+                            "'{name} (…)' is not an in-plane node declaration: node names start with 'N'"
+                        ),
+                    ));
+                }
+                let what = format!("in-plane node '{name}'");
+                nodes.push((name, triple(&values, &what, unit, line)?));
+            }
+            PlaneItem::Clause {
+                kind,
+                shape,
+                values,
+            } => {
+                let what = format!("'{kind} {shape}'");
+                match (kind.as_str(), shape.as_str()) {
+                    ("hole", "rect") => {
+                        hole_rects.push(rect_corners(&values, &what, unit, line)?);
+                    }
+                    ("contact", "rect") => {
+                        contact_rects.push(rect_corners(&values, &what, unit, line)?);
+                    }
+                    ("hole", other) => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': 'hole {other}' is not supported; this engine's holes are axis-aligned rectangles, so use 'hole rect (x1, y1, z1, x2, y2, z2)'"
+                            ),
+                        ));
+                    }
+                    (_, other) => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)' (and '.contact' to set its refinement)"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Geometry: three corners of an axis-aligned rectangle parallel to xy.
+    let mut points = [[0.0f64; 3]; 3];
+    for (index, point) in corners.iter().enumerate() {
+        for (axis, value) in point.iter().enumerate() {
+            points[index][axis] = value.ok_or_else(|| {
+                err(
+                    line,
+                    format!(
+                        "ground plane '{head}' is missing '{}{}' (the corner points are x1…z1, x2…z2, x3…z3)",
+                        ['x', 'y', 'z'][axis],
+                        index + 1
+                    ),
+                )
+            })?;
+        }
+    }
+    let edge1 = [points[1][0] - points[0][0], points[1][1] - points[0][1]];
+    let edge2 = [points[2][0] - points[1][0], points[2][1] - points[1][1]];
+    let span: f64 = edge1[0].abs() + edge1[1].abs() + edge2[0].abs() + edge2[1].abs();
+    let tolerance = 1e-9 * span;
+    if (points[1][2] - points[0][2]).abs() > tolerance
+        || (points[2][2] - points[0][2]).abs() > tolerance
+    {
+        return Err(err(
+            line,
+            format!(
+                "ground plane '{head}' is not parallel to the xy plane (z1={}, z2={}, z3={} in metres); tilted planes are not supported",
+                points[0][2], points[1][2], points[2][2]
+            ),
+        ));
+    }
+    let axis_of = |edge: [f64; 2]| -> Option<usize> {
+        match (edge[0].abs() > tolerance, edge[1].abs() > tolerance) {
+            (true, false) => Some(0),
+            (false, true) => Some(1),
+            _ => None,
+        }
+    };
+    let (axis1, axis2) = match (axis_of(edge1), axis_of(edge2)) {
+        (Some(a), Some(b)) if a != b => (a, b),
+        _ => {
+            return Err(err(
+                line,
+                format!(
+                    "ground plane '{head}': the corner points do not form an axis-aligned rectangle (p1→p2 and p2→p3 must each run along x or y, and along different axes); rotated or non-rectangular planes are not supported"
+                ),
+            ));
+        }
+    };
+    let mut cells = [0usize; 2];
+    cells[axis1] = segments[0].ok_or_else(|| {
+        err(
+            line,
+            format!("ground plane '{head}' has no 'seg1' (cells along p1→p2)"),
+        )
+    })?;
+    cells[axis2] = segments[1].ok_or_else(|| {
+        err(
+            line,
+            format!("ground plane '{head}' has no 'seg2' (cells along p2→p3)"),
+        )
+    })?;
+    let thickness = thickness.ok_or_else(|| {
+        err(
+            line,
+            format!("ground plane '{head}' has no 'thick' (its thickness)"),
+        )
+    })?;
+    if thickness <= 0.0 {
+        return Err(err(
+            line,
+            format!("ground plane '{head}' needs a thickness > 0 (got 'thick={thickness}' metres)"),
+        ));
+    }
+    let sigma = sigma.ok_or_else(|| {
+        err(
+            line,
+            format!(
+                "ground plane '{head}' has no conductivity: set sigma= on the statement or in .default"
+            ),
+        )
+    })?;
+    let lo = [
+        points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min),
+        points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min),
+    ];
+    let hi = [
+        points
+            .iter()
+            .map(|p| p[0])
+            .fold(f64::NEG_INFINITY, f64::max),
+        points
+            .iter()
+            .map(|p| p[1])
+            .fold(f64::NEG_INFINITY, f64::max),
+    ];
+    // The corner points give the plane's mid-thickness surface, as a
+    // segment's nodes give its axis; this engine's `GroundPlane` is
+    // specified by its top surface.
+    let mid_z = points[0][2];
+    let z_top = mid_z + thickness / 2.0;
+
+    // A hole or contact z outside the plane's own slab is a deck mistake,
+    // not a hole somewhere else: the rectangles are cut through the full
+    // thickness of a plane that is parallel to xy.
+    let in_slab = |what: &str, corner: [f64; 3]| -> Result<(), ParseError> {
+        if (corner[2] - mid_z).abs() > thickness + 1e-15 {
+            return Err(err(
+                line,
+                format!(
+                    "{what}: z={} is not in ground plane '{head}' (mid-thickness z={mid_z}, thickness {thickness}, metres)",
+                    corner[2]
+                ),
+            ));
+        }
+        Ok(())
+    };
+    let footprint = |what: &str, rect: [[f64; 3]; 2]| -> Result<([f64; 2], [f64; 2]), ParseError> {
+        in_slab(what, rect[0])?;
+        in_slab(what, rect[1])?;
+        let lo = [rect[0][0].min(rect[1][0]), rect[0][1].min(rect[1][1])];
+        let hi = [rect[0][0].max(rect[1][0]), rect[0][1].max(rect[1][1])];
+        if !(hi[0] > lo[0] && hi[1] > lo[1]) {
+            return Err(err(
+                line,
+                format!("{what} is degenerate: its two corners share an x or a y"),
+            ));
+        }
+        Ok((lo, hi))
+    };
+    let mut holes = Vec::with_capacity(hole_rects.len());
+    for rect in hole_rects {
+        let (lo, hi) = footprint("'hole rect'", rect)?;
+        holes.push(Hole { lo, hi });
+    }
+    let mut contacts = Vec::with_capacity(contact_rects.len());
+    for rect in contact_rects {
+        let (lo, hi) = footprint("'contact rect'", rect)?;
+        contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
+    }
+
+    for (name, position) in &nodes {
+        if !(position[0] >= lo[0] - tolerance
+            && position[0] <= hi[0] + tolerance
+            && position[1] >= lo[1] - tolerance
+            && position[1] <= hi[1] + tolerance)
+        {
+            return Err(err(
+                line,
+                format!(
+                    "in-plane node '{name}' at ({}, {}) metres is outside ground plane '{head}'",
+                    position[0], position[1]
+                ),
+            ));
+        }
+        in_slab(&format!("in-plane node '{name}'"), *position)?;
+    }
+
+    Ok((
+        PlaneSpec {
+            name: head.to_string(),
+            plane: GroundPlane {
+                lo,
+                hi,
+                z_top,
+                thickness,
+                nx: cells[0],
+                ny: cells[1],
+                sigma,
+                holes,
+                contacts,
+            },
+            nhinc,
+        },
+        nodes,
+    ))
+}
+
+/// `x1` … `z3` as `(point index, axis)`; `None` for any other key.
+fn corner_slot(key: &str) -> Option<(usize, usize)> {
+    let bytes = key.as_bytes();
+    if bytes.len() != 2 {
+        return None;
+    }
+    let axis = match bytes[0] {
+        b'x' => 0,
+        b'y' => 1,
+        b'z' => 2,
+        _ => return None,
+    };
+    let point = match bytes[1] {
+        b'1' => 0,
+        b'2' => 1,
+        b'3' => 2,
+        _ => return None,
+    };
+    Some((point, axis))
+}
+
 /// Node names to node slots, with `.equiv` aliases resolved at lookup and
 /// aliased-away slots compacted out of the final geometry.
 #[derive(Default)]
@@ -358,6 +958,12 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     let mut ports: Vec<Port> = Vec::new();
     let mut frequencies: Vec<f64> = Vec::new();
     let mut planes: Vec<PlaneSpec> = Vec::new();
+    // In-plane nodes declared inside a FastHenry-form `G` statement: the
+    // node slot, the plane it belongs to, and the line it was declared on.
+    let mut plane_nodes: Vec<(usize, usize, usize)> = Vec::new();
+    // The line each `.equiv` alias was declared on, for the error an
+    // in-plane node joined across two planes has to raise.
+    let mut alias_lines: HashMap<usize, usize> = HashMap::new();
     let mut ended = false;
 
     for &(number, ref tokens) in &lines {
@@ -429,18 +1035,21 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                     frequencies = frequency_sweep(fmin, fmax, ndec, number)?;
                 }
                 "equiv" => {
-                    if tokens.len() != 3 {
-                        return Err(err(number, "expected .equiv N<a> N<b>"));
+                    if tokens.len() < 3 {
+                        return Err(err(number, "expected .equiv N<a> N<b> [N<c> …]"));
                     }
                     let a = names.lookup(tokens[1], number)?;
-                    let b = names.lookup(tokens[2], number)?;
-                    if a == b {
-                        return Err(err(
-                            number,
-                            format!(".equiv of node '{}' with itself", tokens[1]),
-                        ));
+                    for name in &tokens[2..] {
+                        let b = names.lookup(name, number)?;
+                        if a == b {
+                            return Err(err(
+                                number,
+                                format!(".equiv of node '{}' with itself", tokens[1]),
+                            ));
+                        }
+                        names.aliases.insert(b, a);
+                        alias_lines.insert(b, number);
                     }
-                    names.aliases.insert(b, a);
                 }
                 "couples" => {
                     if tokens.len() < 2 {
@@ -691,10 +1300,34 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         "ground plane before .units (lengths need a unit)",
                     ));
                 }
+                // Two grammars, told apart by the shape of the first token
+                // after the name: a bare number starts the extension form,
+                // anything else (`x1=…`) the FastHenry corner-point form.
+                // A deck may mix them freely.
+                if tokens
+                    .get(1)
+                    .is_some_and(|token| token.parse::<f64>().is_err())
+                {
+                    let (spec, plane_nodes_here) = parse_plane_statement(
+                        head,
+                        &tokens[1..].join(" "),
+                        factor,
+                        &defaults,
+                        number,
+                    )?;
+                    let index = planes.len();
+                    for (name, position) in plane_nodes_here {
+                        positions.push(position);
+                        names.define(&name, positions.len() - 1, number)?;
+                        plane_nodes.push((positions.len() - 1, index, number));
+                    }
+                    planes.push(spec);
+                    continue;
+                }
                 if tokens.len() < 8 {
                     return Err(err(
                         number,
-                        "expected G<name> x1 y1 z1 x2 y2 z2 thickness [nx=…] [ny=…]",
+                        "expected G<name> x1 y1 z1 x2 y2 z2 thickness [nx=…] [ny=…] [nhinc=…], or the FastHenry corner-point form G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=… thick=… seg1=… seg2=…",
                     ));
                 }
                 let mut corners = [None; 7];
@@ -708,16 +1341,18 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                 }
                 let mut nx = 1usize;
                 let mut ny = 1usize;
+                let mut nhinc = 1usize;
                 for token in &tokens[8..] {
                     let (key, raw_value) = parse_field(token, number)?;
                     let value = parse_value(&key, &raw_value, factor, number)?;
                     match key.as_str() {
                         "nx" => nx = value as usize,
                         "ny" => ny = value as usize,
+                        "nhinc" => nhinc = value as usize,
                         other => {
                             return Err(err(
                                 number,
-                                format!("unknown G field '{other}' (supported: nx, ny)"),
+                                format!("unknown G field '{other}' (supported: nx, ny, nhinc)"),
                             ));
                         }
                     }
@@ -755,6 +1390,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         holes: Vec::new(),
                         contacts: Vec::new(),
                     },
+                    nhinc,
                 });
             }
             _ => {
@@ -799,7 +1435,9 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     // lands in a plane's footprint snapped to the nearest live cell node.
     let mut geometry = Geometry::new();
     let mut plane_meshes: Vec<(&PlaneSpec, Vec<Vec<Option<NodeId>>>)> = Vec::new();
-    let mut plane_bars = 0usize;
+    // One subdivision per plane bar, in geometry order: every bar of a
+    // plane carries that plane's `nhinc` filaments through the thickness.
+    let mut plane_subdivisions: Vec<Subdivision> = Vec::new();
     for spec in &planes {
         let centres = spec
             .plane
@@ -808,8 +1446,32 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                 line: 0,
                 message: error.to_string(),
             })?;
-        plane_bars = geometry.segment_count();
+        plane_subdivisions.resize(geometry.segment_count(), Subdivision::new(1, spec.nhinc));
         plane_meshes.push((spec, centres));
+    }
+    let plane_bars = geometry.segment_count();
+    // An in-plane node's `.equiv` class attaches to *its* plane, wherever
+    // the class's canonical node happens to sit: joining a via's segment
+    // node to an in-plane node is how a deck wires into a plane, and the
+    // join must not depend on which of the two the directive named first.
+    let mut plane_node_at: HashMap<usize, (usize, [f64; 3])> = HashMap::new();
+    for &(slot, index, line) in &plane_nodes {
+        let live = resolve(slot);
+        match plane_node_at.get(&live) {
+            Some(&(other, _)) if other != index => {
+                return Err(err(
+                    alias_lines.get(&slot).copied().unwrap_or(line),
+                    format!(
+                        "'.equiv' joins in-plane nodes of ground planes '{}' and '{}'; joining two planes to each other is not supported (connect them with a segment)",
+                        planes[other].name, planes[index].name
+                    ),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                plane_node_at.insert(live, (index, positions[slot]));
+            }
+        }
     }
     // Endpoint resolution: follow `.equiv` aliases to the canonical slot,
     // take that slot's position, and if it lands in a plane's footprint,
@@ -818,6 +1480,18 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     // below (a snapped endpoint's declared node is dropped, not orphaned).
     let snap = |slot: usize| -> Result<Option<usize>, ParseError> {
         let live = resolve(slot);
+        if let Some(&(index, position)) = plane_node_at.get(&live) {
+            let (spec, centres) = &plane_meshes[index];
+            return Ok(Some(
+                spec.plane
+                    .attach(centres, position)
+                    .map_err(|error| ParseError {
+                        line: 0,
+                        message: error.to_string(),
+                    })?
+                    .0,
+            ));
+        }
         let position = live_position(live, &positions, &compaction);
         for (spec, centres) in &plane_meshes {
             if spec.plane.contains(position, 0.0) {
@@ -907,7 +1581,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     }
 
     let discretization = {
-        let mut all = vec![Subdivision::SINGLE; plane_bars];
+        let mut all = plane_subdivisions;
         all.extend(subdivisions);
         let subdivisions = all;
         let first = subdivisions[0];
@@ -1337,6 +2011,373 @@ Gp 0 0 0 10 6 0 0.035
         )
         .unwrap_err();
         assert!(error.message.contains("conductivity"));
+    }
+
+    /// A deck around one `G` statement (always on line 3, continuation
+    /// lines included) with a via landing on the plane at (5, 3).
+    fn plane_deck(statement: &str, extra: &str) -> String {
+        format!(
+            "\
+.units mm
+.default sigma=5.8e4
+{statement}
+Nt x=5 y=3 z=0.5
+Nb x=5 y=3 z=0
+Ev Nt Nb w=0.2 h=0.2
+{extra}
+.external Nt Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+        )
+    }
+
+    /// The FastHenry corner-point form builds the same plane as the
+    /// extension form: same mesh, same hole, same contact region, same
+    /// snapped landing — and the mid-thickness/top-surface difference in
+    /// how the two name the plane's z is the only coordinate that moves.
+    #[test]
+    fn fasthenry_plane_statement_equals_the_extension_form() {
+        let fasthenry = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole rect (0.5, 4.5, 0, 1.5, 5.5, 0)
++ contact rect (4, 2, 0, 6, 4, 0)",
+            "",
+        ));
+        let extension = parse_ok(&plane_deck(
+            "Gp 0 0 0.02 10 6 0.02 0.04 nx=5 ny=3",
+            "\
+.hole Gp 0.5 4.5 1.5 5.5
+.contact Gp 4 2 6 4",
+        ));
+        assert_eq!(fasthenry.geometry, extension.geometry);
+        assert_eq!(fasthenry.ports, extension.ports);
+        assert_eq!(fasthenry.discretization, extension.discretization);
+    }
+
+    /// `seg1` counts cells along `p1 → p2` and `seg2` along `p2 → p3`,
+    /// whichever axis each of those edges runs along.
+    #[test]
+    fn seg1_and_seg2_follow_the_edges_not_the_axes() {
+        // p1 → p2 runs along y here, so seg1 is the y count.
+        let rotated_corners = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=0 y2=6 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=3 seg2=5",
+            "",
+        ));
+        let extension = parse_ok(&plane_deck("Gp 0 0 0.02 10 6 0.02 0.04 nx=5 ny=3", ""));
+        assert_eq!(rotated_corners.geometry, extension.geometry);
+    }
+
+    /// An in-plane node wires a segment into the plane whichever side of
+    /// `.equiv` it is named on — the join is a circuit, not a timeline.
+    #[test]
+    fn in_plane_nodes_join_by_equiv_either_way() {
+        let statement = "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ Nland (5, 3, 0)";
+        let direct = parse_ok(&plane_deck(statement, ""));
+        // The via's own foot node, joined to the in-plane node each way
+        // round: both must land on the plane, not at the foot node.
+        let plane_first = parse_ok(&format!(
+            "\
+.units mm
+.default sigma=5.8e4
+{statement}
+Nt x=5 y=3 z=0.5
+Nb x=5 y=3 z=0
+Ev Nt Nb w=0.2 h=0.2
+.equiv Nland Nb
+.external Nt Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+        ));
+        let node_first = parse_ok(&format!(
+            "\
+.units mm
+.default sigma=5.8e4
+{statement}
+Nt x=5 y=3 z=0.5
+Nb x=5 y=3 z=0
+Ev Nt Nb w=0.2 h=0.2
+.equiv Nb Nland
+.external Nt Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+        ));
+        assert_eq!(plane_first.geometry, direct.geometry);
+        assert_eq!(node_first.geometry, direct.geometry);
+        assert_eq!(node_first.ports, direct.ports);
+    }
+
+    /// `.equiv` cannot be used to weld two planes together: the connection
+    /// would silently attach to one of them only.
+    #[test]
+    fn equiv_across_two_planes_is_rejected() {
+        let error = parse(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 Na (5, 3, 0)
+Gq x1=0 y1=10 z1=0 x2=10 y2=10 z2=0 x3=10 y3=16 z3=0
++ thick=0.04 seg1=5 seg2=3 Nb (5, 13, 0)
+Nt x=5 y=3 z=0.5
+Ev Nt Na w=0.2 h=0.2
+.equiv Na Nb
+.external Nt Na
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        )
+        .unwrap_err();
+        assert_eq!(error.line, 9, "{}", error.message);
+        assert!(error.message.contains("joining two planes"), "{error}");
+    }
+
+    /// `nhinc` on a plane cuts every bar of *that* plane through the
+    /// thickness, and nothing else.
+    #[test]
+    fn plane_nhinc_subdivides_only_the_plane_bars() {
+        let deck = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 nhinc=3",
+            "",
+        ));
+        // 5 × 3 cells: 2·15 − 5 − 3 = 22 bars, then the via.
+        let Discretization::PerSegment(subdivisions) = &deck.discretization else {
+            panic!(
+                "a plane with nhinc differs from its segments: {:?}",
+                deck.discretization
+            );
+        };
+        assert_eq!(subdivisions.len(), 22 + 1);
+        assert!(subdivisions[..22]
+            .iter()
+            .all(|sub| *sub == Subdivision::new(1, 3)));
+        assert_eq!(subdivisions[22], Subdivision::SINGLE);
+        // The extension form takes it too.
+        let extension = parse_ok(&plane_deck(
+            "Gp 0 0 0.02 10 6 0.02 0.04 nx=5 ny=3 nhinc=3",
+            "",
+        ));
+        assert_eq!(extension.discretization, deck.discretization);
+    }
+
+    /// The two grammars mix freely inside one deck, and `.hole` /
+    /// `.contact` reach a plane declared either way.
+    #[test]
+    fn both_g_grammars_mix_in_one_deck() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
+Gq 0 10 0.02 10 16 0.02 0.04 nx=5 ny=3
+.hole Gp 4.9 2.9 5.1 3.1
+.contact Gq 4 12 6 14 nx=2 ny=2 ratio=2
+Nt x=5 y=3 z=0.5
+Nb x=5 y=3 z=0
+Nu x=5 y=13 z=0
+Ev Nt Nb w=0.2 h=0.2
+Ew Nt Nu w=0.2 h=0.2
+.external Nb Nu
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        // Gp: 15 cells less the holed one; Gq graded by its contact.
+        assert!(deck.geometry.segment_count() > 22);
+        assert_eq!(deck.ports.len(), 1);
+    }
+
+    /// The statement scanner takes the layouts the documented format
+    /// allows: whitespace around `=`, and value lists separated by commas,
+    /// whitespace, or both.
+    #[test]
+    fn plane_statement_layout_is_flexible() {
+        let spaced = parse_ok(&plane_deck(
+            "\
+Gp x1 = 0 y1 = 0 z1 = 0 x2 = 10 y2 = 0 z2 = 0 x3 = 10 y3 = 6 z3 = 0
++ thick = 0.04 seg1 = 5 seg2 = 3
++ hole rect ( 0.5 4.5 0 1.5 5.5 0 )",
+            "",
+        ));
+        let tight = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole rect (0.5,4.5,0,1.5,5.5,0)",
+            "",
+        ));
+        assert_eq!(spaced.geometry, tight.geometry);
+    }
+
+    /// Every documented plane parameter this engine cannot represent is
+    /// rejected by name, on the statement's own line — never ignored.
+    #[test]
+    fn documented_plane_parameters_are_supported_or_named_in_the_error() {
+        let bad = |extra: &str| -> ParseError {
+            parse(&plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 {extra}"
+                ),
+                "",
+            ))
+            .unwrap_err()
+        };
+        for (extra, expected) in [
+            ("rho=1.7e-8", "sigma = 1/rho"),
+            ("nhinc=3 rh=2", "'rh'"),
+            ("segwid1=0.5", "'segwid1'"),
+            ("segwid2=0.5", "'segwid2'"),
+            ("relx=1", "'relx'"),
+            ("rely=1", "'rely'"),
+            ("relz=1", "'relz'"),
+            ("file=plane.mat", "'file'"),
+            ("nx=5", "seg1"),
+            ("ny=3", "seg1"),
+            ("wibble=1", "unknown ground-plane parameter 'wibble'"),
+            ("hole point (5, 3, 0)", "'hole point' is not supported"),
+            ("hole circle (5, 3, 0, 1)", "'hole circle' is not supported"),
+            ("hole user1 (5, 3, 0)", "'hole user1' is not supported"),
+            (
+                "contact point (5, 3, 0)",
+                "'contact point' is not supported",
+            ),
+            (
+                "contact circle (5, 3, 0, 1)",
+                "'contact circle' is not supported",
+            ),
+            (
+                "contact decay_rect (4, 2, 0, 6, 4, 0, 2, 2)",
+                "'contact decay_rect' is not supported",
+            ),
+            (
+                "contact initial_grid (5, 5)",
+                "'contact initial_grid' is not supported",
+            ),
+            (
+                "contact trace (1, 1, 0, 9, 5, 0, 0.2)",
+                "'contact trace' is not supported",
+            ),
+            (
+                "contact equiv_rect (4, 2, 0, 6, 4, 0)",
+                "'contact equiv_rect' is not supported",
+            ),
+        ] {
+            let error = bad(extra);
+            assert_eq!(error.line, 3, "'{extra}' reports the statement's line");
+            assert!(
+                error.message.contains(expected),
+                "'{extra}' must name what it rejects, got: {}",
+                error.message
+            );
+        }
+    }
+
+    /// The corner points must describe an axis-aligned rectangle parallel
+    /// to xy; anything else is named, not squared off.
+    #[test]
+    fn plane_corner_points_are_validated() {
+        let bad = |corners: &str, tail: &str| -> ParseError {
+            parse(&plane_deck(&format!("Gp {corners}\n+ {tail}"), "")).unwrap_err()
+        };
+        let square = "thick=0.04 seg1=5 seg2=3";
+        // Tilted out of the xy plane.
+        let error = bad("x1=0 y1=0 z1=0 x2=10 y2=0 z2=1 x3=10 y3=6 z3=1", square);
+        assert_eq!(error.line, 3);
+        assert!(
+            error.message.contains("not parallel to the xy plane"),
+            "{error}"
+        );
+        // Rotated in the xy plane.
+        let error = bad("x1=0 y1=0 z1=0 x2=10 y2=1 z2=0 x3=9 y3=7 z3=0", square);
+        assert!(error.message.contains("axis-aligned rectangle"), "{error}");
+        // Two edges along the same axis: not a rectangle.
+        let error = bad("x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=4 y3=0 z3=0", square);
+        assert!(error.message.contains("axis-aligned rectangle"), "{error}");
+        // Missing pieces are named individually.
+        for (corners, tail, expected) in [
+            ("x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6", square, "'z3'"),
+            (
+                "x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0",
+                "seg1=5 seg2=3",
+                "'thick'",
+            ),
+            (
+                "x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0",
+                "thick=0.04 seg2=3",
+                "'seg1'",
+            ),
+            (
+                "x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0",
+                "thick=0.04 seg1=5",
+                "'seg2'",
+            ),
+        ] {
+            let error = bad(corners, tail);
+            assert_eq!(error.line, 3);
+            assert!(error.message.contains(expected), "{error}");
+        }
+    }
+
+    /// A hole, contact or in-plane node the deck put somewhere other than
+    /// this plane is a mistake, not a silently relocated feature.
+    #[test]
+    fn plane_features_must_lie_in_the_plane() {
+        let bad = |extra: &str| -> ParseError {
+            parse(&plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 {extra}"
+                ),
+                "",
+            ))
+            .unwrap_err()
+        };
+        // A z far from this plane's slab.
+        let error = bad("hole rect (0.5, 4.5, 3, 1.5, 5.5, 3)");
+        assert_eq!(error.line, 3);
+        assert!(
+            error.message.contains("is not in ground plane 'Gp'"),
+            "{error}"
+        );
+        // A hole with no area removes nothing, so it is rejected.
+        let error = bad("hole rect (0.5, 4.5, 0, 0.5, 5.5, 0)");
+        assert!(error.message.contains("degenerate"), "{error}");
+        // An in-plane node outside the footprint.
+        let error = bad("Nfar (50, 3, 0)");
+        assert!(
+            error.message.contains("outside ground plane 'Gp'"),
+            "{error}"
+        );
+        // Wrong arity in a value list.
+        let error = bad("Nland (5, 3)");
+        assert!(error.message.contains("takes 3 values"), "{error}");
+        let error = bad("hole rect (5, 3, 0, 6)");
+        assert!(error.message.contains("takes 6 values"), "{error}");
+        // Junk instead of a parameter.
+        let error = bad("wibble");
+        assert!(
+            error.message.contains("is not a ground-plane parameter"),
+            "{error}"
+        );
+        let error = bad("hole");
+        assert!(error.message.contains("needs a shape name"), "{error}");
+        let error = bad("hole rect (5, 3, 0");
+        assert!(error.message.contains("unterminated"), "{error}");
     }
 
     #[test]
