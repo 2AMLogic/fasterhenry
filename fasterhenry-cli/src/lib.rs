@@ -153,5 +153,6 @@ mod tests {
     fn cli_definition_is_valid() {
         use clap::CommandFactory;
         crate::cli::Cli::command().debug_assert();
+        crate::cli::BareCli::command().debug_assert();
     }
 }

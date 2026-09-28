@@ -14,6 +14,24 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- CLI: a drop-in invocation form, `fasterhenry <deck.inp | problem.json>`
+  with no subcommand (issue #73, a phase of the 0.2.0 drop-in-replacement
+  epic), for scripts written against FastHenry. It takes exactly the options
+  `run` takes — the input may precede or follow them — and differs only in
+  its default output: it writes `Zc.mat` in the working directory even
+  without `--zc-mat`, where `run` still writes one only when asked.
+  `--zc-mat <path>` replaces that default rather than adding a second file,
+  and the JSON result still goes to stdout (or `--json <path>`). `fasterhenry
+  run …` is unchanged, so existing 0.1 invocations keep working; the help is
+  now the option list under `fasterhenry --help`, with `fasterhenry help`
+  keeping the subcommand listing. Nothing a command line names is silently
+  ignored on either form: an option or extra argument this CLI does not
+  define is an error naming it, which is the whole of the policy — FastHenry's
+  own historical flags are deliberately *not* enumerated, since that would
+  mean reading documentation the clean-room rule in `CONTRIBUTING.md` keeps
+  out of this project. One naming corner: the first argument is read as a
+  subcommand when it is exactly one (`run`, `help`), so a deck named `run`
+  needs `fasterhenry run run` or a qualified path (`./run`).
 - Deck reader: FastHenry's ground-plane (`G`) statement syntax (issue #69,
   phase 1 of the 0.2.0 deck-compatibility epic). A plane may now be
   declared in the documented corner-point form — three corner points,

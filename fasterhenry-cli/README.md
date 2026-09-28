@@ -19,26 +19,22 @@ cargo install fasterhenry-cli
 
 ## Usage
 
+One deck, two spellings of the same command:
+
+```bash
+fasterhenry deck.inp            # writes ./Zc.mat, as a FastHenry run does
+fasterhenry run deck.inp        # writes a Zc.mat only when --zc-mat asks
+```
+
+Both take the same options and produce the same JSON on stdout; they differ
+only in that default output (see
+[Migrating from FastHenry](#migrating-from-fasthenry)).
+
 ```text
 $ fasterhenry --help
 Clean-room PEEC inductance/resistance extractor
 
-Usage: fasterhenry <COMMAND>
-
-Commands:
-  run   Run a frequency sweep on a FastHenry .inp deck or a JSON problem document.
-  help  Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help     Print help
-  -V, --version  Print version
-```
-
-```text
-$ fasterhenry run --help
-Run a frequency sweep on a FastHenry .inp deck or a JSON problem document.
-
-Usage: fasterhenry run [OPTIONS] <INPUT>
+Usage: fasterhenry [OPTIONS] <INPUT>
 
 Arguments:
   <INPUT>
@@ -52,7 +48,7 @@ Options:
           Write the JSON result to this file instead of stdout
 
       --zc-mat <OUT_MAT>
-          Write the impedance sweep as a binary MAT v4 `Zc.mat`-format file: `Zc_1 … Zc_K` (complex, ohms) and `freqs` (Hz)
+          Write the impedance sweep as a binary MAT v4 `Zc.mat`-format file: `Zc_1 … Zc_K` (complex, ohms) and `freqs` (Hz). A bare invocation writes `./Zc.mat` without this flag
 
       --spice <OUT_CIR>
           Write a SPICE subcircuit at one frequency (coupled inductors for L, H sources for R)
@@ -70,9 +66,63 @@ Options:
 
           [default: auto]
 
+      --fasthenry-compat
+          Read a `.inp`/`.fh` deck's first line as an always-ignored title, as the public FastHenry format does, for third-party decks whose line 1 is prose. Off by default: line 1 is parsed like any other and `.title <text>` sets the title. A later `.title` is still honored in this mode
+
   -h, --help
           Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+`fasterhenry run <INPUT> [OPTIONS]` is the same command with the same options; it differs only in writing no Zc.mat unless --zc-mat asks for one.
 ```
+
+`fasterhenry run --help` prints the same option list under
+`Usage: fasterhenry run [OPTIONS] <INPUT>`, and `fasterhenry help` lists the
+subcommands.
+
+## Migrating from FastHenry
+
+A script that calls FastHenry today usually names the deck and nothing else,
+then reads the `Zc.mat` the run left in the working directory. `fasterhenry`
+answers that shape directly:
+
+```bash
+fasterhenry deck.inp        # ./Zc.mat is written, whether or not you ask
+```
+
+- **The input** is the deck's path — `.inp` or `.fh` by extension, or a JSON
+  problem document (see below). It may be given before or after the options
+  (`fasterhenry --solver dense deck.inp` works).
+- **`./Zc.mat`** is written by this bare form even without `--zc-mat`: same
+  MAT level-4 layout FastHenry writes (`Zc_1 … Zc_K`, complex ohms, plus
+  `freqs`), readable by `scipy.io.loadmat` and MATLAB/Octave. Pass
+  `--zc-mat <path>` to put it somewhere else — the flag replaces the default,
+  it does not add a second file.
+- **The JSON result** still goes to stdout (`--json <path>` to a file
+  instead), so a migrating script may ignore it or start using it.
+- **`fasterhenry run <deck>`** is the same command with the same options and
+  the 0.1 behaviour: it writes a `Zc.mat` only when `--zc-mat` asks for one.
+  Existing invocations keep working unchanged.
+
+What is *not* claimed: FastHenry's own command-line options are not
+reimplemented, and this project does not consult that program's source or
+manuals (see [`CONTRIBUTING.md`](https://github.com/2AMLogic/fasterhenry/blob/main/CONTRIBUTING.md)).
+The policy is instead that nothing is silently ignored — any option or extra
+argument this CLI does not define is an error naming it, so a flag your script
+passes today is reported rather than quietly dropped:
+
+```text
+$ fasterhenry deck.inp -S 10
+error: unexpected argument '-S' found
+```
+
+Translate such a flag into the equivalent option above (or into a deck
+directive) rather than expecting it to be honored. One naming corner: the
+first argument is read as a subcommand name when it is exactly one
+(`run`, `help`), so a deck literally named `run` needs `fasterhenry run run`
+or a qualified path such as `./run`.
 
 `--solver auto` (the default) is a size threshold, not a limit: the dense
 path up to 10 000 filaments, GMRES on the precorrected-FFT operator above
@@ -152,7 +202,9 @@ Two further outputs are optional:
 
 - `--zc-mat out.mat` — the sweep as a MATLAB level-4 binary file in the
   layout of FastHenry's `Zc.mat` (`Zc_1 … Zc_K`, complex ohms, plus
-  `freqs`), readable by `scipy.io.loadmat` and MATLAB/Octave.
+  `freqs`), readable by `scipy.io.loadmat` and MATLAB/Octave. A bare
+  invocation writes `./Zc.mat` without being asked; under `run` the flag is
+  the only way to get one.
 - `--spice out.cir [--spice-freq HZ]` — a SPICE subcircuit at one
   frequency (default: the last): coupled inductors for `L`, current-
   controlled sources for `R`.
