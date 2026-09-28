@@ -14,6 +14,46 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- Deck reader / library: named **contact areas** on a corner-point `G`
+  ground-plane statement — `contact equiv_rect N<name> (x, y, z, xwidth,
+  ywidth)` and its documented shorthand `contact connection N<name> (x, y,
+  z, xwidth, ywidth, ratio)` (issue #101, follow-up to #80). The rectangle
+  (centre and full widths, the spelling `decay_rect` uses) is tied to the
+  one node the clause names, so a deck can `.equiv` an external node — or
+  point `.external` — onto a landing *pad* rather than onto the single
+  nearest cell centre, which is a materially different thing for
+  resistance. `connection` expands to exactly an `equiv_rect` plus a
+  `decay_rect` over the same rectangle with cells `xwidth/ratio`,
+  `ywidth/ratio` and no decay limit; writing the two out by hand gives an
+  identical deck, and `ratio` must be > 1. The clause's node name (between
+  the shape word and the value list — a form the plane-statement scanner
+  did not previously allow) follows the in-plane-node rule, `N`-prefixed;
+  a name on a clause that names no node, and a rectangle catching no live
+  cell centre, are both line-numbered errors rather than silently dropped.
+  An `.equiv` set holding both a contact area and a plain in-plane node of
+  the same plane lands on the *area*.
+- Library: `fasterhenry::plane::Equipotential` and
+  `GroundPlane::equipotentials` — a rectangular patch of plane tied to one
+  node, with `GroundPlane::equipotential_node` reporting the node a patch
+  produced (issue #101). Every live cell centre inside the rectangle
+  (boundary included) shares a single node, the bars that ran between those
+  cells are not built, and the bars crossing the patch's boundary end on
+  that node, which sits at the mean of the cell centres it ties; two
+  rectangles tying a cell in common merge into one equipotential, since two
+  overlapping perfect conductors are one conductor. The consequence is
+  stated rather than left to be inferred: the model is exact for a patch
+  covering one cell, and for a larger patch each entering bar reaches the
+  tie through metal the mesh still treats as ordinary plane rather than as
+  the perfect conductor the patch is — an over-, never under-, estimate of
+  the contact's own resistance, and one that does not grow as the mesh is
+  refined, unlike the constriction of a landing on a single cell centre.
+  `an_equipotential_pad_lowers_resistance_and_stops_the_mesh_setting_it`
+  (`fasterhenry/tests/plane_validation.rs`) measures both halves of that on
+  one mesh. **Breaking**: `GroundPlane` gains a public
+  `equipotentials: Vec<Equipotential>` field, so exhaustive struct literals
+  need one more line (`equipotentials: Vec::new()` reproduces the previous
+  behaviour exactly — a plane with none meshes, numbers its nodes and
+  builds its bars precisely as before).
 - CLI: a drop-in invocation form, `fasterhenry <deck.inp | problem.json>`
   with no subcommand (issue #73, a phase of the 0.2.0 drop-in-replacement
   epic), for scripts written against FastHenry. It takes exactly the options
@@ -57,8 +97,10 @@ breaking changes to the API or the command-line interface; patch releases
   `decay_rect`, `line`, `trace`, `connection`, the `initial_*`/`equiv_*`
   forms and the user-defined `user1…user7`) — nothing on a `G` statement is
   silently ignored, and representing those shapes is tracked in #80.
-  (`contact decay_rect` has since been implemented — see its own entry
-  below; the rest are still rejected, tracked in #98–#101.)
+  (`contact decay_rect`, `hole point`/`hole circle`, `contact
+  point`/`contact line` and `contact equiv_rect`/`contact connection` have
+  since been implemented — see their own entries below; the rest are still
+  rejected, tracked in #99, #109, #110 and #113.)
   `fasterhenry-cli/tests/data/plane_fasthenry.inp` and
   `plane_extension.inp` are the same self-authored plane problem in the two
   syntaxes, and a new test requires them to produce the same geometry and
@@ -103,7 +145,9 @@ breaking changes to the API or the command-line interface; patch releases
   `point` and `line` have since been implemented — see #100's own entry
   below, with `circle` and `trace` moved to #109 and #110)
   and #101 (`contact equiv_rect`, `connection`, `initial_grid`,
-  `initial_mesh_grid`).
+  `initial_mesh_grid`; `equiv_rect` and `connection` have since been
+  implemented — see #101's own entry above — with the two `initial_*` forms
+  left rejected and moved to #113).
 - Library: `fasterhenry::plane::Hole` is now an enum (`Rect`, `Point`,
   `Circle`) instead of a rectangle-only struct, and the deck reader accepts
   the corner-point `G` statement's `hole point (x, y, z)` and
@@ -179,12 +223,27 @@ breaking changes to the API or the command-line interface; patch releases
   cell"; a band that divides exactly is unchanged, as is the graded
   validation fixture (580 bars). A graded plane whose region straddled
   that rounding now gains a cell or two on that axis.
+- Deck reader: `contact initial_grid (rows, cols)` and
+  `contact initial_mesh_grid (rows, cols)` stay rejected on the statement's
+  own line, but the error now names the alternative instead of the generic
+  contact-shape list (issue #101, which took the two clauses it covered
+  alongside these; issue #113 tracks the rest). Neither needs a plane-model
+  change — `seg1`/`seg2` already say what `initial_grid` says, and a
+  checkerboard of `hole point` clauses at the centres `GroundPlane::mesh`
+  reports says what `initial_mesh_grid` adds — but the value list turns on
+  one fact the public description this reader is written from did not
+  settle: which of `(rows, cols)` counts the `p1 → p2` edge. A transposed
+  guess would silently mesh every non-square plane the wrong way round, and
+  the clean-room rule in `CONTRIBUTING.md` forbids guessing an undocumented
+  argument order, so the error says `seg1` (cells along `p1 → p2`) and
+  `seg2` (cells along `p2 → p3`) instead; `initial_mesh_grid`'s also names
+  the hole clauses and the library composition for the checkerboard.
 - Deck reader / library (decision, no new API): `hole user1 (…)` …
   `hole user7 (…)` are rejected **permanently**, and no predicate or
   callback variant is added to `fasterhenry::plane::Hole` (issue #99,
   follow-up to #80). A user-defined hole is a generator compiled into the
   tool itself, so the deck carries a number and a value list whose meaning
-  is stated nowhere in it — unlike the shapes #100/#101 track, it is not a
+  is stated nowhere in it — unlike the shapes #109/#110 track, it is not a
   shape awaiting a plane-model change but one no reader can recover, so the
   rejection is final and the line-numbered error now says so instead of
   pointing at a tracking issue that could never close. The error names both
