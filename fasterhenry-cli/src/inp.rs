@@ -1094,6 +1094,11 @@ fn cells_no_coarser_than(span: f64, cell: f64) -> usize {
 /// Every documented parameter is either mapped onto
 /// [`fasterhenry::plane::GroundPlane`] or rejected by name: nothing on the
 /// statement is silently dropped.
+///
+/// The items [`scan_plane_items`] finds are applied in order to a
+/// [`PlaneStatement`] (one method per clause kind), which then checks the
+/// plane's geometry ([`PlaneStatement::frame`]) and assembles the plane
+/// against it ([`PlaneStatement::finish`]).
 fn parse_plane_statement(
     head: &str,
     body: &str,
@@ -1101,446 +1106,687 @@ fn parse_plane_statement(
     defaults: &Defaults,
     line: usize,
 ) -> Result<(PlaneSpec, Vec<PlaneNode>), ParseError> {
-    // Corner points, indexed [point][axis]; `None` until the deck sets it.
-    let mut corners: [[Option<f64>; 3]; 3] = [[None; 3]; 3];
-    let mut thickness: Option<f64> = None;
-    let mut segments: [Option<usize>; 2] = [None, None];
-    let mut sigma = defaults.sigma;
-    let mut nhinc = 1usize;
-    let mut nodes: Vec<PlaneNode> = Vec::new();
-    // Hole and contact rectangles, kept raw until the plane's own geometry
-    // is known (their z is checked against the plane's slab).
-    let mut hole_rects: Vec<[[f64; 3]; 2]> = Vec::new();
-    // `hole point (x, y, z)` and `hole circle (x, y, z, r)`: kept raw for
-    // the same reason (`z` checked against the slab below).
-    let mut hole_points: Vec<[f64; 3]> = Vec::new();
-    let mut hole_circles: Vec<([f64; 3], f64)> = Vec::new();
-    let mut contact_rects: Vec<[[f64; 3]; 2]> = Vec::new();
-    let mut contact_decays: Vec<DecayRect> = Vec::new();
-    // `contact point` / `contact line`, with the clause's own name.
-    let mut contact_lines: Vec<(&'static str, RefineLine)> = Vec::new();
-    // `contact equiv_rect` / `contact connection`: the named contact areas,
-    // each becoming one `Equipotential` and one in-plane node.
-    let mut contact_equivs: Vec<EquivRect> = Vec::new();
-
+    let mut statement = PlaneStatement::new(head, unit, defaults, line);
     for item in scan_plane_items(body, line)? {
+        statement.apply_item(item)?;
+    }
+    statement.finish()
+}
+
+/// A FastHenry-form `G` statement under construction: what each clause of
+/// its body has set so far, between [`scan_plane_items`] and
+/// [`PlaneStatement::finish`].
+///
+/// Holes and contacts are kept raw until the plane's own geometry is known,
+/// because their `z` is checked against the plane's slab and some of them
+/// are sized against its background cell.
+#[derive(Default)]
+struct PlaneStatement<'a> {
+    /// The statement's head (`G<name>`), quoted in errors.
+    head: &'a str,
+    /// The `.units` factor to metres in force for the statement.
+    unit: f64,
+    /// The line the statement was declared on (for errors).
+    line: usize,
+    /// Corner points, indexed [point][axis]; `None` until the deck sets it.
+    corners: [[Option<f64>; 3]; 3],
+    /// `thick=`, metres (its magnitude).
+    thickness: Option<f64>,
+    /// `seg1=` and `seg2=`: cells along p1→p2 and along p2→p3.
+    segments: [Option<usize>; 2],
+    /// `sigma=` / `rho=` (S/m), or the `.default` conductivity.
+    sigma: Option<f64>,
+    /// `nhinc=` (1 unless set).
+    nhinc: usize,
+    /// `N<name> (x, y, z)` declarations, in statement order.
+    nodes: Vec<PlaneNode>,
+    /// `hole rect (x1, y1, z1, x2, y2, z2)` corners.
+    hole_rects: Vec<[[f64; 3]; 2]>,
+    /// `hole point (x, y, z)`.
+    hole_points: Vec<[f64; 3]>,
+    /// `hole circle (x, y, z, r)`: the centre and radius.
+    hole_circles: Vec<([f64; 3], f64)>,
+    /// `contact rect (x1, y1, z1, x2, y2, z2)` corners.
+    contact_rects: Vec<[[f64; 3]; 2]>,
+    /// `contact decay_rect` clauses, plus the decay half of each
+    /// `contact connection`.
+    contact_decays: Vec<DecayRect>,
+    /// `contact point` / `contact line`, with the clause's own name.
+    contact_lines: Vec<(&'static str, RefineLine)>,
+    /// `contact equiv_rect` / `contact connection`: the named contact areas,
+    /// each becoming one `Equipotential` and one in-plane node.
+    contact_equivs: Vec<EquivRect>,
+}
+
+/// The checked geometry of a FastHenry-form `G` statement, which every
+/// hole, contact, and in-plane node is placed against.
+struct PlaneFrame<'a> {
+    /// The statement's head (`G<name>`), quoted in errors.
+    head: &'a str,
+    /// The line the statement was declared on (for errors).
+    line: usize,
+    /// The plane's xy extent, metres.
+    lo: [f64; 2],
+    hi: [f64; 2],
+    /// Cells along x and y.
+    cells: [usize; 2],
+    /// The axis (0 = x, 1 = y) the p1→p2 edge — and so `seg1` — runs along.
+    axis1: usize,
+    /// The slack a coordinate may be off the plane's extent by, metres.
+    tolerance: f64,
+    /// The corner points' `z`: the plane's mid-thickness surface, metres.
+    mid_z: f64,
+    /// The plane's thickness, metres (> 0).
+    thickness: f64,
+    /// The plane's conductivity, S/m.
+    sigma: f64,
+}
+
+impl<'a> PlaneStatement<'a> {
+    fn new(head: &'a str, unit: f64, defaults: &Defaults, line: usize) -> Self {
+        PlaneStatement {
+            head,
+            unit,
+            line,
+            sigma: defaults.sigma,
+            nhinc: 1,
+            ..PlaneStatement::default()
+        }
+    }
+
+    /// Dispatches one item of the statement's body to the method that
+    /// reads it.
+    fn apply_item(&mut self, item: PlaneItem) -> Result<(), ParseError> {
         match item {
-            PlaneItem::Field(key, raw) => {
-                // `x1` … `z3`: one corner coordinate each.
-                if let Some(slot) = corner_slot(&key) {
-                    corners[slot.0][slot.1] = Some(parse_number(&raw, line)? * unit);
-                    continue;
-                }
-                match key.as_str() {
-                    "thick" => thickness = Some(parse_number(&raw, line)?.abs() * unit),
-                    "seg1" => segments[0] = Some(parse_count(&raw, "seg1", line)?),
-                    "seg2" => segments[1] = Some(parse_count(&raw, "seg2", line)?),
-                    // Already converted to S/m by parse_value either way; a
-                    // line naming both is rejected before we get here.
-                    "sigma" | "rho" => sigma = Some(parse_value(&key, &raw, unit, line)?),
-                    "nhinc" => nhinc = parse_count(&raw, "nhinc", line)?,
-                    "rh" => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': 'rh' (filaments graded through the thickness) is not supported; plane filaments are uniform, so use 'nhinc' alone"
-                            ),
-                        ));
-                    }
-                    "segwid1" | "segwid2" => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': '{key}' (an explicit plane-segment width) is not supported; this engine's plane bars take their width from the cell they span (set seg1/seg2, or refine locally with '.contact')"
-                            ),
-                        ));
-                    }
-                    "relx" | "rely" | "relz" => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': '{key}' (a reference point for the plane's internal node numbering) is not supported; name the in-plane nodes you need with 'N<name> (x, y, z)'"
-                            ),
-                        ));
-                    }
-                    "file" => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': 'file' (dump the plane's discretization) is an output option this engine does not have"
-                            ),
-                        ));
-                    }
-                    "nx" | "ny" => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': the corner-point form counts cells with 'seg1'/'seg2' ('{key}' belongs to the 'G<name> x1 y1 z1 x2 y2 z2 t' extension form)"
-                            ),
-                        ));
-                    }
-                    other => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, rho, nhinc)"
-                            ),
-                        ));
-                    }
-                }
-            }
-            PlaneItem::Node(name, values) => {
-                if !name.starts_with(['n', 'N']) {
-                    return Err(err(
-                        line,
-                        format!(
-                            "'{name} (…)' is not an in-plane node declaration: node names start with 'N'"
-                        ),
-                    ));
-                }
-                let what = format!("in-plane node '{name}'");
-                nodes.push((name, triple(&values, &what, unit, line)?, None));
-            }
+            PlaneItem::Field(key, raw) => self.apply_field(&key, &raw),
+            PlaneItem::Node(name, values) => self.apply_node(name, &values),
             PlaneItem::Clause {
                 kind,
                 shape,
                 name,
                 values,
-            } => {
-                let what = format!("'{kind} {shape}'");
-                // Only the named contact areas take a node name; anywhere
-                // else it is a mistake to report, not a token to drop.
-                if let Some(name) = &name {
-                    if !matches!(
-                        (kind.as_str(), shape.as_str()),
-                        ("contact", "equiv_rect") | ("contact", "connection")
-                    ) {
-                        return Err(err(
-                            line,
-                            format!(
-                                "{what} takes no node name, but '{name}' stands before its value list; only 'contact equiv_rect' and 'contact connection' name a node"
-                            ),
-                        ));
-                    }
-                }
-                // The node a named contact area declares: `N`-prefixed like
-                // every other node name in a `G` statement's body.
-                let node_name = |name: Option<String>| -> Result<String, ParseError> {
-                    match name {
-                        Some(name) if name.starts_with(['n', 'N']) => Ok(name),
-                        Some(name) => Err(err(
-                            line,
-                            format!(
-                                "{what}: '{name}' is not a node name (node names start with 'N', as in '{kind} {shape} Ncontact (…)')"
-                            ),
-                        )),
-                        None => Err(err(
-                            line,
-                            format!(
-                                "{what} names the node it ties: write '{kind} {shape} N<name> (…)', with the node name between the shape and its values"
-                            ),
-                        )),
-                    }
-                };
-                match (kind.as_str(), shape.as_str()) {
-                    ("hole", "rect") => {
-                        hole_rects.push(rect_corners(&values, &what, unit, line)?);
-                    }
-                    ("hole", "point") => {
-                        hole_points.push(triple(&values, &what, unit, line)?);
-                    }
-                    ("hole", "circle") => {
-                        if values.len() != 4 {
-                            return Err(err(
-                                line,
-                                format!("{what} takes 4 values (x, y, z, r), got {}", values.len()),
-                            ));
-                        }
-                        let centre = triple(&values[..3], &what, unit, line)?;
-                        let radius = parse_number(&values[3], line)? * unit;
-                        if radius < 0.0 {
-                            return Err(err(
-                                line,
-                                format!("{what}: r={radius} metres must be >= 0"),
-                            ));
-                        }
-                        hole_circles.push((centre, radius));
-                    }
-                    ("contact", "rect") => {
-                        contact_rects.push(rect_corners(&values, &what, unit, line)?);
-                    }
-                    ("contact", "decay_rect") => {
-                        contact_decays.push(decay_rect_values(&values, &what, unit, line)?);
-                    }
-                    ("contact", "point") => {
-                        contact_lines.push((
-                            "'contact point'",
-                            refine_line_values(&values, false, &what, unit, line)?,
-                        ));
-                    }
-                    ("contact", "line") => {
-                        contact_lines.push((
-                            "'contact line'",
-                            refine_line_values(&values, true, &what, unit, line)?,
-                        ));
-                    }
-                    ("contact", "equiv_rect") => {
-                        if values.len() != 5 {
-                            return Err(err(
-                                line,
-                                format!(
-                                    "{what} takes 5 values (x, y, z, xwidth, ywidth), got {}",
-                                    values.len()
-                                ),
-                            ));
-                        }
-                        let (centre, widths) = equiv_rect_values(&values, &what, unit, line)?;
-                        let name = node_name(name)?;
-                        contact_equivs.push(EquivRect {
-                            what,
-                            name,
-                            centre,
-                            widths,
-                        });
-                    }
-                    ("contact", "connection") => {
-                        if values.len() != 6 {
-                            return Err(err(
-                                line,
-                                format!(
-                                    "{what} takes 6 values (x, y, z, xwidth, ywidth, ratio), got {}",
-                                    values.len()
-                                ),
-                            ));
-                        }
-                        let (centre, widths) = equiv_rect_values(&values, &what, unit, line)?;
-                        // The documented shorthand: this rectangle tied to
-                        // one node, plus a `decay_rect` over the same
-                        // rectangle whose cells are its widths divided by
-                        // `ratio`, decaying without a limit.
-                        let ratio = parse_number(&values[5], line)?;
-                        if ratio <= 1.0 {
-                            return Err(err(
-                                line,
-                                format!(
-                                    "{what}: ratio={ratio} must be > 1 — it divides the rectangle's widths into the contact's own cells (xwidth/ratio, ywidth/ratio), so 1 or less asks for a cell as wide as the rectangle and grades nothing"
-                                ),
-                            ));
-                        }
-                        let name = node_name(name)?;
-                        contact_equivs.push(EquivRect {
-                            what,
-                            name,
-                            centre,
-                            widths,
-                        });
-                        contact_decays.push(DecayRect {
-                            centre,
-                            widths,
-                            cell: [widths[0] / ratio, widths[1] / ratio],
-                            limit: [None, None],
-                        });
-                    }
-                    ("contact", other @ ("initial_grid" | "initial_mesh_grid")) => {
-                        let meshed = other == "initial_mesh_grid";
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': 'contact {other}' is not supported: its (rows, cols) set the plane's *initial* discretization, and this reader will not guess which of the two counts the p1→p2 edge — a transposed guess silently meshes every non-square plane the wrong way round. Say it unambiguously with 'seg1' (cells along p1→p2) and 'seg2' (cells along p2→p3){}",
-                                if meshed {
-                                    ", and cut the meshed plane's holes with 'hole rect (x1, y1, z1, x2, y2, z2)' or 'hole point (x, y, z)' — 'fasterhenry::plane::GroundPlane::mesh' reports the cell centres a checkerboard of 'hole point' clauses would remove (see docs/fasthenry-compat.md)"
-                                } else {
-                                    ""
-                                }
-                            ),
-                        ));
-                    }
-                    ("hole", other) if is_user_hole(other) => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': 'hole {other}' is not supported, and will not be: a user-defined hole is a generator compiled into the tool itself, so nothing in the deck says what its values mean and there is no shape here to read. Cut the cells you want with 'hole rect (x1, y1, z1, x2, y2, z2)', 'hole point (x, y, z)' or 'hole circle (x, y, z, r)'; for a shape none of those describe, build the plane through the library instead — 'fasterhenry::plane::GroundPlane::mesh' reports the exact cell centres this plane meshes to, and a 'fasterhenry::plane::Hole::Point' at each centre your own rule selects removes precisely those cells (see docs/fasthenry-compat.md)"
-                            ),
-                        ));
-                    }
-                    ("hole", other) => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': 'hole {other}' is not supported; this engine's holes are 'hole rect (x1, y1, z1, x2, y2, z2)', 'hole point (x, y, z)' or 'hole circle (x, y, z, r)'"
-                            ),
-                        ));
-                    }
-                    (_, other) => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)' or 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' (and '.contact' to set a rectangle's refinement directly, or 'contact equiv_rect N<name> (x, y, z, xwidth, ywidth)' / 'contact connection N<name> (x, y, z, xwidth, ywidth, ratio)' to tie a rectangle of cells to one node)"
-                            ),
-                        ));
-                    }
-                }
-            }
+            } => self.apply_clause(&kind, &shape, name, &values),
         }
     }
 
-    // Geometry: three corners of an axis-aligned rectangle parallel to xy.
-    let mut points = [[0.0f64; 3]; 3];
-    for (index, point) in corners.iter().enumerate() {
-        for (axis, value) in point.iter().enumerate() {
-            points[index][axis] = value.ok_or_else(|| {
-                err(
+    /// A `<key>=<value>` parameter: a corner coordinate, one of the
+    /// supported parameters, or a documented one rejected by name.
+    fn apply_field(&mut self, key: &str, raw: &str) -> Result<(), ParseError> {
+        let (head, unit, line) = (self.head, self.unit, self.line);
+        // `x1` … `z3`: one corner coordinate each.
+        if let Some(slot) = corner_slot(key) {
+            self.corners[slot.0][slot.1] = Some(parse_number(raw, line)? * unit);
+            return Ok(());
+        }
+        match key {
+            "thick" => self.thickness = Some(parse_number(raw, line)?.abs() * unit),
+            "seg1" => self.segments[0] = Some(parse_count(raw, "seg1", line)?),
+            "seg2" => self.segments[1] = Some(parse_count(raw, "seg2", line)?),
+            // Already converted to S/m by parse_value either way; a
+            // line naming both is rejected before we get here.
+            "sigma" | "rho" => self.sigma = Some(parse_value(key, raw, unit, line)?),
+            "nhinc" => self.nhinc = parse_count(raw, "nhinc", line)?,
+            "rh" => {
+                return Err(err(
                     line,
                     format!(
-                        "ground plane '{head}' is missing '{}{}' (the corner points are x1…z1, x2…z2, x3…z3)",
-                        ['x', 'y', 'z'][axis],
-                        index + 1
+                        "ground plane '{head}': 'rh' (filaments graded through the thickness) is not supported; plane filaments are uniform, so use 'nhinc' alone"
                     ),
-                )
-            })?;
+                ));
+            }
+            "segwid1" | "segwid2" => {
+                return Err(err(
+                    line,
+                    format!(
+                        "ground plane '{head}': '{key}' (an explicit plane-segment width) is not supported; this engine's plane bars take their width from the cell they span (set seg1/seg2, or refine locally with '.contact')"
+                    ),
+                ));
+            }
+            "relx" | "rely" | "relz" => {
+                return Err(err(
+                    line,
+                    format!(
+                        "ground plane '{head}': '{key}' (a reference point for the plane's internal node numbering) is not supported; name the in-plane nodes you need with 'N<name> (x, y, z)'"
+                    ),
+                ));
+            }
+            "file" => {
+                return Err(err(
+                    line,
+                    format!(
+                        "ground plane '{head}': 'file' (dump the plane's discretization) is an output option this engine does not have"
+                    ),
+                ));
+            }
+            "nx" | "ny" => {
+                return Err(err(
+                    line,
+                    format!(
+                        "ground plane '{head}': the corner-point form counts cells with 'seg1'/'seg2' ('{key}' belongs to the 'G<name> x1 y1 z1 x2 y2 z2 t' extension form)"
+                    ),
+                ));
+            }
+            other => {
+                return Err(err(
+                    line,
+                    format!(
+                        "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, rho, nhinc)"
+                    ),
+                ));
+            }
         }
+        Ok(())
     }
-    let edge1 = [points[1][0] - points[0][0], points[1][1] - points[0][1]];
-    let edge2 = [points[2][0] - points[1][0], points[2][1] - points[1][1]];
-    let span: f64 = edge1[0].abs() + edge1[1].abs() + edge2[0].abs() + edge2[1].abs();
-    let tolerance = 1e-9 * span;
-    if (points[1][2] - points[0][2]).abs() > tolerance
-        || (points[2][2] - points[0][2]).abs() > tolerance
-    {
-        return Err(err(
-            line,
-            format!(
-                "ground plane '{head}' is not parallel to the xy plane (z1={}, z2={}, z3={} in metres); tilted planes are not supported",
-                points[0][2], points[1][2], points[2][2]
-            ),
-        ));
-    }
-    let axis_of = |edge: [f64; 2]| -> Option<usize> {
-        match (edge[0].abs() > tolerance, edge[1].abs() > tolerance) {
-            (true, false) => Some(0),
-            (false, true) => Some(1),
-            _ => None,
-        }
-    };
-    let (axis1, axis2) = match (axis_of(edge1), axis_of(edge2)) {
-        (Some(a), Some(b)) if a != b => (a, b),
-        _ => {
+
+    /// An `N<name> (x, y, z)` in-plane node declaration.
+    fn apply_node(&mut self, name: String, values: &[String]) -> Result<(), ParseError> {
+        if !name.starts_with(['n', 'N']) {
             return Err(err(
-                line,
+                self.line,
                 format!(
-                    "ground plane '{head}': the corner points do not form an axis-aligned rectangle (p1→p2 and p2→p3 must each run along x or y, and along different axes); rotated or non-rectangular planes are not supported"
+                    "'{name} (…)' is not an in-plane node declaration: node names start with 'N'"
                 ),
             ));
         }
-    };
-    let mut cells = [0usize; 2];
-    cells[axis1] = segments[0].ok_or_else(|| {
-        err(
-            line,
-            format!("ground plane '{head}' has no 'seg1' (cells along p1→p2)"),
-        )
-    })?;
-    cells[axis2] = segments[1].ok_or_else(|| {
-        err(
-            line,
-            format!("ground plane '{head}' has no 'seg2' (cells along p2→p3)"),
-        )
-    })?;
-    let thickness = thickness.ok_or_else(|| {
-        err(
-            line,
-            format!("ground plane '{head}' has no 'thick' (its thickness)"),
-        )
-    })?;
-    if thickness <= 0.0 {
-        return Err(err(
-            line,
-            format!("ground plane '{head}' needs a thickness > 0 (got 'thick={thickness}' metres)"),
-        ));
+        let what = format!("in-plane node '{name}'");
+        let position = triple(values, &what, self.unit, self.line)?;
+        self.nodes.push((name, position, None));
+        Ok(())
     }
-    let sigma = sigma.ok_or_else(|| {
-        err(
-            line,
-            format!(
-                "ground plane '{head}' has no conductivity: set sigma= on the statement, or sigma= or rho= in .default"
-            ),
-        )
-    })?;
-    let lo = [
-        points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min),
-        points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min),
-    ];
-    let hi = [
-        points
-            .iter()
-            .map(|p| p[0])
-            .fold(f64::NEG_INFINITY, f64::max),
-        points
-            .iter()
-            .map(|p| p[1])
-            .fold(f64::NEG_INFINITY, f64::max),
-    ];
-    // The corner points give the plane's mid-thickness surface, as a
-    // segment's nodes give its axis; this engine's `GroundPlane` is
-    // specified by its top surface.
-    let mid_z = points[0][2];
-    let z_top = mid_z + thickness / 2.0;
 
-    // A hole or contact z outside the plane's own slab is a deck mistake,
-    // not a hole somewhere else: the rectangles are cut through the full
-    // thickness of a plane that is parallel to xy.
-    let in_slab = |what: &str, corner: [f64; 3]| -> Result<(), ParseError> {
-        if (corner[2] - mid_z).abs() > thickness + 1e-15 {
+    /// A `hole <shape> (…)` or `contact <shape> (…)` clause; `kind` and
+    /// `shape` arrive lowercased from [`scan_plane_items`].
+    fn apply_clause(
+        &mut self,
+        kind: &str,
+        shape: &str,
+        name: Option<String>,
+        values: &[String],
+    ) -> Result<(), ParseError> {
+        let (unit, line) = (self.unit, self.line);
+        let what = format!("'{kind} {shape}'");
+        // Only the named contact areas take a node name; anywhere
+        // else it is a mistake to report, not a token to drop.
+        if let Some(name) = &name {
+            if !matches!(
+                (kind, shape),
+                ("contact", "equiv_rect") | ("contact", "connection")
+            ) {
+                return Err(err(
+                    line,
+                    format!(
+                        "{what} takes no node name, but '{name}' stands before its value list; only 'contact equiv_rect' and 'contact connection' name a node"
+                    ),
+                ));
+            }
+        }
+        match (kind, shape) {
+            ("hole", "rect") => {
+                self.hole_rects
+                    .push(rect_corners(values, &what, unit, line)?);
+            }
+            ("hole", "point") => {
+                self.hole_points.push(triple(values, &what, unit, line)?);
+            }
+            ("hole", "circle") => self.apply_hole_circle(&what, values)?,
+            ("contact", "rect") => {
+                self.contact_rects
+                    .push(rect_corners(values, &what, unit, line)?);
+            }
+            ("contact", "decay_rect") => {
+                self.contact_decays
+                    .push(decay_rect_values(values, &what, unit, line)?);
+            }
+            ("contact", "point") => {
+                self.contact_lines.push((
+                    "'contact point'",
+                    refine_line_values(values, false, &what, unit, line)?,
+                ));
+            }
+            ("contact", "line") => {
+                self.contact_lines.push((
+                    "'contact line'",
+                    refine_line_values(values, true, &what, unit, line)?,
+                ));
+            }
+            ("contact", "equiv_rect") => self.apply_contact_equiv_rect(what, name, values)?,
+            ("contact", "connection") => self.apply_contact_connection(what, name, values)?,
+            _ => return Err(self.unsupported_clause(kind, shape)),
+        }
+        Ok(())
+    }
+
+    /// `hole circle (x, y, z, r)`.
+    fn apply_hole_circle(&mut self, what: &str, values: &[String]) -> Result<(), ParseError> {
+        let (unit, line) = (self.unit, self.line);
+        if values.len() != 4 {
+            return Err(err(
+                line,
+                format!("{what} takes 4 values (x, y, z, r), got {}", values.len()),
+            ));
+        }
+        let centre = triple(&values[..3], what, unit, line)?;
+        let radius = parse_number(&values[3], line)? * unit;
+        if radius < 0.0 {
+            return Err(err(line, format!("{what}: r={radius} metres must be >= 0")));
+        }
+        self.hole_circles.push((centre, radius));
+        Ok(())
+    }
+
+    /// `contact equiv_rect N<name> (x, y, z, xwidth, ywidth)`.
+    fn apply_contact_equiv_rect(
+        &mut self,
+        what: String,
+        name: Option<String>,
+        values: &[String],
+    ) -> Result<(), ParseError> {
+        let line = self.line;
+        if values.len() != 5 {
             return Err(err(
                 line,
                 format!(
-                    "{what}: z={} is not in ground plane '{head}' (mid-thickness z={mid_z}, thickness {thickness}, metres)",
-                    corner[2]
+                    "{what} takes 5 values (x, y, z, xwidth, ywidth), got {}",
+                    values.len()
+                ),
+            ));
+        }
+        let (centre, widths) = equiv_rect_values(values, &what, self.unit, line)?;
+        let name = contact_node_name(name, &what, "equiv_rect", line)?;
+        self.contact_equivs.push(EquivRect {
+            what,
+            name,
+            centre,
+            widths,
+        });
+        Ok(())
+    }
+
+    /// `contact connection N<name> (x, y, z, xwidth, ywidth, ratio)`.
+    fn apply_contact_connection(
+        &mut self,
+        what: String,
+        name: Option<String>,
+        values: &[String],
+    ) -> Result<(), ParseError> {
+        let line = self.line;
+        if values.len() != 6 {
+            return Err(err(
+                line,
+                format!(
+                    "{what} takes 6 values (x, y, z, xwidth, ywidth, ratio), got {}",
+                    values.len()
+                ),
+            ));
+        }
+        let (centre, widths) = equiv_rect_values(values, &what, self.unit, line)?;
+        // The documented shorthand: this rectangle tied to
+        // one node, plus a `decay_rect` over the same
+        // rectangle whose cells are its widths divided by
+        // `ratio`, decaying without a limit.
+        let ratio = parse_number(&values[5], line)?;
+        if ratio <= 1.0 {
+            return Err(err(
+                line,
+                format!(
+                    "{what}: ratio={ratio} must be > 1 — it divides the rectangle's widths into the contact's own cells (xwidth/ratio, ywidth/ratio), so 1 or less asks for a cell as wide as the rectangle and grades nothing"
+                ),
+            ));
+        }
+        let name = contact_node_name(name, &what, "connection", line)?;
+        self.contact_equivs.push(EquivRect {
+            what,
+            name,
+            centre,
+            widths,
+        });
+        self.contact_decays.push(DecayRect {
+            centre,
+            widths,
+            cell: [widths[0] / ratio, widths[1] / ratio],
+            limit: [None, None],
+        });
+        Ok(())
+    }
+
+    /// The error for a `hole` / `contact` shape this reader does not read:
+    /// each documented one named with the reason, and anything else pointed
+    /// at the shapes that are supported.
+    fn unsupported_clause(&self, kind: &str, shape: &str) -> ParseError {
+        let (head, line) = (self.head, self.line);
+        match (kind, shape) {
+            ("contact", other @ ("initial_grid" | "initial_mesh_grid")) => {
+                let meshed = other == "initial_mesh_grid";
+                err(
+                    line,
+                    format!(
+                        "ground plane '{head}': 'contact {other}' is not supported: its (rows, cols) set the plane's *initial* discretization, and this reader will not guess which of the two counts the p1→p2 edge — a transposed guess silently meshes every non-square plane the wrong way round. Say it unambiguously with 'seg1' (cells along p1→p2) and 'seg2' (cells along p2→p3){}",
+                        if meshed {
+                            ", and cut the meshed plane's holes with 'hole rect (x1, y1, z1, x2, y2, z2)' or 'hole point (x, y, z)' — 'fasterhenry::plane::GroundPlane::mesh' reports the cell centres a checkerboard of 'hole point' clauses would remove (see docs/fasthenry-compat.md)"
+                        } else {
+                            ""
+                        }
+                    ),
+                )
+            }
+            ("hole", other) if is_user_hole(other) => err(
+                line,
+                format!(
+                    "ground plane '{head}': 'hole {other}' is not supported, and will not be: a user-defined hole is a generator compiled into the tool itself, so nothing in the deck says what its values mean and there is no shape here to read. Cut the cells you want with 'hole rect (x1, y1, z1, x2, y2, z2)', 'hole point (x, y, z)' or 'hole circle (x, y, z, r)'; for a shape none of those describe, build the plane through the library instead — 'fasterhenry::plane::GroundPlane::mesh' reports the exact cell centres this plane meshes to, and a 'fasterhenry::plane::Hole::Point' at each centre your own rule selects removes precisely those cells (see docs/fasthenry-compat.md)"
+                ),
+            ),
+            ("hole", other) => err(
+                line,
+                format!(
+                    "ground plane '{head}': 'hole {other}' is not supported; this engine's holes are 'hole rect (x1, y1, z1, x2, y2, z2)', 'hole point (x, y, z)' or 'hole circle (x, y, z, r)'"
+                ),
+            ),
+            (_, other) => err(
+                line,
+                format!(
+                    "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)' or 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' (and '.contact' to set a rectangle's refinement directly, or 'contact equiv_rect N<name> (x, y, z, xwidth, ywidth)' / 'contact connection N<name> (x, y, z, xwidth, ywidth, ratio)' to tie a rectangle of cells to one node)"
+                ),
+            ),
+        }
+    }
+
+    /// Checks the statement's geometry — three corners of an axis-aligned
+    /// rectangle parallel to xy, both cell counts, a positive thickness,
+    /// and a conductivity — and returns the frame the plane's features are
+    /// placed against.
+    fn frame(&self) -> Result<PlaneFrame<'a>, ParseError> {
+        let (head, line) = (self.head, self.line);
+        let mut points = [[0.0f64; 3]; 3];
+        for (index, point) in self.corners.iter().enumerate() {
+            for (axis, value) in point.iter().enumerate() {
+                points[index][axis] = value.ok_or_else(|| {
+                    err(
+                        line,
+                        format!(
+                            "ground plane '{head}' is missing '{}{}' (the corner points are x1…z1, x2…z2, x3…z3)",
+                            ['x', 'y', 'z'][axis],
+                            index + 1
+                        ),
+                    )
+                })?;
+            }
+        }
+        let edge1 = [points[1][0] - points[0][0], points[1][1] - points[0][1]];
+        let edge2 = [points[2][0] - points[1][0], points[2][1] - points[1][1]];
+        let span: f64 = edge1[0].abs() + edge1[1].abs() + edge2[0].abs() + edge2[1].abs();
+        let tolerance = 1e-9 * span;
+        if (points[1][2] - points[0][2]).abs() > tolerance
+            || (points[2][2] - points[0][2]).abs() > tolerance
+        {
+            return Err(err(
+                line,
+                format!(
+                    "ground plane '{head}' is not parallel to the xy plane (z1={}, z2={}, z3={} in metres); tilted planes are not supported",
+                    points[0][2], points[1][2], points[2][2]
+                ),
+            ));
+        }
+        let axis_of = |edge: [f64; 2]| -> Option<usize> {
+            match (edge[0].abs() > tolerance, edge[1].abs() > tolerance) {
+                (true, false) => Some(0),
+                (false, true) => Some(1),
+                _ => None,
+            }
+        };
+        let (axis1, axis2) = match (axis_of(edge1), axis_of(edge2)) {
+            (Some(a), Some(b)) if a != b => (a, b),
+            _ => {
+                return Err(err(
+                    line,
+                    format!(
+                        "ground plane '{head}': the corner points do not form an axis-aligned rectangle (p1→p2 and p2→p3 must each run along x or y, and along different axes); rotated or non-rectangular planes are not supported"
+                    ),
+                ));
+            }
+        };
+        let mut cells = [0usize; 2];
+        cells[axis1] = self.segments[0].ok_or_else(|| {
+            err(
+                line,
+                format!("ground plane '{head}' has no 'seg1' (cells along p1→p2)"),
+            )
+        })?;
+        cells[axis2] = self.segments[1].ok_or_else(|| {
+            err(
+                line,
+                format!("ground plane '{head}' has no 'seg2' (cells along p2→p3)"),
+            )
+        })?;
+        let thickness = self.thickness.ok_or_else(|| {
+            err(
+                line,
+                format!("ground plane '{head}' has no 'thick' (its thickness)"),
+            )
+        })?;
+        if thickness <= 0.0 {
+            return Err(err(
+                line,
+                format!(
+                    "ground plane '{head}' needs a thickness > 0 (got 'thick={thickness}' metres)"
+                ),
+            ));
+        }
+        let sigma = self.sigma.ok_or_else(|| {
+            err(
+                line,
+                format!(
+                    "ground plane '{head}' has no conductivity: set sigma= on the statement, or sigma= or rho= in .default"
+                ),
+            )
+        })?;
+        let lo = [
+            points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min),
+            points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min),
+        ];
+        let hi = [
+            points
+                .iter()
+                .map(|p| p[0])
+                .fold(f64::NEG_INFINITY, f64::max),
+            points
+                .iter()
+                .map(|p| p[1])
+                .fold(f64::NEG_INFINITY, f64::max),
+        ];
+        Ok(PlaneFrame {
+            head,
+            line,
+            lo,
+            hi,
+            cells,
+            axis1,
+            tolerance,
+            mid_z: points[0][2],
+            thickness,
+            sigma,
+        })
+    }
+
+    /// Checks the geometry, places every hole, contact, and in-plane node
+    /// against it, and assembles the [`PlaneSpec`] plus its in-plane nodes.
+    fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>), ParseError> {
+        let frame = self.frame()?;
+        let PlaneStatement {
+            head,
+            nhinc,
+            mut nodes,
+            hole_rects,
+            hole_points,
+            hole_circles,
+            contact_rects,
+            contact_decays,
+            contact_lines,
+            contact_equivs,
+            ..
+        } = self;
+
+        let mut holes =
+            Vec::with_capacity(hole_rects.len() + hole_points.len() + hole_circles.len());
+        for rect in hole_rects {
+            let (lo, hi) = frame.footprint("'hole rect'", rect)?;
+            holes.push(Hole::Rect { lo, hi });
+        }
+        for point in hole_points {
+            frame.in_slab("'hole point'", point)?;
+            holes.push(Hole::Point {
+                at: [point[0], point[1]],
+            });
+        }
+        for (centre, radius) in hole_circles {
+            frame.in_slab("'hole circle'", centre)?;
+            holes.push(Hole::Circle {
+                centre: [centre[0], centre[1]],
+                radius,
+            });
+        }
+
+        let mut contacts =
+            Vec::with_capacity(contact_rects.len() + contact_decays.len() + contact_lines.len());
+        for rect in contact_rects {
+            let (lo, hi) = frame.footprint("'contact rect'", rect)?;
+            contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
+        }
+        for decay in contact_decays {
+            contacts.push(frame.decay_contact(&decay)?);
+        }
+        for (what, refine) in contact_lines {
+            if let Some(region) = frame.refine_contact(what, &refine)? {
+                contacts.push(region);
+            }
+        }
+
+        // A named contact area is one equipotential patch plus the in-plane
+        // node that names it; the node sits at the rectangle's centre, so the
+        // footprint and slab checks below cover it like any other.
+        let mut equipotentials = Vec::with_capacity(contact_equivs.len());
+        for equiv in contact_equivs {
+            frame.in_slab(&equiv.what, equiv.centre)?;
+            equipotentials.push(Equipotential::centred(
+                [equiv.centre[0], equiv.centre[1]],
+                equiv.widths,
+            ));
+            nodes.push((equiv.name, equiv.centre, Some(equipotentials.len() - 1)));
+        }
+
+        for (name, position, _) in &nodes {
+            frame.check_node(name, *position)?;
+        }
+
+        // The corner points give the plane's mid-thickness surface, as a
+        // segment's nodes give its axis; this engine's `GroundPlane` is
+        // specified by its top surface.
+        let z_top = frame.mid_z + frame.thickness / 2.0;
+        Ok((
+            PlaneSpec {
+                name: head.to_string(),
+                plane: GroundPlane {
+                    lo: frame.lo,
+                    hi: frame.hi,
+                    z_top,
+                    thickness: frame.thickness,
+                    nx: frame.cells[0],
+                    ny: frame.cells[1],
+                    sigma: frame.sigma,
+                    holes,
+                    contacts,
+                    equipotentials,
+                },
+                nhinc,
+            },
+            nodes,
+        ))
+    }
+}
+
+/// The node a named contact area (`contact equiv_rect` / `contact
+/// connection`) declares: `N`-prefixed like every other node name in a `G`
+/// statement's body. `what` is the clause quoted for errors.
+fn contact_node_name(
+    name: Option<String>,
+    what: &str,
+    shape: &str,
+    line: usize,
+) -> Result<String, ParseError> {
+    let kind = "contact";
+    match name {
+        Some(name) if name.starts_with(['n', 'N']) => Ok(name),
+        Some(name) => Err(err(
+            line,
+            format!(
+                "{what}: '{name}' is not a node name (node names start with 'N', as in '{kind} {shape} Ncontact (…)')"
+            ),
+        )),
+        None => Err(err(
+            line,
+            format!(
+                "{what} names the node it ties: write '{kind} {shape} N<name> (…)', with the node name between the shape and its values"
+            ),
+        )),
+    }
+}
+
+impl PlaneFrame<'_> {
+    /// A hole or contact z outside the plane's own slab is a deck mistake,
+    /// not a hole somewhere else: the rectangles are cut through the full
+    /// thickness of a plane that is parallel to xy.
+    fn in_slab(&self, what: &str, corner: [f64; 3]) -> Result<(), ParseError> {
+        let (mid_z, thickness) = (self.mid_z, self.thickness);
+        if (corner[2] - mid_z).abs() > thickness + 1e-15 {
+            return Err(err(
+                self.line,
+                format!(
+                    "{what}: z={} is not in ground plane '{}' (mid-thickness z={mid_z}, thickness {thickness}, metres)",
+                    corner[2], self.head
                 ),
             ));
         }
         Ok(())
-    };
-    let footprint = |what: &str, rect: [[f64; 3]; 2]| -> Result<([f64; 2], [f64; 2]), ParseError> {
-        in_slab(what, rect[0])?;
-        in_slab(what, rect[1])?;
+    }
+
+    /// The xy footprint of a `hole rect` / `contact rect`, both corners in
+    /// the slab and the rectangle not degenerate.
+    fn footprint(
+        &self,
+        what: &str,
+        rect: [[f64; 3]; 2],
+    ) -> Result<([f64; 2], [f64; 2]), ParseError> {
+        self.in_slab(what, rect[0])?;
+        self.in_slab(what, rect[1])?;
         let lo = [rect[0][0].min(rect[1][0]), rect[0][1].min(rect[1][1])];
         let hi = [rect[0][0].max(rect[1][0]), rect[0][1].max(rect[1][1])];
         if !(hi[0] > lo[0] && hi[1] > lo[1]) {
             return Err(err(
-                line,
+                self.line,
                 format!("{what} is degenerate: its two corners share an x or a y"),
             ));
         }
         Ok((lo, hi))
-    };
-    let mut holes = Vec::with_capacity(hole_rects.len() + hole_points.len() + hole_circles.len());
-    for rect in hole_rects {
-        let (lo, hi) = footprint("'hole rect'", rect)?;
-        holes.push(Hole::Rect { lo, hi });
     }
-    for point in hole_points {
-        in_slab("'hole point'", point)?;
-        holes.push(Hole::Point {
-            at: [point[0], point[1]],
-        });
+
+    /// Whether `point`'s xy lies on the plane, within the tolerance.
+    fn contains(&self, point: [f64; 3]) -> bool {
+        let (lo, hi, tolerance) = (self.lo, self.hi, self.tolerance);
+        point[0] >= lo[0] - tolerance
+            && point[0] <= hi[0] + tolerance
+            && point[1] >= lo[1] - tolerance
+            && point[1] <= hi[1] + tolerance
     }
-    for (centre, radius) in hole_circles {
-        in_slab("'hole circle'", centre)?;
-        holes.push(Hole::Circle {
-            centre: [centre[0], centre[1]],
-            radius,
-        });
+
+    /// The plane's uniform background cell along `axis`, metres.
+    fn background(&self, axis: usize) -> f64 {
+        (self.hi[axis] - self.lo[axis]) / self.cells[axis] as f64
     }
-    let mut contacts =
-        Vec::with_capacity(contact_rects.len() + contact_decays.len() + contact_lines.len());
-    for rect in contact_rects {
-        let (lo, hi) = footprint("'contact rect'", rect)?;
-        contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
-    }
-    for decay in contact_decays {
+
+    /// The graded region a `contact decay_rect` (or the decay half of a
+    /// `contact connection`) refines.
+    fn decay_contact(&self, decay: &DecayRect) -> Result<ContactRegion, ParseError> {
         let what = "'contact decay_rect'";
-        in_slab(what, decay.centre)?;
+        self.in_slab(what, decay.centre)?;
         let mut region = ([0.0f64; 2], [0.0f64; 2]);
         let mut region_cells = [0usize; 2];
         let mut ratio = [0.0f64; 2];
@@ -1558,43 +1804,46 @@ fn parse_plane_statement(
             // fraction of the rectangle's width, each cell outside the
             // rectangle is `1/(1 − r0)` times its inward neighbour.
             ratio[axis] = 1.0 / (1.0 - decay.cell[axis] / decay.widths[axis]);
-            let background = (hi[axis] - lo[axis]) / cells[axis] as f64;
+            let background = self.background(axis);
             if decay.limit[axis].is_some_and(|limit| limit < background * (1.0 - 1e-9)) {
                 return Err(err(
-                    line,
+                    self.line,
                     format!(
-                        "{what}: {name}maxcell={} metres is finer than ground plane '{head}'s own background cell ({background} metres), and this engine's grading levels off at that cell rather than below it; raise 'seg{}' so the whole plane is at least that fine, or drop the limit (a negative value) to accept the background cell",
+                        "{what}: {name}maxcell={} metres is finer than ground plane '{}'s own background cell ({background} metres), and this engine's grading levels off at that cell rather than below it; raise 'seg{}' so the whole plane is at least that fine, or drop the limit (a negative value) to accept the background cell",
                         decay.limit[axis].unwrap_or_default(),
-                        if axis == axis1 { 1 } else { 2 }
+                        self.head,
+                        if axis == self.axis1 { 1 } else { 2 }
                     ),
                 ));
             }
         }
-        contacts.push(ContactRegion::graded_per_axis(
+        Ok(ContactRegion::graded_per_axis(
             region.0,
             region.1,
             region_cells,
             ratio,
-        ));
+        ))
     }
-    // `contact point` / `contact line`: the segment's bounding box, padded
-    // by half a requested cell each side, cut into cells no coarser than
-    // that cell and graded outward at the reader's default ratio 2. See
-    // the module documentation for why the box is exact, not a
-    // compromise, on this engine's tensor-product mesh.
-    for (what, refine) in contact_lines {
+
+    /// The region a `contact point` / `contact line` refines: the segment's
+    /// bounding box, padded by half a requested cell each side, cut into
+    /// cells no coarser than that cell and graded outward at the reader's
+    /// default ratio 2 — or `None` when the background mesh already meets
+    /// the request on both axes. See the module documentation for why the
+    /// box is exact, not a compromise, on this engine's tensor-product mesh.
+    fn refine_contact(
+        &self,
+        what: &str,
+        refine: &RefineLine,
+    ) -> Result<Option<ContactRegion>, ParseError> {
         for end in refine.ends {
-            in_slab(what, end)?;
-            if !(end[0] >= lo[0] - tolerance
-                && end[0] <= hi[0] + tolerance
-                && end[1] >= lo[1] - tolerance
-                && end[1] <= hi[1] + tolerance)
-            {
+            self.in_slab(what, end)?;
+            if !self.contains(end) {
                 return Err(err(
-                    line,
+                    self.line,
                     format!(
-                        "{what}: ({}, {}) metres is outside ground plane '{head}'",
-                        end[0], end[1]
+                        "{what}: ({}, {}) metres is outside ground plane '{}'",
+                        end[0], end[1], self.head
                     ),
                 ));
             }
@@ -1602,11 +1851,11 @@ fn parse_plane_statement(
         let mut region = ([0.0f64; 2], [0.0f64; 2]);
         let mut region_cells = [0usize; 2];
         let mut already_met = true;
-        for axis in 0..2 {
+        for (axis, count) in region_cells.iter_mut().enumerate() {
             // A request at or above the background cell is already met by
             // the background mesh (no cell is ever coarser than it), so it
             // is clamped there: a refinement must never coarsen the plane.
-            let background = (hi[axis] - lo[axis]) / cells[axis] as f64;
+            let background = self.background(axis);
             let cell = if refine.cell[axis] >= background * (1.0 - 1e-9) {
                 background
             } else {
@@ -1616,62 +1865,24 @@ fn parse_plane_statement(
             let (a, b) = (refine.ends[0][axis], refine.ends[1][axis]);
             region.0[axis] = a.min(b) - cell / 2.0;
             region.1[axis] = a.max(b) + cell / 2.0;
-            region_cells[axis] = cells_no_coarser_than(region.1[axis] - region.0[axis], cell);
+            *count = cells_no_coarser_than(region.1[axis] - region.0[axis], cell);
         }
-        if !already_met {
-            contacts.push(ContactRegion::new(region.0, region.1, region_cells, 2.0));
-        }
+        Ok((!already_met).then(|| ContactRegion::new(region.0, region.1, region_cells, 2.0)))
     }
 
-    // A named contact area is one equipotential patch plus the in-plane
-    // node that names it; the node sits at the rectangle's centre, so the
-    // footprint and slab checks below cover it like any other.
-    let mut equipotentials = Vec::with_capacity(contact_equivs.len());
-    for equiv in contact_equivs {
-        in_slab(&equiv.what, equiv.centre)?;
-        equipotentials.push(Equipotential::centred(
-            [equiv.centre[0], equiv.centre[1]],
-            equiv.widths,
-        ));
-        nodes.push((equiv.name, equiv.centre, Some(equipotentials.len() - 1)));
-    }
-
-    for (name, position, _) in &nodes {
-        if !(position[0] >= lo[0] - tolerance
-            && position[0] <= hi[0] + tolerance
-            && position[1] >= lo[1] - tolerance
-            && position[1] <= hi[1] + tolerance)
-        {
+    /// An in-plane node must lie on the plane and in its slab.
+    fn check_node(&self, name: &str, position: [f64; 3]) -> Result<(), ParseError> {
+        if !self.contains(position) {
             return Err(err(
-                line,
+                self.line,
                 format!(
-                    "in-plane node '{name}' at ({}, {}) metres is outside ground plane '{head}'",
-                    position[0], position[1]
+                    "in-plane node '{name}' at ({}, {}) metres is outside ground plane '{}'",
+                    position[0], position[1], self.head
                 ),
             ));
         }
-        in_slab(&format!("in-plane node '{name}'"), *position)?;
+        self.in_slab(&format!("in-plane node '{name}'"), position)
     }
-
-    Ok((
-        PlaneSpec {
-            name: head.to_string(),
-            plane: GroundPlane {
-                lo,
-                hi,
-                z_top,
-                thickness,
-                nx: cells[0],
-                ny: cells[1],
-                sigma,
-                holes,
-                contacts,
-                equipotentials,
-            },
-            nhinc,
-        },
-        nodes,
-    ))
 }
 
 /// `x1` … `z3` as `(point index, axis)`; `None` for any other key.
