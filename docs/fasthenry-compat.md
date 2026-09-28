@@ -107,7 +107,7 @@ records how each documented field maps.
 | `sigma=` | Supported | Per deck unit, falling back to the `.default` conductivity (`.default sigma=` or `.default rho=`). |
 | `nhinc=` | Supported | Filaments through the plane's thickness. |
 | `rho=` | Supported | Issue #88. Per deck unit, the exact reciprocal of `sigma=` and accepted on the corner-point statement itself (continuation lines included); naming both `sigma=` and `rho=` on one statement is a line-numbered error, as it is elsewhere. |
-| `rh=`, `segwid1=`/`segwid2=`, `relx=`/`rely=`/`relz=`, `file=` | Not supported | Each rejected by name with the reason and the alternative (plane filaments are uniform; bar widths follow the cells; name in-plane nodes instead; no output-file option). Nothing on a `G` statement is silently ignored. |
+| `rh=`, `segwid1=`/`segwid2=`, `relx=`/`rely=`/`relz=`, `file=` | Not supported | Each rejected by name with the reason and the alternative (plane filaments are uniform; bar widths follow the cells; name in-plane nodes instead; no output-file option). Nothing on a `G` statement is silently ignored. Issue #122 revisits `file=`: the nonuniform-plane description defines it as an *input* (the discretization hierarchy file, `file=NONE` for none), which the current message does not say, and `file=NONE` is the form the public `contact initial_grid` example uses. |
 | In-plane node `N<name> (x, y, z)` | Supported | An ordinary deck node belonging to the plane; a reference to it lands on the nearest live cell-centre node of that plane. |
 | `hole rect (…)`, `contact rect (…)` | Supported, differs | Map onto the plane model's rectangular hole and contact region; the redundant `z` coordinates are checked against the plane's slab. An inline `contact rect` uses 2 × 2 fine cells at ratio 2 — use `.contact` to choose other values. Both take **two opposite corners** here. That is right for `hole rect` and a divergence for `contact rect`, whose documented form is a centre, full widths and cell sizes like the other `contact` shapes'; issue #95 tracks reconciling it. |
 | `contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` | Supported, differs | Issue #80. Maps onto `fasterhenry::plane::ContactRegion`: centre and full widths give the rectangle, `ceil(width/cell)` per axis gives the fine cells, and the documented decay law `1/(1 − cell/width)` gives that axis's growth ratio. `cell` must be smaller than `width` (the documentation's own `r0 < 1`). The differences are both in the outward limit: this engine's grading levels off at the plane's **background cell** rather than at `maxcell`, so a positive `maxcell` **finer** than the background cell is rejected by name (raise `seg1`/`seg2` instead of shipping a quietly coarser mesh), while one at or above it never binds; a negative `maxcell` — the sentinel the documented `contact connection` shorthand expands to — asks for no limit. The resulting mesh is this engine's own graded cell-centre mesh, not FastHenry's cell subdivision, so equal cell sizes mean equal resolution, not an identical node set. |
@@ -118,7 +118,8 @@ records how each documented field maps.
 | `contact point (x, y, z, xcell, ycell)`, `contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)` | Supported, differs | Issue #100. Every cell holding the point, or crossed by the line, is no larger than `xcell` × `ycell`. Both map onto one `fasterhenry::plane::ContactRegion`: the locus's bounding box padded by half a requested cell on every side, cut into the fewest cells no larger than that cell — so a point is exactly one `xcell × ycell` cell centred on it, and a zero-length line is that point. Outside it the mesh grades back at ratio 2, the reader's `contact rect` default (neither shape documents a decay). A requested cell at or above the plane's background cell is already met and is clamped there rather than coarsening the mesh; a point or line met on both axes adds nothing. Both ends are checked against the plane's slab and footprint. **The difference**: a diagonal line refines its whole padded bounding box, because this engine's mesh is a tensor product — a refined band on one axis spans the plane on the other, so any refinement covering the line (a chain of rectangles included) has the same bands. That costs about `(Lx/xcell)·(Ly/ycell)` fine cells where a mesh following the diagonal would need about `Lx/xcell + Ly/ycell`; an axis-aligned line costs nothing extra. |
 | `contact trace (…)` | Deferred | Issues #80, #98, #100 and #101 took `decay_rect`, `hole point`/`hole circle`, `contact point`/`contact line` and `contact equiv_rect`/`contact connection`; this one stays rejected by name, on the statement's own line, rather than approximated. Tracked as issue #110: how `trace_width` and `scale_factor` set the cell size is still to be pinned. |
 | `contact circle (…)` | Not supported, permanent | Issue #109. Rejected by name on the statement's own line — but unlike the row above this is not deferred work: the public description of the `contact` family names the simple refinement utilities `point`, `line`, `rect` and `decay_rect`, the contact-*area* utility `equiv_rect`, the grouped `connection` and `trace` built on them, and the `initial_grid`/`initial_mesh_grid` pair — no disc among them. `circle` is a **hole** shape (`hole circle (x, y, z, r)`), so there is no argument list to pin and nothing in a deck to read — see the decision below. The geometry is not what is missing: on this tensor-product mesh the whole of what a disc could mean is `contact decay_rect` over its bounding square, and the error names that. |
-| `contact initial_grid (rows, cols)`, `contact initial_mesh_grid (rows, cols)` | Not supported | Issue #101 took the other two clauses it covered and deliberately left these two rejected; issue #113 tracks what is missing. Neither needs a plane-model change: `seg1`/`seg2` already say what `initial_grid` says, and a checkerboard of `hole point` clauses at the centres `GroundPlane::mesh` reports says what `initial_mesh_grid` adds (the same composition the `hole user1…user7` decision below rests on). What is missing is the one documented fact the value list turns on — which of `(rows, cols)` counts the `p1 → p2` edge — and a transposed guess would silently mesh every non-square plane the wrong way round, which the clean-room rule (`CONTRIBUTING.md`: no guessing an undocumented argument order or row/column convention) forbids. The line-numbered error names `seg1` and `seg2` instead, and `initial_mesh_grid`'s also names the hole clauses and the library composition for the checkerboard. |
+| `contact initial_grid (n1, n2)` | Supported | Issue #113, which pinned the convention #101 left open: `n1` cells along `p1 → p2` and `n2` along `p2 → p3` — the same pair `seg1`/`seg2` set, as the clause's own public description states ("`seg1=10 seg2=12` could be replaced with `file=NONE contact initial_grid (10,12)`"). See the decision below for the evidence, including why the description's word *rows* does not overturn it. The counts are cells, not grid lines. Because the two clauses are one statement, a plane giving both `contact initial_grid` and `seg1`/`seg2` (in either order), or two initial grids, is a line-numbered error rather than a race between them. `file=NONE`, which the public example pairs with the clause, is still rejected by name (see the `file=` row above and issue #122); this reader needs no such marker, since the initial grid is the only discretization it reads. |
+| `contact initial_mesh_grid (n1, n2)` | Supported, differs | Issue #113. That same initial grid, plus the documented checkerboard: "every cell that has an even value for both of its indices where the numbering is from the top left" — so, with the cells numbered from 1 at the plane's own origin (its `p1` corner) along each axis, every cell whose two indices are **both even**. An axis of one cell has no even index and so no hole. The difference is what each hole *is*: a `Hole::Rect` over the holed cell's own rectangle rather than a `Hole::Point` at its centre. On the initial grid alone the two are the same cut; the grid is *initial*, though, and a later `contact` clause may refine that region — the documented hole is the square ("no conductor will be defined in that square region"), not whichever smaller cell a refinement leaves under the centre. Numbering from `p1` is what fixes the checkerboard's phase: for an odd count either end selects the same cells, but for an even count the two differ by one cell, and `p1` is the origin of the plane coordinate system the same description defines (and the corner its own uniform-plane figure draws at the top left). |
 | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=] [sigma=\|rho=]`, `.hole`, `.contact` | Supported, extended | This project's own shorthand plane form and its separate refinement directives — not documented FastHenry syntax. Told apart from the corner-point form by the first token after the plane name, so a deck may mix the two; both build the same plane. |
 
 ### Decision: `hole user1`…`user7` are rejected permanently (issue #99)
@@ -133,10 +134,12 @@ under the clean-room rule, may not go looking for.
 That makes them unlike every other rejected shape in the table above. A
 `contact trace` is a *shape this reader cannot represent yet*: its meaning
 is public, and issue #110 tracks the work that would represent it. A
-`contact initial_grid` is a shape whose *value list* is not pinned down here
-(issue #113) — one documented fact away, not a model away. A `contact
-circle` is a shape the format does not have at all (issue #109, the decision
-below), which is a fact about the format rather than about this reader. A
+`contact initial_grid` was a shape whose *value list* was not pinned down
+here — one documented fact away, not a model away, and issue #113 has since
+read that fact out of the public description (the decision below). A
+`contact circle` is a shape the format does not have at all (issue #109, the
+decision below), which is a fact about the format rather than about this
+reader. A
 `hole user3` is not a shape at all
 — no plane model, however general, lets a reader recover a meaning the deck
 never wrote down. So the rejection is not deferred work, and the error says
@@ -241,6 +244,84 @@ the disc misses.
 two-line parser arm over the mapping above, with the padding rule
 `contact point` already uses. Nothing about the plane model would change.
 
+### Decision: `(n1, n2)` counts `p1 → p2` then `p2 → p3` (issue #113)
+
+`contact initial_grid` and `contact initial_mesh_grid` were rejected by name
+until issue #113, for one reason: the pair of counts sets the plane's
+*initial* discretization, and reading them the wrong way round would
+silently mesh every non-square plane transposed — a deck that still solves,
+just at the wrong resolution. Issue #101 declined to guess, which is what
+the clean-room rule requires (`CONTRIBUTING.md`: no guessing an undocumented
+argument order or row/column convention).
+
+The convention **is** documented, in the same supplement every other
+`contact` clause here is read from ("Nonuniformly Discretized Reference
+Planes in FastHenry 3.0", M. Kamon, 10 October 1996), read together with the
+FastHenry user's guide section on uniformly discretized planes. Three facts
+settle it, and this reader implements what they say:
+
+1. **The supplement states the equivalence outright.** Its meshed-planes
+   section says that the old-style uniform specification `seg1=10 seg2=12`
+   "could be replaced with `file=NONE contact initial_grid (10,12)`". So the
+   first value is `seg1` and the second `seg2`, position for position.
+2. **The user's guide defines that pair against the edges.** `seg1` is the
+   number of segments along the edge from `(x1,y1,z1)` to `(x2,y2,z2)` and
+   `seg2` the number along the edge from `(x2,y2,z2)` to `(x3,y3,z3)` — with
+   `(seg1+1)·(seg2+1)` nodes, so both are counts of **cells**, not of grid
+   lines. Its own reference-plane figure labels the `p1 → p2` edge `seg1`.
+   The supplement adds that `p1` is the origin of the plane coordinate
+   system, `p1 → p2` its x-direction and `p2 → p3` its y-direction.
+3. **The supplement's own worked example only comes out square-celled read
+   this way.** Its run-time-discretization example declares a plane whose
+   `p1 → p2` edge is 8500 units long and whose `p2 → p3` edge is 13500, and
+   meshes it with `contact initial_mesh_grid (34, 54)`. Taking the first
+   count along `p1 → p2` gives 8500/34 = 250 and 13500/54 = 250: square
+   cells, exactly. Transposed it gives 8500/54 ≈ 157.4 by 13500/34 ≈ 397.1 —
+   cells of two different, non-round sizes on a power plane whose designer
+   plainly wanted a 250-unit grid.
+
+**The one sentence that reads the other way, and why it does not win.**
+Between statements 1 and 2 above, the supplement glosses `(10,12)` as "10 is
+the number of rows and 12 the number of columns where a row has a co[n]stant
+y value". Rows of constant y stack along y, so read literally — with the
+plane's y being `p2 → p3` — that sentence makes the *first* count the
+`p2 → p3` one, contradicting the `seg1=10 seg2=12` equivalence in the very
+next line of the same paragraph. Something in that sentence is loose, and
+the question is only which part.
+
+It is resolved against the sentence, for three reasons. The equivalence
+(1) is explicit, positional and testable; the prose is a gloss on what the
+figure beside it looks like, and the figure carries no axes, so it fixes
+what "row" means on the page but not which plane edge the page's vertical
+is. The arithmetic (3) is independent of both and agrees with the
+equivalence to the last digit. And the failure modes are not symmetric: a
+reader that honours the equivalence reproduces the documented `seg1`/`seg2`
+deck exactly, whereas one that honours the gloss silently disagrees with the
+supplement's own replacement rule. A deck author who wants no part of this
+argument can write `seg1`/`seg2`, which is unambiguous and which this reader
+has always taken.
+
+**The checkerboard.** `initial_mesh_grid` marks "every cell that has an even
+value for both of its indices where the numbering is from the top left". The
+figure of a `(7,6)` meshed grid shows the holes at the 1-based even indices
+on both axes — second, fourth and sixth — so the numbering starts at 1, and
+a hole may touch the plane's edge when a count is even (the `(7,6)` figure's
+sixth column is holed) but never when it is odd. This reader numbers from
+the `p1` corner along both axes, `p1` being the origin of the plane
+coordinate system by (2) and the corner the user's guide's own plane figure
+draws at the top left. That choice is only observable when a count is even:
+for an odd count the even indices are symmetric about the plane's centre,
+so either end selects the same cells. `the_meshed_initial_grid_*` tests in
+`fasterhenry-cli/src/inp.rs` pin both parities, and the transposition guard
+(a 5 × 3 grid on a 10 × 6 plane, asserted equal to `seg1=5 seg2=3` and
+*unequal* to `seg1=3 seg2=5`) is
+`the_initial_grid_is_seg1_and_seg2_and_is_not_transposed`.
+
+**What would reopen this.** Public documentation that pins the row/column
+gloss the other way *and* explains away the `seg1`/`seg2` equivalence and
+the example's cell arithmetic — all three, since each is independently
+sufficient here. Short of that, the mapping stands as implemented.
+
 ## `.couples`
 
 | Status | Notes |
@@ -284,6 +365,14 @@ as a result of this table beyond what is listed below.
   rejected.)
 - Issue #113: the row/column convention `contact initial_grid` and
   `contact initial_mesh_grid` turn on, which the public description this
-  audit is written from did not settle for #101. Either outcome closes it:
-  a documented convention with tests, or a recorded permanent rejection in
-  the style of #99's.
+  audit is written from did not settle for #101. Since **implemented**: the
+  convention was read out of that description after all — see "Decision:
+  `(n1, n2)` counts `p1 → p2` then `p2 → p3`" above for the evidence and for
+  the one sentence of it that reads the other way — so both clauses now have
+  supported rows in the table.
+- Issue #122: `file=` on a plane statement, which the nonuniform-plane
+  description defines as an *input* (the discretization hierarchy file,
+  `NONE` for none) rather than the output option this reader's rejection
+  message calls it — and whose `file=NONE` form is what the public
+  `contact initial_grid` example pairs the clause with. Found while
+  implementing #113.

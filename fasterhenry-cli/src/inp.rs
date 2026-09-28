@@ -84,7 +84,9 @@
 //!   cell-centre mesh (`nx`/`ny`). The mesh itself is this project's own
 //!   PEEC discretization, not FastHenry's panel mesh (see the
 //!   `fasterhenry::plane` module documentation), so equal cell counts mean
-//!   equal resolution, not an identical node set.
+//!   equal resolution, not an identical node set. The `contact
+//!   initial_grid` / `contact initial_mesh_grid` clauses below set this
+//!   same pair, and a statement giving both is an error.
 //! * **`sigma=`** is per deck unit exactly as elsewhere, and so is its
 //!   reciprocal **`rho=`**, which this form takes on the statement too;
 //!   naming both on one statement — continuation lines included — is an
@@ -225,6 +227,30 @@
 //!   the same deck; the pairing matters because a tie is only as good as the
 //!   mesh under it, and the `decay_rect` is what puts cells inside the
 //!   rectangle for it to tie.
+//! * **`contact initial_grid (n1, n2)`** sets the plane's *initial*
+//!   discretization, and it is the statement `seg1`/`seg2` already make:
+//!   `n1` cells along `p1 → p2` and `n2` along `p2 → p3` (issue #113). That
+//!   is the equivalence the clause's public description states outright —
+//!   `seg1=10 seg2=12` may be replaced by `contact initial_grid (10,12)` —
+//!   and the same description's worked example only comes out square-celled
+//!   read that way, so the reader maps it rather than guessing: a
+//!   transposition would silently mesh every non-square plane the wrong way
+//!   round. Because the two clauses say the same thing, a statement giving
+//!   both is a line-numbered error rather than a race between them. The
+//!   description also calls `n1` a count of *rows*; `docs/fasthenry-compat.md`
+//!   records why that word does not overturn the mapping.
+//! * **`contact initial_mesh_grid (n1, n2)`** is that same initial grid with
+//!   the documented checkerboard of holes punched into it: "every cell that
+//!   has an even value for both of its indices where the numbering is from
+//!   the top left" — so, with the cells numbered from 1 at the plane's own
+//!   origin (its `p1` corner) along each axis, every cell whose two indices
+//!   are both even. Each such cell is cut by a
+//!   [`fasterhenry::plane::Hole::Rect`] over the cell's own rectangle: on
+//!   the initial grid that is the same cut a `hole point` at the centre
+//!   makes, but the grid is *initial*, and a later `contact` clause may
+//!   refine that region — the documented hole is the whole square, not
+//!   whichever smaller cell the refinement leaves under the centre. An axis
+//!   with a single cell has no even index and so no hole.
 //! * Every other documented shape is **rejected by name** too, on the
 //!   statement's own line: this engine's holes are rectangles, points or
 //!   circles and its contacts rectangles, points, lines or tied areas, and
@@ -233,18 +259,7 @@
 //!   these have a public meaning, and each is rejected for its own stated
 //!   reason:
 //!     * `contact trace` — issue #110 (how `trace_width` and
-//!       `scale_factor` set the cell size still to be pinned);
-//!     * `contact initial_grid (rows, cols)` and
-//!       `contact initial_mesh_grid (rows, cols)` need **no** model change:
-//!       `seg1`/`seg2` already say what the first says, and a checkerboard
-//!       of `hole point` clauses at the centres
-//!       [`fasterhenry::plane::GroundPlane::mesh`] reports says what the
-//!       second adds. What is missing is the one fact the value list turns
-//!       on — which of `(rows, cols)` counts the `p1 → p2` edge — and a
-//!       transposed guess would silently mesh every non-square plane the
-//!       wrong way round, so the error names `seg1`/`seg2` instead of
-//!       guessing (issue #113; the clean-room rule in `CONTRIBUTING.md`
-//!       forbids guessing an undocumented argument order).
+//!       `scale_factor` set the cell size still to be pinned).
 //! * **`contact circle` is rejected by name as well — and it is not a
 //!   documented shape at all** (issue #109). The public description of the
 //!   `contact` family names the simple refinement utilities `point`,
@@ -1157,8 +1172,16 @@ struct PlaneStatement<'a> {
     corners: [[Option<f64>; 3]; 3],
     /// `thick=`, metres (its magnitude).
     thickness: Option<f64>,
-    /// `seg1=` and `seg2=`: cells along p1→p2 and along p2→p3.
+    /// `seg1=` and `seg2=`: cells along p1→p2 and along p2→p3. `contact
+    /// initial_grid` / `contact initial_mesh_grid` set this same pair.
     segments: [Option<usize>; 2],
+    /// The `contact initial_grid` / `contact initial_mesh_grid` clause that
+    /// set [`PlaneStatement::segments`], quoted for errors — `None` until
+    /// one does.
+    initial_grid: Option<&'static str>,
+    /// Whether that clause was the meshed form, which additionally punches
+    /// the documented checkerboard of holes into the initial grid.
+    meshed_grid: bool,
     /// `sigma=` / `rho=` (S/m), or the `.default` conductivity.
     sigma: Option<f64>,
     /// `nhinc=` (1 unless set).
@@ -1197,6 +1220,9 @@ struct PlaneFrame<'a> {
     cells: [usize; 2],
     /// The axis (0 = x, 1 = y) the p1→p2 edge — and so `seg1` — runs along.
     axis1: usize,
+    /// The p1 corner's xy: the origin of the plane's own coordinate system,
+    /// and so the corner `contact initial_mesh_grid` numbers its cells from.
+    origin: [f64; 2],
     /// The slack a coordinate may be off the plane's extent by, metres.
     tolerance: f64,
     /// The corner points' `z`: the plane's mid-thickness surface, metres.
@@ -1245,8 +1271,21 @@ impl<'a> PlaneStatement<'a> {
         }
         match key {
             "thick" => self.thickness = Some(parse_number(raw, line)?.abs() * unit),
-            "seg1" => self.segments[0] = Some(parse_count(raw, "seg1", line)?),
-            "seg2" => self.segments[1] = Some(parse_count(raw, "seg2", line)?),
+            "seg1" | "seg2" => {
+                // `contact initial_grid` sets this very pair, so a statement
+                // carrying both says the same thing twice — and, if the two
+                // disagree, says it twice differently. Reject rather than
+                // letting the statement's order decide.
+                if let Some(grid) = self.initial_grid {
+                    return Err(err(
+                        line,
+                        format!(
+                            "ground plane '{head}': '{key}' and {grid} both set this plane's cell counts — {grid}'s first value *is* 'seg1' (cells along p1→p2) and its second 'seg2' (cells along p2→p3) — so give one or the other, not both"
+                        ),
+                    ));
+                }
+                self.segments[usize::from(key == "seg2")] = Some(parse_count(raw, key, line)?);
+            }
             // Already converted to S/m by parse_value either way; a
             // line naming both is rejected before we get here.
             "sigma" | "rho" => self.sigma = Some(parse_value(key, raw, unit, line)?),
@@ -1376,6 +1415,8 @@ impl<'a> PlaneStatement<'a> {
             }
             ("contact", "equiv_rect") => self.apply_contact_equiv_rect(what, name, values)?,
             ("contact", "connection") => self.apply_contact_connection(what, name, values)?,
+            ("contact", "initial_grid") => self.apply_initial_grid(false, what, values)?,
+            ("contact", "initial_mesh_grid") => self.apply_initial_grid(true, what, values)?,
             _ => return Err(self.unsupported_clause(kind, shape)),
         }
         Ok(())
@@ -1474,26 +1515,69 @@ impl<'a> PlaneStatement<'a> {
         Ok(())
     }
 
+    /// `contact initial_grid (n1, n2)` and `contact initial_mesh_grid (n1,
+    /// n2)`: the plane's *initial* discretization, `n1` cells along p1→p2
+    /// and `n2` along p2→p3 — the same pair `seg1`/`seg2` set, which is how
+    /// the public description of the clause states it ("`seg1=10 seg2=12`
+    /// could be replaced with `file=NONE contact initial_grid (10,12)`").
+    /// The meshed form additionally records that the checkerboard of holes
+    /// is to be punched; [`PlaneFrame::mesh_grid_holes`] places it once the
+    /// plane's geometry is known. See the [module documentation](self).
+    fn apply_initial_grid(
+        &mut self,
+        meshed: bool,
+        what: String,
+        values: &[String],
+    ) -> Result<(), ParseError> {
+        let (head, line) = (self.head, self.line);
+        if values.len() != 2 {
+            return Err(err(
+                line,
+                format!(
+                    "{what} takes 2 values (cells along p1→p2, cells along p2→p3 — exactly what 'seg1' and 'seg2' set), got {}",
+                    values.len()
+                ),
+            ));
+        }
+        if let Some(previous) = self.initial_grid {
+            return Err(err(
+                line,
+                format!(
+                    "ground plane '{head}': {what} sets the initial discretization {previous} has already set on this statement; a plane has one initial grid, so give one of the two clauses"
+                ),
+            ));
+        }
+        if self.segments.iter().any(Option::is_some) {
+            return Err(err(
+                line,
+                format!(
+                    "ground plane '{head}': {what} and 'seg1'/'seg2' both set this plane's cell counts — {what}'s first value *is* 'seg1' (cells along p1→p2) and its second 'seg2' (cells along p2→p3) — so give one or the other, not both"
+                ),
+            ));
+        }
+        for (index, edge) in ["p1→p2", "p2→p3"].into_iter().enumerate() {
+            let role = format!(
+                "cell count along {edge} (the {} value of {what}, what 'seg{}' sets)",
+                ["first", "second"][index],
+                index + 1
+            );
+            self.segments[index] = Some(parse_count(&values[index], &role, line)?);
+        }
+        self.initial_grid = Some(if meshed {
+            "'contact initial_mesh_grid'"
+        } else {
+            "'contact initial_grid'"
+        });
+        self.meshed_grid = meshed;
+        Ok(())
+    }
+
     /// The error for a `hole` / `contact` shape this reader does not read:
     /// each documented one named with the reason, and anything else pointed
     /// at the shapes that are supported.
     fn unsupported_clause(&self, kind: &str, shape: &str) -> ParseError {
         let (head, line) = (self.head, self.line);
         match (kind, shape) {
-            ("contact", other @ ("initial_grid" | "initial_mesh_grid")) => {
-                let meshed = other == "initial_mesh_grid";
-                err(
-                    line,
-                    format!(
-                        "ground plane '{head}': 'contact {other}' is not supported: its (rows, cols) set the plane's *initial* discretization, and this reader will not guess which of the two counts the p1→p2 edge — a transposed guess silently meshes every non-square plane the wrong way round. Say it unambiguously with 'seg1' (cells along p1→p2) and 'seg2' (cells along p2→p3){}",
-                        if meshed {
-                            ", and cut the meshed plane's holes with 'hole rect (x1, y1, z1, x2, y2, z2)' or 'hole point (x, y, z)' — 'fasterhenry::plane::GroundPlane::mesh' reports the cell centres a checkerboard of 'hole point' clauses would remove (see docs/fasthenry-compat.md)"
-                        } else {
-                            ""
-                        }
-                    ),
-                )
-            }
             ("contact", "circle") => {
                 // Issue #109. The public documentation of the `contact`
                 // family — "Nonuniformly Discretized Reference Planes in
@@ -1647,6 +1731,7 @@ impl<'a> PlaneStatement<'a> {
             hi,
             cells,
             axis1,
+            origin: [points[0][0], points[0][1]],
             tolerance,
             mid_z: points[0][2],
             thickness,
@@ -1661,6 +1746,7 @@ impl<'a> PlaneStatement<'a> {
         let PlaneStatement {
             head,
             nhinc,
+            meshed_grid,
             mut nodes,
             hole_rects,
             hole_points,
@@ -1672,8 +1758,14 @@ impl<'a> PlaneStatement<'a> {
             ..
         } = self;
 
-        let mut holes =
-            Vec::with_capacity(hole_rects.len() + hole_points.len() + hole_circles.len());
+        // The meshed initial grid's holes are cut into the *initial* grid,
+        // before anything else refines it, so they come first.
+        let mut holes = if meshed_grid {
+            frame.mesh_grid_holes()
+        } else {
+            Vec::new()
+        };
+        holes.reserve(hole_rects.len() + hole_points.len() + hole_circles.len());
         for rect in hole_rects {
             let (lo, hi) = frame.footprint("'hole rect'", rect)?;
             holes.push(Hole::Rect { lo, hi });
@@ -1793,6 +1885,57 @@ impl PlaneFrame<'_> {
             ));
         }
         Ok(())
+    }
+
+    /// The checkerboard of holes a `contact initial_mesh_grid` punches into
+    /// the initial grid: the documented rule is "every cell that has an even
+    /// value for both of its indices where the numbering is from the top
+    /// left", so with the cells numbered from 1 at the plane's own origin
+    /// (its p1 corner, [`PlaneFrame::origin`]) along each axis, a cell is a
+    /// hole when both of its indices are even.
+    ///
+    /// Each hole is the holed cell's own rectangle rather than a point at
+    /// its centre. On the initial grid alone the two are the same cut, but
+    /// the grid is *initial* — a later `contact` clause may refine that
+    /// region into smaller cells, and the documented hole is the square
+    /// ("no conductor will be defined in that square region"), not whatever
+    /// one cell the refinement happens to leave under the centre.
+    ///
+    /// An axis with a single cell has no even index, and so no hole: a
+    /// checkerboard needs a cell on either side of each hole.
+    fn mesh_grid_holes(&self) -> Vec<Hole> {
+        // The holed cells' extents along one axis, in plane coordinates.
+        let holed = |axis: usize| -> Vec<(f64, f64)> {
+            let count = self.cells[axis];
+            let cell = self.background(axis);
+            // Index 1 is the cell at the origin end of the axis, which is
+            // the low end unless p1 sits at the plane's far corner there.
+            let ascending = (self.origin[axis] - self.lo[axis]).abs()
+                <= (self.hi[axis] - self.origin[axis]).abs();
+            (0..count)
+                // A 0-based index counted from the origin is even 1-based
+                // exactly when it is odd here.
+                .filter(|index| index % 2 == 1)
+                .map(|index| {
+                    let from_lo = if ascending { index } else { count - 1 - index };
+                    (
+                        self.lo[axis] + from_lo as f64 * cell,
+                        self.lo[axis] + (from_lo + 1) as f64 * cell,
+                    )
+                })
+                .collect()
+        };
+        let (rows, columns) = (holed(0), holed(1));
+        let mut holes = Vec::with_capacity(rows.len() * columns.len());
+        for &(x_lo, x_hi) in &rows {
+            for &(y_lo, y_hi) in &columns {
+                holes.push(Hole::Rect {
+                    lo: [x_lo, y_lo],
+                    hi: [x_hi, y_hi],
+                });
+            }
+        }
+        holes
     }
 
     /// The xy footprint of a `hole rect` / `contact rect`, both corners in
@@ -4725,51 +4868,224 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         );
     }
 
-    /// The two initial-grid forms stay rejected, on the statement's own
-    /// line, and the error names the unambiguous alternative rather than
-    /// guessing which of `(rows, cols)` counts which edge.
+    /// `contact initial_grid (n1, n2)` is `seg1=n1 seg2=n2` — the
+    /// equivalence the clause's own public description states — and the
+    /// plane it builds is **not** the transposed one. The plane here is 10 ×
+    /// 6 mm and the counts 5 × 3, so a transposition would be visible
+    /// (issue #113).
     #[test]
-    fn the_initial_grid_forms_name_seg1_and_seg2_in_the_error() {
-        for clause in ["contact initial_grid", "contact initial_mesh_grid"] {
-            let error = parse(&plane_deck(
-                &format!(
-                    "\
+    fn the_initial_grid_is_seg1_and_seg2_and_is_not_transposed() {
+        let grid = parse_ok(&plane_deck(
+            "\
 Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
-+ thick=0.04 seg1=5 seg2=3 {clause} (5, 3)"
-                ),
-                "",
-            ))
-            .unwrap_err();
-            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
-            for expected in [
-                &format!("'{clause}' is not supported"),
-                "seg1",
-                "seg2",
-                "p1→p2",
-            ] {
-                assert!(
-                    error.message.contains(expected.trim()),
-                    "'{clause}' must name {expected}, got: {}",
-                    error.message
-                );
-            }
-        }
-        // Only the meshed form points at the holes it would have punched.
-        let holes = |clause: &str| {
++ thick=0.04 contact initial_grid (5, 3)",
+            "",
+        ));
+        let segments = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3",
+            "",
+        ));
+        assert_eq!(grid.geometry, segments.geometry);
+        let transposed = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=3 seg2=5",
+            "",
+        ));
+        assert_ne!(
+            grid.geometry, transposed.geometry,
+            "5 × 3 and 3 × 5 must not be the same mesh, or this test proves nothing"
+        );
+
+        // Like `seg1`/`seg2`, the counts follow the *edges*: p1 → p2 runs
+        // along y here, so the first value is the y count.
+        let rotated = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=0 y2=6 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 contact initial_grid (3, 5)",
+            "",
+        ));
+        assert_eq!(rotated.geometry, segments.geometry);
+    }
+
+    /// `contact initial_mesh_grid (n1, n2)` is that same initial grid plus
+    /// the documented checkerboard: every cell whose indices, counted from
+    /// the plane's own origin, are both even. Odd counts here (5 × 3), so
+    /// the holes are the single interior column pair of an odd grid.
+    #[test]
+    fn the_meshed_initial_grid_holes_the_even_indexed_cells() {
+        // 10 × 6 mm in 5 × 3 cells of 2 × 2 mm: the cells with 1-based
+        // indices (2, 2) and (4, 2), centred at (3, 3) and (7, 3).
+        let meshed = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 contact initial_mesh_grid (5, 3)",
+            "",
+        ));
+        let by_hand = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole point (3, 3, 0)
++ hole point (7, 3, 0)",
+            "",
+        ));
+        assert_eq!(meshed.geometry, by_hand.geometry);
+        // The unmeshed form of the same grid keeps those cells.
+        let solid = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 contact initial_grid (5, 3)",
+            "",
+        ));
+        assert!(solid.geometry.segment_count() > meshed.geometry.segment_count());
+
+        // An odd count is symmetric about the plane's centre, so numbering
+        // it from either end selects the same cells: reversing the corner
+        // order cannot move these holes.
+        let reversed = parse_ok(&plane_deck(
+            "\
+Gp x1=10 y1=6 z1=0 x2=0 y2=6 z2=0 x3=0 y3=0 z3=0
++ thick=0.04 contact initial_mesh_grid (5, 3)",
+            "",
+        ));
+        assert_eq!(reversed.geometry, meshed.geometry);
+    }
+
+    /// With an **even** count the checkerboard is no longer symmetric, and
+    /// which end the cells are numbered from decides it: the numbering runs
+    /// from the plane's own origin, its p1 corner.
+    #[test]
+    fn the_meshed_initial_grid_numbers_cells_from_the_p1_corner() {
+        // 10 × 6 mm in 4 × 2 cells of 2.5 × 3 mm. Counted from p1 at the
+        // origin, the holes are the 1-based (2, 2) and (4, 2) cells,
+        // centred at (3.75, 4.5) and (8.75, 4.5).
+        let meshed = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 contact initial_mesh_grid (4, 2)",
+            "",
+        ));
+        let by_hand = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=4 seg2=2
++ hole point (3.75, 4.5, 0)
++ hole point (8.75, 4.5, 0)",
+            "",
+        ));
+        assert_eq!(meshed.geometry, by_hand.geometry);
+
+        // The same plane with p1 at the opposite corner: the same grid,
+        // numbered from the other end, so the holes mirror to the 1-based
+        // (2, 2) and (4, 2) cells counted from (10, 6) — centred at (6.25,
+        // 1.5) and (1.25, 1.5).
+        let reversed = parse_ok(&plane_deck(
+            "\
+Gp x1=10 y1=6 z1=0 x2=0 y2=6 z2=0 x3=0 y3=0 z3=0
++ thick=0.04 contact initial_mesh_grid (4, 2)",
+            "",
+        ));
+        let reversed_by_hand = parse_ok(&plane_deck(
+            "\
+Gp x1=10 y1=6 z1=0 x2=0 y2=6 z2=0 x3=0 y3=0 z3=0
++ thick=0.04 seg1=4 seg2=2
++ hole point (6.25, 1.5, 0)
++ hole point (1.25, 1.5, 0)",
+            "",
+        ));
+        assert_eq!(reversed.geometry, reversed_by_hand.geometry);
+        assert_ne!(
+            reversed.geometry, meshed.geometry,
+            "an even count's checkerboard must move when the numbering does"
+        );
+    }
+
+    /// A meshed grid one cell wide has no even index on that axis, and so
+    /// no hole: the checkerboard needs a cell on either side of each hole.
+    #[test]
+    fn the_meshed_initial_grid_of_a_single_row_has_no_holes() {
+        let meshed = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 contact initial_mesh_grid (5, 1)",
+            "",
+        ));
+        let solid = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=1",
+            "",
+        ));
+        assert_eq!(meshed.geometry, solid.geometry);
+    }
+
+    /// The initial grid and `seg1`/`seg2` are the same statement, so a
+    /// plane that gives both — in either order — is a line-numbered error
+    /// rather than a silent race between them, and so is a second initial
+    /// grid or a malformed value list.
+    #[test]
+    fn the_initial_grid_and_seg1_seg2_are_one_statement() {
+        let bad = |body: &str| -> ParseError {
             parse(&plane_deck(
                 &format!(
                     "\
 Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
-+ thick=0.04 seg1=5 seg2=3 {clause} (5, 3)"
++ thick=0.04 {body}"
                 ),
                 "",
             ))
             .unwrap_err()
-            .message
-            .contains("hole point (x, y, z)")
         };
-        assert!(holes("contact initial_mesh_grid"));
-        assert!(!holes("contact initial_grid"));
+        for (body, expected) in [
+            (
+                "seg1=5 seg2=3 contact initial_grid (5, 3)",
+                "both set this plane's cell counts",
+            ),
+            (
+                "contact initial_grid (5, 3) seg1=5",
+                "both set this plane's cell counts",
+            ),
+            (
+                "contact initial_mesh_grid (5, 3) seg2=3",
+                "both set this plane's cell counts",
+            ),
+            (
+                "contact initial_grid (5, 3) contact initial_mesh_grid (5, 3)",
+                "has already set on this statement",
+            ),
+            ("contact initial_grid (5)", "takes 2 values"),
+            ("contact initial_grid (5, 3, 1)", "takes 2 values"),
+            ("contact initial_mesh_grid (5, 0)", "must be ≥ 1"),
+            ("contact initial_grid (5, two)", "cell count along p2→p3"),
+            // The clause names no node, like every clause but the two
+            // contact-area ones.
+            (
+                "contact initial_grid Npad (5, 3)",
+                "'contact initial_grid' takes no node name",
+            ),
+        ] {
+            let error = bad(body);
+            assert_eq!(error.line, 3, "'{body}' reports the statement's line");
+            assert!(
+                error.message.contains(expected),
+                "'{body}' must name what it rejects, got: {}",
+                error.message
+            );
+        }
+        // A plane whose only cell counts come from the initial grid needs
+        // no `seg1`/`seg2` at all — that is the whole point of the clause.
+        assert!(parse(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04",
+            ""
+        ))
+        .unwrap_err()
+        .message
+        .contains("has no 'seg1'"));
     }
 
     /// `seg1` counts cells along `p1 → p2` and `seg2` along `p2 → p3`,
@@ -4963,10 +5279,6 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ("ny=3", "seg1"),
             ("wibble=1", "unknown ground-plane parameter 'wibble'"),
             ("hole user1 (5, 3, 0)", "'hole user1' is not supported"),
-            // The initial-grid forms stay rejected, and the error names
-            // `seg1`/`seg2` — the unambiguous way to say the same thing.
-            ("contact initial_grid (5, 5)", "seg1"),
-            ("contact initial_mesh_grid (5, 5)", "seg2"),
             (
                 "contact trace (1, 1, 0, 9, 5, 0, 0.2)",
                 "'contact trace' is not supported",
