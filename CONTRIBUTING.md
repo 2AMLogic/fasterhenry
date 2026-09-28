@@ -35,4 +35,7 @@ every file for the MIT notice text and fails the build if it appears.
 - `#![forbid(unsafe_code)]` in the library stays. SIMD goes through
   `wide`/`simba`, not intrinsics.
 - No BLAS/LAPACK or other C/Fortran dependencies.
+- A new dependency must be permissively licensed — MIT, Apache-2.0, Zlib,
+  Unlicense or Unicode-3.0. `cargo deny check licenses` gates this in CI;
+  `deny.toml` holds the allowlist and why each entry is on it.
 - One PR per issue; PRs are reviewed by Loom's Judge and merged by Champion.
