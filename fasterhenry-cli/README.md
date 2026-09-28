@@ -134,12 +134,14 @@ of *that* plane whichever side `.equiv` named first.
 
 `seg1`/`seg2` become the background cell counts of this engine's own
 cell-centre PEEC mesh (the `nx`/`ny` of the shorthand form), so equal
-counts mean equal resolution rather than an identical node set. Every other
-documented plane parameter is either mapped or **rejected by name** with the
-statement's line number — `rho` (on the corner-point form give
-`sigma = 1/rho`, or set `.default rho=`; the shorthand takes `sigma=` or
-`rho=` on the line, alongside `nhinc=`), `rh`, `segwid1`/`segwid2`,
-`relx`/`rely`/`relz`, `file`, and every hole or contact shape other than
+counts mean equal resolution rather than an identical node set. Both forms
+take the plane's conductivity as either `sigma=` or its reciprocal `rho=` on
+the statement itself, alongside `nhinc=` — naming both on one statement,
+continuation lines included, is a line-numbered error, and naming neither
+falls back to the `.default` conductivity. Every other documented plane
+parameter is either mapped or **rejected by name** with the statement's line
+number — `rh`, `segwid1`/`segwid2`, `relx`/`rely`/`relz`, `file`, and every
+hole or contact shape other than
 `rect`. Nothing on a `G` statement is silently ignored.
 `tests/data/plane_fasthenry.inp` and `tests/data/plane_extension.inp` are
 the same problem in the two syntaxes, and a test requires them to produce
