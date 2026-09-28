@@ -33,13 +33,16 @@ allow = [
     # requirement; satisfied for a binary distribution by shipping the
     # dependency's license text. Most of the tree is `MIT OR Apache-2.0`.
     "Apache-2.0",
-    # Permissive, attribution-only, no source-disclosure obligation. Reaches
-    # the tree today only via `Zlib OR Apache-2.0 OR MIT` crates, which would
-    # pass on the Apache-2.0/MIT arm anyway — listed so a Zlib-only crate is a
-    # deliberate pass rather than a surprise failure.
-    "Unlicense",
     # Public-domain dedication; imposes nothing at all. Reaches the tree today
-    # only via `Unlicense OR MIT`, same reasoning as Zlib above.
+    # only via `Unlicense OR MIT` crates, which would pass on the MIT arm
+    # anyway — listed so an Unlicense-only crate is a deliberate pass rather
+    # than a surprise failure.
+    "Unlicense",
+    # Permissive, attribution-only, no source-disclosure obligation — but not a
+    # public-domain dedication: the notice must be preserved unaltered and
+    # altered versions must be marked as such. Reaches the tree today only via
+    # `Zlib OR Apache-2.0 OR MIT` crates, which would pass on the Apache-2.0/MIT
+    # arm anyway — same reasoning as Unlicense above.
     "Zlib",
     # Unicode data license (Unicode character tables). Permissive,
     # attribution-only. Required, not optional: `icu_*`/`zerovec`-style crates
@@ -48,9 +51,14 @@ allow = [
     "Unicode-3.0",
 ]
 
-# A crate with no license expression at all, or one cargo-deny cannot parse,
-# is an error rather than something to wave through. There is no such crate in
-# the tree today; the check exists to keep it that way.
+# When a crate declares no SPDX expression, cargo-deny falls back to scanning
+# its LICENSE file text and scoring the match against known license texts. This
+# is the minimum score such an inferred license must reach to be used at all;
+# below it the crate is treated as unlicensed and the check fails. cargo-deny's
+# default is 0.8 — 0.93 is a deliberate tightening, so a near-miss on a modified
+# or unfamiliar license text is a failure to look at rather than a silent guess.
+# Nothing in the tree today relies on text inference; the tighter bound exists to
+# keep it that way.
 confidence-threshold = 0.93
 
 # No per-crate exceptions. Anything that needs one is a decision to make in a
