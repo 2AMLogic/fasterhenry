@@ -46,7 +46,7 @@ Status key:
 
 | Field | Status | Notes |
 |---|---|---|
-| `.default x= y= z= w= h= nwinc= nhinc= sigma=` | Supported | Applies to every `N`/`E` line parsed after it; not retroactive. Requires `.units` first (lengths need a scale factor before they can be stored). |
+| `.default x= y= z= w= h= nwinc= nhinc= rw= rh= wx= wy= wz= sigma=` | Supported | Applies to every `N`/`E` line parsed after it; not retroactive. Requires `.units` first (lengths need a scale factor before they can be stored). |
 | `.default rho=` | Supported | Issue #70. Per deck unit, the exact reciprocal of `sigma=`; must be positive. Naming both `sigma=` and `rho=` on one line is a line-numbered error; a later per-line value in either form overrides a `.default` in either form. |
 
 ## Nodes (`N`)
@@ -62,7 +62,8 @@ Status key:
 | `E<name> N<a> N<b> w= h= sigma=\|rho=` | Supported | `w`/`h` are stored as magnitudes (`abs()`); a missing `w`, `h`, or conductivity (`sigma`/`rho`, line or `.default`) is a line-numbered error naming the segment and the field. |
 | `nwinc=`, `nhinc=` | Supported | Per-segment filament subdivision counts. |
 | `rho=` | Supported | Issue #70; same rules as `.default rho=`. |
-| `rw=`, `rh=`, `wx=`, `wy=`, `wz=` | Deferred | Issue #71 (segment orientation/spacing fields). |
+| `rw=`, `rh=` | Supported, differs | Issue #71. The ratio of adjacent filament extents across the width / height, each axis independently, coarsening from both surfaces inward (`nwinc=5 rw=2` cuts the width 1:2:4:2:1). A ratio must be a number ≥ 1 (below 1 is rejected, not guessed at); an omitted ratio keeps the uniform grid, so decks without `rw`/`rh` solve exactly as before. See `inp.rs`'s `# Semantics` section. |
+| `wx=`, `wy=`, `wz=` | Supported | Issue #71. A dimensionless vector along the cross-section's width (only its component perpendicular to the segment counts); a component given nowhere is 0 once any is given. A zero vector, or one parallel to the segment, is a line-numbered error. |
 | `group=<name>` | Supported, extended | This reader's own addition, feeding `.couples` (below) — not a documented FastHenry field. Case-sensitive, like node names. |
 
 ## `.external`

@@ -59,6 +59,22 @@ breaking changes to the API or the command-line interface; patch releases
   description — every directive, supported / differs / deferred, with the
   reason (issue #72). Linked from `fasterhenry-cli/README.md`. Tests now
   pin the multi-node `.equiv a b c …` join and its self-alias rejection.
+- Deck reader: segment filament ratios and width direction (issue #71).
+  `E` lines and `.default` now accept `rw`/`rh` — the ratio of adjacent
+  filament extents across the width and the height, each axis
+  independently, coarsening from the surfaces inward (`nwinc=5 rw=2` cuts
+  the width 1:2:4:2:1) — and `wx`/`wy`/`wz`, a vector along the
+  cross-section's width that orients the segment (a flat bar turned on
+  edge). An omitted ratio keeps the uniform grid, so existing decks solve
+  exactly as before. A ratio that is not a number ≥ 1, a zero width
+  direction, and one parallel to the segment are errors on their own line;
+  a segment the geometry rejects is now reported on its `E` line instead
+  of line 0.
+- Library: `discretize_graded_per_axis`, the surface-graded grid with an
+  independent ratio along each cross-section axis (`discretize_graded` is
+  its equal-ratio case, unchanged), and `Discretization::PerSegmentGraded`
+  with its per-segment grid `AxisGrading { nw, nh, width_ratio,
+  height_ratio }` — the per-segment counterpart of `Discretization::Graded`.
 
 ### Changed
 
@@ -69,6 +85,10 @@ breaking changes to the API or the command-line interface; patch releases
   rejects trailing content) are unchanged — the audit confirmed each as an
   intentional, documented difference from the public format rather than a
   bug, and recorded the reasoning in `docs/fasthenry-compat.md` (issue #72).
+- Library (breaking): `Discretization` gained the `PerSegmentGraded`
+  variant (issue #71). Code that matches `Discretization` exhaustively
+  without a `_` arm no longer compiles, so the next release must be a minor
+  bump (0.2.0).
 
 ## [0.1.1] - 2026-09-27
 

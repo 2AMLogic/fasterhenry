@@ -17,10 +17,10 @@
 use std::f64::consts::TAU;
 
 use fasterhenry::{
-    mutual_inductance, partial_inductance_matrix, self_inductance, solve, Discretization, Filament,
-    Geometry, GmresParams, GridSpacing, IterativeParams, IterativeSystem, MeshError, MeshSystem,
-    Node, NodeId, PfftParams, Port, SegmentDef, SolveError, Solver, SolverChoice, Subdivision,
-    SweepResult, DENSE_PATH_MAX_FILAMENTS,
+    mutual_inductance, partial_inductance_matrix, self_inductance, solve, AxisGrading,
+    Discretization, Filament, Geometry, GmresParams, GridSpacing, IterativeParams, IterativeSystem,
+    MeshError, MeshSystem, Node, NodeId, PfftParams, Port, SegmentDef, SolveError, Solver,
+    SolverChoice, Subdivision, SweepResult, DENSE_PATH_MAX_FILAMENTS,
 };
 use nalgebra::DMatrix;
 use num_complex::Complex;
@@ -577,6 +577,95 @@ fn sweep_preserves_order_and_equals_pointwise_evaluation() {
 
     let empty = system.sweep(&[]).unwrap();
     assert!(empty.impedance_ohm.is_empty() && empty.frequencies_hz.is_empty());
+}
+
+/// `PerSegmentGraded` is the per-segment, per-axis generalisation of both
+/// `PerSegment` (all ratios 1) and `Graded` (one shared ratio): in either
+/// special case it must reproduce that discretization's impedance exactly.
+#[test]
+fn per_segment_graded_generalises_per_segment_and_graded() {
+    let (geometry, ports, per_segment) = coupled_structure();
+    let frequencies = [0.0, 1e6, 1e9];
+    let Discretization::PerSegment(subdivisions) = &per_segment else {
+        unreachable!("coupled_structure is per-segment")
+    };
+    let unit: Vec<AxisGrading> = subdivisions
+        .iter()
+        .copied()
+        .map(AxisGrading::from)
+        .collect();
+    assert_eq!(
+        solve(
+            &geometry,
+            &ports,
+            &Discretization::PerSegmentGraded(unit),
+            &frequencies
+        )
+        .unwrap()
+        .impedance_ohm,
+        solve(&geometry, &ports, &per_segment, &frequencies)
+            .unwrap()
+            .impedance_ohm,
+    );
+
+    let shared = vec![AxisGrading::new(3, 3, 2.0, 2.0); geometry.segment_count()];
+    assert_eq!(
+        solve(
+            &geometry,
+            &ports,
+            &Discretization::PerSegmentGraded(shared),
+            &frequencies
+        )
+        .unwrap()
+        .impedance_ohm,
+        solve(
+            &geometry,
+            &ports,
+            &Discretization::graded(3, 3, 2.0),
+            &frequencies
+        )
+        .unwrap()
+        .impedance_ohm,
+    );
+
+    // Distinct ratios per axis are a different grid from either shared one.
+    let mixed = vec![AxisGrading::new(3, 3, 2.0, 1.0); geometry.segment_count()];
+    let mixed = solve(
+        &geometry,
+        &ports,
+        &Discretization::PerSegmentGraded(mixed),
+        &[1e9],
+    )
+    .unwrap();
+    for ratio in [1.0, 2.0] {
+        let shared = solve(
+            &geometry,
+            &ports,
+            &Discretization::graded(3, 3, ratio),
+            &[1e9],
+        )
+        .unwrap();
+        assert_ne!(mixed.impedance_ohm, shared.impedance_ohm, "ratio {ratio}");
+    }
+
+    assert_eq!(
+        solve(
+            &geometry,
+            &ports,
+            &Discretization::PerSegmentGraded(vec![AxisGrading::from(Subdivision::SINGLE)]),
+            &[1.0]
+        ),
+        Err(SolveError::Mesh(MeshError::SegmentCountMismatch {
+            expected: geometry.segment_count(),
+            got: 1
+        }))
+    );
+    let mut bad = vec![AxisGrading::new(2, 2, 1.0, 1.0); geometry.segment_count()];
+    bad[3].height_ratio = 0.5;
+    assert!(matches!(
+        solve(&geometry, &ports, &Discretization::PerSegmentGraded(bad), &[1.0]),
+        Err(SolveError::InvalidGrading { reason }) if reason.contains("height")
+    ));
 }
 
 #[test]

@@ -13,7 +13,7 @@ pub(super) fn validate(
     basis: &LocalBasis,
     widths: &[(f64, f64)],
     heights: &[(f64, f64)],
-    (nw, nh, ratio): (usize, usize, f64),
+    (nw, nh, width_ratio, height_ratio): (usize, usize, f64, f64),
 ) -> Result<(), DiscretizeError> {
     let shape_scale = segment.length().max(segment.width).max(segment.height);
     // An absolute-coordinate envelope bounds rounding even for rotated cells
@@ -21,9 +21,9 @@ pub(super) fn validate(
     let envelope = segment.a.position().abs().sup(&segment.b.position().abs())
         + basis.width.abs() * (0.5 * segment.width)
         + basis.height.abs() * (0.5 * segment.height);
-    for (axis, direction, cells) in [
-        ("width", basis.width, widths),
-        ("height", basis.height, heights),
+    for (axis, direction, cells, ratio) in [
+        ("width", basis.width, widths, width_ratio),
+        ("height", basis.height, heights, height_ratio),
     ] {
         let coordinate_scale = direction.abs().dot(&envelope);
         let minimum =
