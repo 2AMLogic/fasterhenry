@@ -54,11 +54,21 @@ breaking changes to the API or the command-line interface; patch releases
   name (a `.default rho=` does reach its planes).
 - Deck reader: `.units` accepts the full documented list — `km`, `m`, `cm`,
   `mm`, `um`, `in`, `mils` (`mil` kept as a synonym) — case-insensitively.
+- `docs/fasthenry-compat.md`: a field-by-field compatibility table auditing
+  the deck reader against the public FastHenry `.inp` input-format
+  description — every directive, supported / differs / deferred, with the
+  reason (issue #72). Linked from `fasterhenry-cli/README.md`. Tests now
+  pin the multi-node `.equiv a b c …` join and its self-alias rejection.
 
 ### Changed
 
 - Deck reader: `rho=` is no longer rejected with a "use sigma = 1/rho" hint
   on `.default`, `E` and extension-form `G` lines.
+- No behavior change to existing valid decks from the #72 audit: the
+  `.title` directive, mandatory `.units`, and `.end` semantics (required,
+  rejects trailing content) are unchanged — the audit confirmed each as an
+  intentional, documented difference from the public format rather than a
+  bug, and recorded the reasoning in `docs/fasthenry-compat.md` (issue #72).
 
 ## [0.1.1] - 2026-09-27
 

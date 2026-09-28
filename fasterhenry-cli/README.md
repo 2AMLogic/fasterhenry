@@ -93,8 +93,12 @@ with holes and contact refinement, `.couples` coupling truncation, and
 than guessed at; `src/inp.rs` documents the exact syntax and semantics
 (note that `.units` is mandatory — one of `km`, `m`, `cm`, `mm`, `um`, `in`
 or `mils` — and conductivity is given as `sigma` or resistivity as `rho`,
-both per deck unit, but not both on one line). The JSON problem document
-is the library's own (validated) types; `src/problem.rs` documents it.
+both per deck unit, but not both on one line).
+[`docs/fasthenry-compat.md`](https://github.com/2AMLogic/fasterhenry/blob/main/docs/fasthenry-compat.md)
+is the field-by-field compatibility table against the public format
+description: every directive, supported / differs / deferred, with the
+reason. The JSON problem document is the library's own (validated) types;
+`src/problem.rs` documents it.
 
 ### Ground planes: two `G` grammars
 
