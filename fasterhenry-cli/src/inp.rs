@@ -176,8 +176,11 @@
 //!     * a requested cell at or above the plane's background cell is
 //!       already met there (grading never grows a cell past the
 //!       background cell), so that axis is clamped to the background cell
-//!       rather than coarsened, and a point or line met on both axes adds
-//!       no region at all;
+//!       rather than coarsened — and clamped means *untouched*: the band
+//!       spans the whole plane on that axis at the plane's own cell
+//!       count, so its edges are the background mesh's own whether or not
+//!       the request's coordinate lands on a background grid line. A
+//!       point or line met on both axes adds no region at all;
 //!     * both ends are checked against the plane's slab and footprint, on
 //!       the statement's own line.
 //!
@@ -1875,6 +1878,11 @@ impl PlaneFrame<'_> {
     /// default ratio 2 — or `None` when the background mesh already meets
     /// the request on both axes. See the module documentation for why the
     /// box is exact, not a compromise, on this engine's tensor-product mesh.
+    ///
+    /// An axis the background mesh already meets is *not* banded around the
+    /// request: it spans the whole plane at the plane's own cell count, so
+    /// that axis's cell edges are exactly the ones it has without the
+    /// clause (issue #116).
     fn refine_contact(
         &self,
         what: &str,
@@ -1900,12 +1908,21 @@ impl PlaneFrame<'_> {
             // the background mesh (no cell is ever coarser than it), so it
             // is clamped there: a refinement must never coarsen the plane.
             let background = self.background(axis);
-            let cell = if refine.cell[axis] >= background * (1.0 - 1e-9) {
-                background
-            } else {
-                already_met = false;
-                refine.cell[axis]
-            };
+            if refine.cell[axis] >= background * (1.0 - 1e-9) {
+                // Clamped: that axis is left exactly as the plane meshes
+                // it. Bounding a band to the request's own coordinate
+                // would still cut a graded band into it unless the
+                // coordinate happened to land on a background grid line
+                // (issue #116), so the band spans the whole plane at the
+                // plane's own cell count instead — the background mesh,
+                // edge for edge.
+                region.0[axis] = self.lo[axis];
+                region.1[axis] = self.hi[axis];
+                *count = self.cells[axis];
+                continue;
+            }
+            already_met = false;
+            let cell = refine.cell[axis];
             let (a, b) = (refine.ends[0][axis], refine.ends[1][axis]);
             region.0[axis] = a.min(b) - cell / 2.0;
             region.1[axis] = a.max(b) + cell / 2.0;
@@ -4100,20 +4117,106 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
     /// already met by the background mesh, so that axis is clamped to the
     /// background cell rather than coarsened — and a point met on both
     /// axes changes nothing at all.
+    ///
+    /// A clamped axis spans the whole plane at the plane's own cell count
+    /// (issue #116): the axis is left exactly as the plane meshes it, so
+    /// the region a half-met point names is the plane's full 0 … 10 mm on
+    /// x cut into its own 5 background cells, not a band around the point.
     #[test]
     fn contact_point_never_coarsens_the_background() {
         let plain = parse_ok(&plane_deck(REFINE_PLANE, ""));
         let met = parse_ok(&refine_deck("contact point (5, 3, 0, 2, 3)"));
         assert_eq!(met.geometry, plain.geometry);
 
-        // x asks for 4 mm (met by the 2 mm background: clamped to 2 mm),
-        // y for 0.5 mm.
+        // x asks for 4 mm (met by the 2 mm background: clamped, so x spans
+        // the whole plane at its own nx=5 cells), y for 0.5 mm.
         let half = parse_ok(&refine_deck("contact point (5, 3, 0, 4, 0.5)"));
         let directive = parse_ok(&plane_deck(
             REFINE_PLANE,
-            ".contact Gp 4 2.75 6 3.25 nx=1 ny=1 ratio=2",
+            ".contact Gp 0 2.75 10 3.25 nx=5 ny=1 ratio=2",
         ));
         assert_eq!(half.geometry, directive.geometry);
+    }
+
+    /// The x coordinates the deck's nodes sit at, deduplicated and sorted:
+    /// a plane's x cell edges show up in its node positions, so two decks
+    /// whose planes mesh x identically have the same ones.
+    fn node_axis(deck: &Deck, axis: usize) -> Vec<f64> {
+        let mut values: Vec<f64> = deck
+            .geometry
+            .nodes()
+            .iter()
+            .map(|n| if axis == 0 { n.x } else { n.y })
+            .collect();
+        values.sort_by(f64::total_cmp);
+        values.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+        values
+    }
+
+    /// A `contact point` met on one axis leaves that axis alone even when
+    /// its coordinate does *not* land on a background grid line. x = 5.3 mm
+    /// on this 2 mm-cell plane once cut a 4.3 … 6.3 mm band into x, moving
+    /// every x edge off 0/2/4/6/8/10 mm for a request x had already met;
+    /// now the clamped axis spans the plane and its edges are the plain
+    /// plane's, to the last bit. Issue #116.
+    #[test]
+    fn contact_point_met_on_one_axis_leaves_an_unaligned_axis_alone() {
+        let plain = parse_ok(&plane_deck(REFINE_PLANE, ""));
+        let unaligned = parse_ok(&refine_deck("contact point (5.3, 3, 0, 4, 0.5)"));
+        assert_eq!(node_axis(&unaligned, 0), node_axis(&plain, 0));
+        // y *is* refined, so the two differ there — the assertion above is
+        // about x being untouched, not about the clause doing nothing.
+        assert_ne!(node_axis(&unaligned, 1), node_axis(&plain, 1));
+
+        // The mesh itself: the clamped axis's edges are the background's.
+        let plain_mesh = refine_test_plane(Vec::new()).mesh().unwrap();
+        let refined_mesh = refine_test_plane(vec![ContactRegion::new(
+            [0.0, 2.75e-3],
+            [10e-3, 3.25e-3],
+            [5, 1],
+            2.0,
+        )])
+        .mesh()
+        .unwrap();
+        assert_eq!(refined_mesh.x_edges().len(), plain_mesh.x_edges().len());
+        for (a, b) in refined_mesh.x_edges().iter().zip(plain_mesh.x_edges()) {
+            assert!((a - b).abs() < 1e-15, "x edge {a} vs {b}");
+        }
+        // The point's own cell still honours the y cell it asked for.
+        let j = cell_holding(refined_mesh.y_edges(), 3e-3);
+        assert!(
+            refined_mesh.dy(j) <= 0.5e-3 + 1e-15,
+            "{}",
+            refined_mesh.dy(j)
+        );
+    }
+
+    /// The same for `contact line`, which shares the per-axis loop: a strip
+    /// along x whose y cell is met by the background leaves y's edges as
+    /// they are even though neither end sits on a y grid line, and a strip
+    /// along y whose x cell is met leaves x's alone. Issue #116.
+    #[test]
+    fn contact_line_met_on_one_axis_leaves_an_unaligned_axis_alone() {
+        let plain = parse_ok(&plane_deck(REFINE_PLANE, ""));
+        // y = 3.1 mm is not a 2 mm y grid line (0/2/4/6), and ycell=3 mm is
+        // met by the 2 mm background, so y is clamped; x is refined.
+        let strip = parse_ok(&refine_deck("contact line (2, 3.1, 0, 8, 3.1, 0, 0.5, 3)"));
+        let directive = parse_ok(&plane_deck(
+            REFINE_PLANE,
+            ".contact Gp 1.75 0 8.25 6 nx=13 ny=3 ratio=2",
+        ));
+        assert_eq!(strip.geometry, directive.geometry);
+        assert_eq!(node_axis(&strip, 1), node_axis(&plain, 1));
+        assert_ne!(node_axis(&strip, 0), node_axis(&plain, 0));
+
+        // …and the other way round: a strip along y with x already met.
+        let column = parse_ok(&refine_deck("contact line (5.3, 1, 0, 5.3, 5, 0, 4, 0.5)"));
+        let column_directive = parse_ok(&plane_deck(
+            REFINE_PLANE,
+            ".contact Gp 0 0.75 10 5.25 nx=5 ny=9 ratio=2",
+        ));
+        assert_eq!(column.geometry, column_directive.geometry);
+        assert_eq!(node_axis(&column, 0), node_axis(&plain, 0));
     }
 
     /// A point near the plane's edge: its region is clipped to the plane

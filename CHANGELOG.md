@@ -216,6 +216,27 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader: a `contact point` / `contact line` whose requested cell is
+  already met by the plane's background cell on one axis now leaves that
+  axis's mesh **exactly** as the plane meshes it (issue #116, follow-up to
+  #100). The met axis was clamped to the background cell, as documented, but
+  the region was still bounded to half a background cell either side of the
+  request's own coordinate — so unless that coordinate happened to land on a
+  background grid line, the already-satisfied axis still gained a band plus
+  graded gap cells and every one of its edges moved. On the 10 × 6 mm,
+  2 mm-cell plane of the reader's own tests, `contact point (5.3, 3, 0, 4,
+  0.5)` cut an x band at 4.3 … 6.3 mm for a request x had already met; the
+  clamped axis now spans the whole plane at the plane's own cell count, which
+  reproduces the background edges 0/2/4/6/8/10 mm to the last bit. A point or
+  line met on **both** axes still adds no region at all, and a genuinely
+  refined axis is unchanged. **Mesh change**: a deck with an unaligned,
+  one-axis-met `contact point` or `contact line` and no other refinement on
+  that axis now has fewer cells there (its background count), so its
+  impedance moves by the usual mesh-refinement amount. A deck that *also*
+  refines that axis more finely elsewhere — a `contact connection` or
+  `decay_rect` on the same plane, say — sees the opposite: the whole-plane
+  clamped band merges with the finer one under the existing "merged bands
+  keep their finest cell" rule and widens it across the axis (issue #124).
 - Deck reader: `contact circle` is now rejected with its own error, and is
   recorded as a shape the format does not have rather than as deferred work
   (issue #109, split out of #100). Looking for the argument list that was
