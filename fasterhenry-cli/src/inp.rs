@@ -61,6 +61,7 @@
 //! +       N<name> (x, y, z) …
 //! +       hole rect (x1, y1, z1, x2, y2, z2) …
 //! +       contact rect (x1, y1, z1, x2, y2, z2) …
+//! +       contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell) …
 //! ```
 //!
 //! * **The three corner points** give one corner and its two neighbours:
@@ -95,12 +96,48 @@
 //!   at ratio 2 — use `.contact` to choose other values). The `z`
 //!   coordinates are redundant for a plane parallel to xy, but are checked
 //!   against the plane's own slab so a rectangle meant for another plane
-//!   cannot land here silently. Every other documented shape (`point`,
-//!   `circle`, `decay_rect`, `trace`, the `initial_*` and `equiv_*` forms,
-//!   the user-defined `user1…user7`) is **rejected by name**: this engine's
-//!   holes and contacts are axis-aligned rectangles, and a shape it cannot
-//!   represent must not be quietly approximated by one. Representing them
-//!   needs a change to the plane model, tracked separately (issue #80).
+//!   cannot land here silently.
+//! * **`contact decay_rect`** maps onto a
+//!   [`fasterhenry::plane::ContactRegion`] too — the shape that states its
+//!   own refinement rather than taking `contact rect`'s default. Its nine
+//!   values are the rectangle's **centre** `(x, y, z)`, its **full
+//!   widths** `xwidth`/`ywidth` about that centre, the largest cell wanted
+//!   **inside** it (`xcell`/`ycell`) and the largest cell its outward
+//!   decay may grow to (`xmaxcell`/`ymaxcell`, negative for no limit).
+//!   Each axis is read on its own:
+//!     * the fine cells are the fewest whose extent is no larger than that
+//!       axis's `cell` — `ceil(width / cell)`, so 2 mm at `cell=1` is 2
+//!       cells and at `cell=0.1` is 20;
+//!     * the cells outside grow geometrically by `1/(1 − cell/width)` per
+//!       cell, the documented decay law, until they reach the plane's
+//!       background cell. `cell` must therefore be smaller than `width`
+//!       (the ratio is otherwise not a ratio at all), and a `cell` equal
+//!       to half the width is the familiar ratio 2;
+//!     * a positive `maxcell` **finer** than the plane's own background
+//!       cell is rejected by name: this engine's grading levels off *at*
+//!       the background cell, so honouring a tighter limit would need a
+//!       finer plane (raise `seg1`/`seg2`), not a quietly coarser mesh.
+//!       A limit at or above the background cell never binds, and a
+//!       negative one asks for none.
+//!
+//!   Note that `decay_rect` names its rectangle by **centre and widths**
+//!   while this reader's `hole rect` / `contact rect` name **two opposite
+//!   corners** — the same rectangle written two ways, so `contact
+//!   decay_rect (5, 3, 0, 2, 2, 1, 1, -1, -1)` and `contact rect (4, 2, 0,
+//!   6, 4, 0)` are one region. (That `contact rect` takes corners at all
+//!   is this reader's own choice, mirroring `hole rect`; issue #95 tracks
+//!   reconciling it with the documented centre-and-widths form.)
+//! * Every other documented shape is **rejected by name**, on the
+//!   statement's own line: this engine's holes and contacts are
+//!   axis-aligned rectangles, and a shape it cannot represent must not be
+//!   quietly approximated by one. Representing each needs a change to the
+//!   plane model, tracked separately:
+//!     * `hole point`, `hole circle` — issue #98;
+//!     * `hole user1` … `user7` — issue #99;
+//!     * `contact point`, `contact line`, `contact circle`,
+//!       `contact trace` — issue #100;
+//!     * `contact equiv_rect`, `contact connection`,
+//!       `contact initial_grid`, `contact initial_mesh_grid` — issue #101.
 //! * The remaining documented plane parameters are rejected by name too,
 //!   each with the reason and the alternative: `rh` (plane filaments are
 //!   uniform), `segwid1`/`segwid2` (bar widths follow
@@ -688,6 +725,91 @@ fn rect_corners(
     ])
 }
 
+/// A `contact decay_rect` clause, kept raw until the plane's own geometry
+/// — and so its background cell — is known.
+#[derive(Clone, Copy, Debug)]
+struct DecayRect {
+    /// The rectangle's centre `(x, y, z)`, metres.
+    centre: [f64; 3],
+    /// Its full widths `(x, y)`, metres.
+    widths: [f64; 2],
+    /// The largest cell wanted inside it, per axis, metres.
+    cell: [f64; 2],
+    /// The largest cell the outward decay may grow to, per axis, metres;
+    /// `None` where the deck gave a negative value (no limit).
+    limit: [Option<f64>; 2],
+}
+
+/// The nine values of a `contact decay_rect` clause:
+/// `(x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` — the
+/// rectangle's centre, its full widths, the largest cell wanted inside it,
+/// and the largest cell the outward decay may grow to (negative for no
+/// limit). See the [module documentation](self).
+fn decay_rect_values(
+    values: &[String],
+    what: &str,
+    unit: f64,
+    line: usize,
+) -> Result<DecayRect, ParseError> {
+    if values.len() != 9 {
+        return Err(err(
+            line,
+            format!(
+                "{what} takes 9 values (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell), got {}",
+                values.len()
+            ),
+        ));
+    }
+    let centre = triple(&values[..3], what, unit, line)?;
+    let mut widths = [0.0f64; 2];
+    let mut cell = [0.0f64; 2];
+    let mut limit = [None; 2];
+    for axis in 0..2 {
+        let name = ['x', 'y'][axis];
+        widths[axis] = parse_number(&values[3 + axis], line)? * unit;
+        // `parse_number` has already rejected a non-finite value, so a
+        // plain comparison is total here.
+        if widths[axis] <= 0.0 {
+            return Err(err(
+                line,
+                format!(
+                    "{what}: {name}width={} must be > 0 — it is the rectangle's full width about its centre, not a corner",
+                    widths[axis]
+                ),
+            ));
+        }
+        cell[axis] = parse_number(&values[5 + axis], line)? * unit;
+        if !(cell[axis] > 0.0 && cell[axis] < widths[axis]) {
+            return Err(err(
+                line,
+                format!(
+                    "{what}: {name}cell={} metres must be > 0 and smaller than {name}width={} — the decay ratio is 1/(1 − {name}cell/{name}width), so a cell as wide as the rectangle grades nothing",
+                    cell[axis], widths[axis]
+                ),
+            ));
+        }
+        let raw = parse_number(&values[7 + axis], line)?;
+        limit[axis] = if raw < 0.0 {
+            None
+        } else if raw > 0.0 {
+            Some(raw * unit)
+        } else {
+            return Err(err(
+                line,
+                format!(
+                    "{what}: {name}maxcell=0 is neither a cell size nor the 'no limit' sentinel; give a positive cell size, or a negative value to decay all the way to the plane's background cell"
+                ),
+            ));
+        };
+    }
+    Ok(DecayRect {
+        centre,
+        widths,
+        cell,
+        limit,
+    })
+}
+
 /// Parses a FastHenry-form `G` ground-plane statement — the corner-point
 /// grammar — into the same [`PlaneSpec`] the extension form produces, plus
 /// its in-plane node declarations. See the [module documentation](self).
@@ -713,6 +835,7 @@ fn parse_plane_statement(
     // is known (their z is checked against the plane's slab).
     let mut hole_rects: Vec<[[f64; 3]; 2]> = Vec::new();
     let mut contact_rects: Vec<[[f64; 3]; 2]> = Vec::new();
+    let mut contact_decays: Vec<DecayRect> = Vec::new();
 
     for item in scan_plane_items(body, line)? {
         match item {
@@ -805,6 +928,9 @@ fn parse_plane_statement(
                     ("contact", "rect") => {
                         contact_rects.push(rect_corners(&values, &what, unit, line)?);
                     }
+                    ("contact", "decay_rect") => {
+                        contact_decays.push(decay_rect_values(&values, &what, unit, line)?);
+                    }
                     ("hole", other) => {
                         return Err(err(
                             line,
@@ -817,7 +943,7 @@ fn parse_plane_statement(
                         return Err(err(
                             line,
                             format!(
-                                "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)' (and '.contact' to set its refinement)"
+                                "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)' or 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)' (and '.contact' to set a rectangle's refinement directly)"
                             ),
                         ));
                     }
@@ -961,10 +1087,55 @@ fn parse_plane_statement(
         let (lo, hi) = footprint("'hole rect'", rect)?;
         holes.push(Hole { lo, hi });
     }
-    let mut contacts = Vec::with_capacity(contact_rects.len());
+    let mut contacts = Vec::with_capacity(contact_rects.len() + contact_decays.len());
     for rect in contact_rects {
         let (lo, hi) = footprint("'contact rect'", rect)?;
         contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
+    }
+    for decay in contact_decays {
+        let what = "'contact decay_rect'";
+        in_slab(what, decay.centre)?;
+        let mut region = ([0.0f64; 2], [0.0f64; 2]);
+        let mut region_cells = [0usize; 2];
+        let mut ratio = [0.0f64; 2];
+        for axis in 0..2 {
+            let name = ['x', 'y'][axis];
+            let half = decay.widths[axis] / 2.0;
+            region.0[axis] = decay.centre[axis] - half;
+            region.1[axis] = decay.centre[axis] + half;
+            // The fine cells are the fewest whose own extent is no larger
+            // than the deck's `<axis>cell`; a width that is an exact
+            // multiple of it must not gain a spurious extra cell from a
+            // last-bit rounding of the division.
+            let quotient = decay.widths[axis] / decay.cell[axis];
+            let rounded = quotient.round();
+            region_cells[axis] = if (quotient - rounded).abs() <= 1e-9 * rounded {
+                rounded
+            } else {
+                quotient.ceil()
+            } as usize;
+            // The documented decay law: with `r0` the requested cell as a
+            // fraction of the rectangle's width, each cell outside the
+            // rectangle is `1/(1 − r0)` times its inward neighbour.
+            ratio[axis] = 1.0 / (1.0 - decay.cell[axis] / decay.widths[axis]);
+            let background = (hi[axis] - lo[axis]) / cells[axis] as f64;
+            if decay.limit[axis].is_some_and(|limit| limit < background * (1.0 - 1e-9)) {
+                return Err(err(
+                    line,
+                    format!(
+                        "{what}: {name}maxcell={} metres is finer than ground plane '{head}'s own background cell ({background} metres), and this engine's grading levels off at that cell rather than below it; raise 'seg{}' so the whole plane is at least that fine, or drop the limit (a negative value) to accept the background cell",
+                        decay.limit[axis].unwrap_or_default(),
+                        if axis == axis1 { 1 } else { 2 }
+                    ),
+                ));
+            }
+        }
+        contacts.push(ContactRegion::graded_per_axis(
+            region.0,
+            region.1,
+            region_cells,
+            ratio,
+        ));
     }
 
     for (name, position) in &nodes {
@@ -1371,12 +1542,12 @@ pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, Par
                         }
                     }
                     let plane = plane_named(&mut planes, name, ".contact", number)?;
-                    plane.plane.contacts.push(ContactRegion {
-                        lo: [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
-                        hi: [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
+                    plane.plane.contacts.push(ContactRegion::new(
+                        [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
+                        [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
                         cells,
                         ratio,
-                    });
+                    ));
                 }
                 "end" => {
                     if tokens.len() != 1 {
@@ -2484,6 +2655,149 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         assert_eq!(fasthenry.discretization, extension.discretization);
     }
 
+    /// `contact decay_rect` names the same rectangle as `contact rect`
+    /// when its numbers say so: centred at (5, 3) mm, 2 mm across each
+    /// way, cells no larger than 1 mm, decaying to the background cell.
+    /// That is 2 × 2 fine cells at ratio 1/(1 − 1/2) = 2 — exactly the
+    /// region `contact rect` and a bare `.contact` build.
+    #[test]
+    fn decay_rect_equals_the_rect_form_at_the_same_numbers() {
+        let decay = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ contact decay_rect (5, 3, 0, 2, 2, 1, 1, -1, -1)",
+            "",
+        ));
+        let rect = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ contact rect (4, 2, 0, 6, 4, 0)",
+            "",
+        ));
+        assert_eq!(decay.geometry, rect.geometry);
+        assert_eq!(decay.ports, rect.ports);
+    }
+
+    /// The fine cell count and the decay ratio are both derived per axis,
+    /// so an anisotropic `decay_rect` grades x and y at different rates. A
+    /// 2 × 2 mm rectangle asking for 1 mm cells across x and 0.1 mm across
+    /// y is 2 × 20 fine cells decaying at 1/(1 − 1/2) = 2 across x and
+    /// 1/(1 − 0.1/2) = 20/19 across y.
+    #[test]
+    fn decay_rect_derives_cells_and_ratio_per_axis() {
+        let deck = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.035 seg1=5 seg2=3
++ contact decay_rect (5, 3, 0, 2, 2, 1, 0.1, -1, -1)",
+            "",
+        ));
+        let plane = GroundPlane {
+            lo: [0.0, 0.0],
+            hi: [10e-3, 6e-3],
+            z_top: 0.035e-3 / 2.0,
+            thickness: 0.035e-3,
+            nx: 5,
+            ny: 3,
+            sigma: 5.8e7,
+            holes: Vec::new(),
+            contacts: vec![ContactRegion::graded_per_axis(
+                [4e-3, 2e-3],
+                [6e-3, 4e-3],
+                [2, 20],
+                [1.0 / (1.0 - 1e-3 / 2e-3), 1.0 / (1.0 - 0.1e-3 / 2e-3)],
+            )],
+        };
+        let mesh = plane.mesh().unwrap();
+        // The deck's plane is that plane: same graded mesh, same landing.
+        assert_eq!(deck.geometry.nodes().len(), mesh.nx() * mesh.ny() + 1);
+        assert_eq!(deck.geometry.segment_count(), mesh.bars() + 1);
+        // …and it is genuinely anisotropic: putting x's ratio on both axes
+        // keeps x as it was and coarsens y far sooner, so a single ratio
+        // cannot stand in for the pair.
+        let one_ratio = GroundPlane {
+            contacts: vec![ContactRegion::new(
+                [4e-3, 2e-3],
+                [6e-3, 4e-3],
+                [2, 20],
+                plane.contacts[0].ratio[0],
+            )],
+            ..plane.clone()
+        }
+        .mesh()
+        .unwrap();
+        assert_eq!(mesh.nx(), one_ratio.nx(), "x decays at the same ratio");
+        assert!(
+            mesh.ny() > one_ratio.ny(),
+            "y decays more gently on its own ratio: {} vs {}",
+            mesh.ny(),
+            one_ratio.ny()
+        );
+    }
+
+    /// Every `decay_rect` parameter the reader cannot honour is rejected by
+    /// name on the statement's own line; nothing is quietly approximated.
+    #[test]
+    fn decay_rect_parameter_errors() {
+        let bad = |clause: &str| -> ParseError {
+            parse(&plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ {clause}"
+                ),
+                "",
+            ))
+            .unwrap_err()
+        };
+        for (clause, expected) in [
+            // Eight values is the `rect`-plus-two shape a reader that
+            // guessed the argument list would accept: it is not this one.
+            (
+                "contact decay_rect (4, 2, 0, 6, 4, 0, 2, 2)",
+                "takes 9 values",
+            ),
+            ("contact decay_rect (5, 3, 0, 0, 2, 1, 1, -1, -1)", "xwidth"),
+            ("contact decay_rect (5, 3, 0, 2, 2, 2, 1, -1, -1)", "xcell"),
+            ("contact decay_rect (5, 3, 0, 2, 2, 1, 0, -1, -1)", "ycell"),
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 1, 1, 0, -1)",
+                "xmaxcell=0",
+            ),
+            // The plane's background cell is 2 mm each way; a limit finer
+            // than that asks for a mesh this engine grades toward, not
+            // below.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 1, 1, 1.5, -1)",
+                "finer than ground plane 'Gp's own background cell",
+            ),
+            // The z is checked against the plane's slab, as `rect`'s is.
+            (
+                "contact decay_rect (5, 3, 3, 2, 2, 1, 1, -1, -1)",
+                "is not in ground plane 'Gp'",
+            ),
+        ] {
+            let error = bad(clause);
+            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
+            assert!(
+                error.message.contains(expected),
+                "'{clause}' must name what it rejects, got: {}",
+                error.message
+            );
+        }
+        // A limit at or above the background cell never binds.
+        parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ contact decay_rect (5, 3, 0, 2, 2, 1, 1, 2, 2)",
+            "",
+        ));
+    }
+
     /// `seg1` counts cells along `p1 → p2` and `seg2` along `p2 → p3`,
     /// whichever axis each of those edges runs along.
     #[test]
@@ -2686,12 +3000,20 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
                 "'contact circle' is not supported",
             ),
             (
-                "contact decay_rect (4, 2, 0, 6, 4, 0, 2, 2)",
-                "'contact decay_rect' is not supported",
-            ),
-            (
                 "contact initial_grid (5, 5)",
                 "'contact initial_grid' is not supported",
+            ),
+            (
+                "contact initial_mesh_grid (5, 5)",
+                "'contact initial_mesh_grid' is not supported",
+            ),
+            (
+                "contact line (1, 1, 0, 9, 5, 0, 0.2, 0.2)",
+                "'contact line' is not supported",
+            ),
+            (
+                "contact connection (5, 3, 0, 2, 2, 2)",
+                "'contact connection' is not supported",
             ),
             (
                 "contact trace (1, 1, 0, 9, 5, 0, 0.2)",

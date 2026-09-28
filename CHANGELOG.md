@@ -36,9 +36,11 @@ breaking changes to the API or the command-line interface; patch releases
   Every remaining documented plane parameter is rejected by name, with the
   statement's line number and the alternative: `rh`, `segwid1`/`segwid2`,
   `relx`/`rely`/`relz`, `file`, and every hole or contact shape other than `rect` (`point`, `circle`,
-  `decay_rect`, `trace`, the `initial_*`/`equiv_*` forms and the
-  user-defined `user1…user7`) — nothing on a `G` statement is silently
-  ignored, and representing those shapes is tracked in #80.
+  `decay_rect`, `line`, `trace`, `connection`, the `initial_*`/`equiv_*`
+  forms and the user-defined `user1…user7`) — nothing on a `G` statement is
+  silently ignored, and representing those shapes is tracked in #80.
+  (`contact decay_rect` has since been implemented — see its own entry
+  below; the rest are still rejected, tracked in #98–#101.)
   `fasterhenry-cli/tests/data/plane_fasthenry.inp` and
   `plane_extension.inp` are the same self-authored plane problem in the two
   syntaxes, and a new test requires them to produce the same geometry and
@@ -58,6 +60,31 @@ breaking changes to the API or the command-line interface; patch releases
   `sigma=` and `rho=` on one corner-point statement — continuation lines
   included — is the same line-numbered error as everywhere else, and naming
   neither still falls back to the `.default` conductivity.
+- Deck reader: the `contact decay_rect` clause on a corner-point `G`
+  ground-plane statement (issue #80, follow-up to #69). Its nine documented
+  values — the rectangle's centre `(x, y, z)`, its full widths
+  `xwidth`/`ywidth` about that centre, the largest cell wanted inside it
+  (`xcell`/`ycell`) and the largest cell the outward decay may grow to
+  (`xmaxcell`/`ymaxcell`, negative for no limit) — map onto a
+  `fasterhenry::plane::ContactRegion` per axis: `ceil(width / cell)` fine
+  cells, and the documented decay law `1/(1 − cell/width)` as that axis's
+  outward growth ratio. `cell` must be smaller than `width` (the
+  documentation's own `r0 < 1`), and because this engine's grading levels
+  off at the plane's *background* cell, a positive `maxcell` finer than that
+  cell is rejected by name (raise `seg1`/`seg2`) rather than silently
+  yielding a coarser mesh; one at or above it never binds.
+  `fasterhenry-cli/tests/data/plane_decay_rect.inp` and
+  `plane_decay_extension.inp` are the same self-authored problem written as
+  a `decay_rect` clause and as a `.contact` directive, and a new test
+  requires them to produce the same geometry and the same `Z(ω)`. Every
+  other hole and contact shape keeps its line-numbered rejection, now
+  tracked one issue per model change it needs: #98 (`hole point`,
+  `hole circle`), #99 (`hole user1…user7`), #100 (`contact point`,
+  `line`, `circle`, `trace`) and #101 (`contact equiv_rect`, `connection`,
+  `initial_grid`, `initial_mesh_grid`).
+- Library: `ContactRegion::graded_per_axis`, a contact region whose outward
+  decay ratio is chosen per axis — what an anisotropically refined region
+  needs, and what `contact decay_rect` derives from the deck (issue #80).
 - Deck reader: `.units` accepts the full documented list — `km`, `m`, `cm`,
   `mm`, `um`, `in`, `mils` (`mil` kept as a synonym) — case-insensitively.
 - `docs/fasthenry-compat.md`: a field-by-field compatibility table auditing
@@ -91,6 +118,13 @@ breaking changes to the API or the command-line interface; patch releases
   rejects trailing content) are unchanged — the audit confirmed each as an
   intentional, documented difference from the public format rather than a
   bug, and recorded the reasoning in `docs/fasthenry-compat.md` (issue #72).
+- Library (breaking): `ContactRegion::ratio` is now `[f64; 2]` — the
+  outward decay ratio per axis — where it was a single `f64` applying to
+  both (issue #80). `ContactRegion::new` and `ContactRegion::centred` still
+  take one `f64` and set both axes alike, so every call through them is
+  unchanged; only code reading the field, or building a `ContactRegion` as a
+  struct literal, needs updating. `ContactRegion::graded_per_axis` is the
+  new constructor that sets the two apart.
 - Library (breaking): `Discretization` gained the `PerSegmentGraded`
   variant (issue #71). Code that matches `Discretization` exhaustively
   without a `_` arm no longer compiles, so the next release must be a minor

@@ -1,0 +1,34 @@
+* Self-authored deck: the same copper ground plane as
+* `tests/data/plane_fasthenry.inp`, but with its refined contact region
+* declared as a `contact decay_rect` clause instead of a `contact rect`
+* one — centre, full widths, the largest cell wanted inside the rectangle,
+* and the largest cell the outward decay may grow to (negative here: decay
+* all the way to the plane's own background cell).
+*
+* The rectangle is centred at (5, 3) mm and is 4 mm across x by 2 mm
+* across y, so it spans (3, 2) to (7, 4) mm. Cells inside are no larger
+* than 2 mm across x and 1 mm across y, which is 2 x 2 fine cells; the
+* decay ratio is 1/(1 - cell/width) on each axis, here 1/(1 - 1/2) = 2
+* both ways.
+*
+* `tests/data/plane_decay_extension.inp` is the same problem written with
+* this crate's own `.contact` directive, which names that rectangle and
+* those two numbers directly; `tests/roundtrip.rs` requires the two to
+* produce the same geometry and the same Z(omega).
+.units mm
+.default sigma=5.8e4
+Gplane x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.035 seg1=5 seg2=3 sigma=5.8e4
++ hole rect (0.5, 4.5, 0, 1.5, 5.5, 0)
++ contact decay_rect (5, 3, 0, 4, 2, 2, 1, -1, -1)
++ Nland1 (1, 1, 0)
++ Nland2 (9, 5, 0)
+Ntop1 x=1 y=1 z=0.5
+Ntop2 x=9 y=5 z=0.5
+Nfoot2 x=9 y=5 z=0
+Evia1 Ntop1 Nland1 w=0.2 h=0.2
+Evia2 Ntop2 Nfoot2 w=0.2 h=0.2
+.equiv Nland2 Nfoot2
+.external Ntop1 Ntop2 plane
+.freq fmin=1e6 fmax=1e8 ndec=1
+.end

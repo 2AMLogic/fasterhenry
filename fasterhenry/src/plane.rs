@@ -31,7 +31,9 @@
 //! refining everywhere is ruinous. A [`ContactRegion`] refines locally
 //! instead — inside the region the mesh is uniform at the fine cell
 //! `h = w / cells`, and outside it each cell is `ratio` times its
-//! neighbour until it reaches the background cell `c`.
+//! neighbour until it reaches the background cell `c`. The ratio is
+//! itself per axis, so a region that is refined harder across x than
+//! across y decays at its own rate on each.
 //!
 //! Grading is applied **per axis**, so the mesh stays a structured
 //! (tensor-product) grid: a region's x-refinement extends as a band
@@ -47,8 +49,9 @@
 //!
 //! Per axis, for a span `W` with background count `n` (coarse cell
 //! `c = W/n`) and one region of width `w` cut into `k` cells
-//! (`h = w/k`) at ratio `r`: the region contributes `k` cells, and each
-//! gap of length `g` beside it takes the smallest `m` cells with
+//! (`h = w/k`) at that axis's ratio `r`: the region contributes `k`
+//! cells, and each gap of length `g` beside it takes the smallest `m`
+//! cells with
 //!
 //! ```text
 //! Σ_{i<m} min(h·r^(i+1), c)  ≥  g
@@ -98,8 +101,8 @@ pub struct Hole {
 /// meshed finely and decaying back to the background cell outside.
 ///
 /// Inside `[lo, hi]` the mesh is uniform with `cells` cells per axis (fine
-/// cell `h = (hi − lo) / cells`); outside, cells grow by `ratio` each until
-/// they reach the background cell. See the [module
+/// cell `h = (hi − lo) / cells`); outside, cells grow by that axis's
+/// `ratio` each until they reach the background cell. See the [module
 /// documentation](self#graded-contact-regions) for the tensor-product
 /// consequence and the cell-count formula.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,16 +113,30 @@ pub struct ContactRegion {
     pub hi: [f64; 2],
     /// Fine cells across the region, `[x, y]`.
     pub cells: [usize; 2],
-    /// Geometric growth ratio per cell outside the region (`>= 1`; `1` is
-    /// no decay at all, i.e. a uniformly fine axis).
-    pub ratio: f64,
+    /// Geometric growth ratio per cell outside the region, per axis
+    /// `[x, y]` (each `>= 1`; `1` is no decay at all on that axis, i.e. a
+    /// uniformly fine axis). [`ContactRegion::new`] sets both alike;
+    /// [`ContactRegion::graded_per_axis`] sets them apart, which is what a
+    /// region refined harder across one axis than the other needs.
+    pub ratio: [f64; 2],
 }
 
 impl ContactRegion {
     /// A region spanning `lo … hi`, `cells` fine cells per axis, decaying
-    /// outward by `ratio`.
+    /// outward by `ratio` on both axes alike.
     #[must_use]
     pub fn new(lo: [f64; 2], hi: [f64; 2], cells: [usize; 2], ratio: f64) -> Self {
+        Self::graded_per_axis(lo, hi, cells, [ratio, ratio])
+    }
+
+    /// A region spanning `lo … hi`, `cells` fine cells per axis, decaying
+    /// outward by a ratio chosen per axis (`[x, y]`).
+    ///
+    /// The anisotropic case [`ContactRegion::new`]'s single ratio cannot
+    /// express: a region whose refinement differs between the axes decays
+    /// back to the background cell at a different rate on each.
+    #[must_use]
+    pub fn graded_per_axis(lo: [f64; 2], hi: [f64; 2], cells: [usize; 2], ratio: [f64; 2]) -> Self {
         Self {
             lo,
             hi,
@@ -509,10 +526,12 @@ impl GroundPlane {
         }
         let mut bands: [Vec<Band>; 2] = [Vec::new(), Vec::new()];
         for contact in &self.contacts {
-            if !(contact.ratio.is_finite() && contact.ratio >= 1.0) {
-                return Err(PlaneError::ContactRatio {
-                    ratio: contact.ratio,
-                });
+            if let Some(&ratio) = contact
+                .ratio
+                .iter()
+                .find(|ratio| !(ratio.is_finite() && **ratio >= 1.0))
+            {
+                return Err(PlaneError::ContactRatio { ratio });
             }
             if contact.cells[0] < 1 || contact.cells[1] < 1 {
                 return Err(PlaneError::ContactZeroCells {
@@ -554,7 +573,7 @@ impl GroundPlane {
                     start,
                     end,
                     cells: (((end - start) / fine).round() as usize).max(1),
-                    ratio: contact.ratio,
+                    ratio: contact.ratio[axis],
                 });
             }
         }
@@ -914,6 +933,42 @@ mod tests {
         for i in 0..mesh.nx() {
             assert!((mesh.dx(i) - 0.5e-3).abs() < 1e-12);
         }
+    }
+
+    /// A per-axis ratio decays the two axes at different rates — the case
+    /// a single scalar ratio cannot express. On the 10 × 6 mm test plane
+    /// (2 mm background cell) a 2 × 2 mm region at 0.5 mm fine cells is
+    /// ungraded across x (ratio 1, so 0.5 mm everywhere: 20 cells) and
+    /// decays in one step across y (ratio 4, so 0.5 mm × 4 = the 2 mm
+    /// background cell immediately: 1 + 4 + 1 cells).
+    #[test]
+    fn a_per_axis_ratio_decays_each_axis_at_its_own_rate() {
+        let region =
+            |ratio| ContactRegion::graded_per_axis([4e-3, 2e-3], [6e-3, 4e-3], [4, 4], ratio);
+        let mesh = GroundPlane {
+            contacts: vec![region([1.0, 4.0])],
+            ..test_plane()
+        }
+        .mesh()
+        .unwrap();
+        assert_eq!((mesh.nx(), mesh.ny()), (20, 6));
+
+        // Swapping the ratios swaps the two axes' layouts: across x the
+        // two 4 mm gaps each take two background cells (2 + 4 + 2), and y
+        // is now the uniformly fine axis (6 mm / 0.5 mm).
+        let mesh = GroundPlane {
+            contacts: vec![region([4.0, 1.0])],
+            ..test_plane()
+        }
+        .mesh()
+        .unwrap();
+        assert_eq!((mesh.nx(), mesh.ny()), (8, 12));
+
+        // `new` is the isotropic special case of `graded_per_axis`.
+        assert_eq!(
+            ContactRegion::new([4e-3, 2e-3], [6e-3, 4e-3], [4, 4], 1.5),
+            region([1.5, 1.5])
+        );
     }
 
     #[test]
