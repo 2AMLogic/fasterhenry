@@ -1365,6 +1365,35 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
 /// Parses a whole deck under `options`. See the [module documentation](self)
 /// for the subset and [`ParseOptions`] for what each option changes.
 pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, ParseError> {
+    let folded = fold_lines(text, options)?;
+    let mut deck = DeckBuilder {
+        title: folded.title,
+        ..DeckBuilder::default()
+    };
+    for &(number, ref tokens) in &folded.lines {
+        deck.apply_line(number, tokens)?;
+    }
+    deck.finish(folded.last_number)
+}
+
+/// A deck's lines ready for dispatch: `*` comments and blank lines dropped,
+/// and every `+` continuation folded into the line it continues.
+struct FoldedDeck<'a> {
+    /// The title taken from the physical first line in
+    /// [`ParseOptions::fasthenry_compat`] mode, `None` otherwise (a later
+    /// `.title` directive still replaces it).
+    title: Option<String>,
+    /// The number of the last physical line of the file, for the deck-level
+    /// errors that belong to no directive (a missing `.end`, `.units`).
+    last_number: usize,
+    /// Each surviving line: the number of its *first* physical line, and its
+    /// whitespace-separated tokens with every continuation appended.
+    lines: Vec<(usize, Vec<&'a str>)>,
+}
+
+/// Reads the raw text into [`FoldedDeck`] — everything
+/// [`parse_with_options`] does before the first directive is dispatched.
+fn fold_lines(text: &str, options: ParseOptions) -> Result<FoldedDeck<'_>, ParseError> {
     let mut raw_lines = text.lines().enumerate();
     let mut title = None;
     let mut last_number = 0;
@@ -1406,561 +1435,880 @@ pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, Par
         }
     }
 
-    let mut unit: Option<f64> = None;
-    let mut defaults = Defaults::default();
-    let mut names = Names::default();
-    let mut positions: Vec<[f64; 3]> = Vec::new();
-    let mut segment_defs: Vec<SegmentSpec> = Vec::new();
-    let mut subdivisions: Vec<AxisGrading> = Vec::new();
-    let mut segment_groups: Vec<String> = Vec::new();
-    // `.couples`: the declared cross-group pairs, the line of the first
-    // directive (for error reporting), and whether `all` was declared.
-    let mut couples: Vec<[String; 2]> = Vec::new();
-    // Every group name any `.couples` line mentions, with the line it was
-    // mentioned on, so a name no segment carries is an error even when it was
-    // named alone and so appears in no pair.
-    let mut couples_names: Vec<(usize, String)> = Vec::new();
-    let mut couples_line: Option<usize> = None;
-    let mut couples_all = false;
-    let mut named_couples = false;
-    let mut ports: Vec<Port> = Vec::new();
-    let mut frequencies: Vec<f64> = Vec::new();
-    let mut planes: Vec<PlaneSpec> = Vec::new();
-    // In-plane nodes declared inside a FastHenry-form `G` statement: the
-    // node slot, the plane it belongs to, and the line it was declared on.
-    let mut plane_nodes: Vec<(usize, usize, usize)> = Vec::new();
-    // The line each `.equiv` alias was declared on, for the error an
-    // in-plane node joined across two planes has to raise.
-    let mut alias_lines: HashMap<usize, usize> = HashMap::new();
-    let mut ended = false;
+    Ok(FoldedDeck {
+        title,
+        last_number,
+        lines,
+    })
+}
 
-    for &(number, ref tokens) in &lines {
-        if ended {
+/// A deck under construction: everything the directives of a deck
+/// accumulate, between [`fold_lines`] and [`DeckBuilder::finish`].
+///
+/// One field per piece of deck-wide state, so that each directive is read by
+/// its own method ([`DeckBuilder::apply_line`] dispatches) rather than by an
+/// arm of one function sharing a stack frame's worth of locals.
+#[derive(Default)]
+struct DeckBuilder {
+    /// The deck's title: its last `.title`, or (in compat mode) line 1.
+    title: Option<String>,
+    /// The `.units` factor to metres; `None` until `.units` is read, which
+    /// is what makes a length-bearing line before it an error.
+    unit: Option<f64>,
+    /// The `.default` fields in force, already scaled.
+    defaults: Defaults,
+    /// Node names to slots, plus the `.equiv` aliases between slots.
+    names: Names,
+    /// Every declared node's position in metres, by slot.
+    positions: Vec<[f64; 3]>,
+    /// Every `E` line, pending assembly.
+    segment_defs: Vec<SegmentSpec>,
+    /// One filament grid per `E` line, in `segment_defs` order.
+    subdivisions: Vec<AxisGrading>,
+    /// One `group=` name per `E` line (empty for untagged), same order.
+    segment_groups: Vec<String>,
+    /// The cross-group pairs `.couples` declared.
+    couples: Vec<[String; 2]>,
+    /// Every group name any `.couples` line mentions, with the line it was
+    /// mentioned on, so a name no segment carries is an error even when it
+    /// was named alone and so appears in no pair.
+    couples_names: Vec<(usize, String)>,
+    /// The line of the *first* `.couples` directive, for error reporting.
+    couples_line: Option<usize>,
+    /// Whether `.couples all` was declared.
+    couples_all: bool,
+    /// Whether any `.couples` named groups (the two are exclusive).
+    named_couples: bool,
+    /// Ports from `.external`, in deck order.
+    ports: Vec<Port>,
+    /// The `.freq` sweep in hertz.
+    frequencies: Vec<f64>,
+    /// Every `G` statement, pending assembly.
+    planes: Vec<PlaneSpec>,
+    /// In-plane nodes declared inside a FastHenry-form `G` statement: the
+    /// node slot, the plane it belongs to, and the line it was declared on.
+    plane_nodes: Vec<(usize, usize, usize)>,
+    /// The line each `.equiv` alias was declared on, for the error an
+    /// in-plane node joined across two planes has to raise.
+    alias_lines: HashMap<usize, usize>,
+    /// Whether `.end` has been read (content after it is an error).
+    ended: bool,
+}
+
+impl DeckBuilder {
+    /// Dispatches one folded line to the method that reads it. Every method
+    /// it calls takes the line number it was read on, so that the error it
+    /// raises carries the deck's own line rather than the parser's.
+    fn apply_line(&mut self, number: usize, tokens: &[&str]) -> Result<(), ParseError> {
+        if self.ended {
             return Err(err(number, "content after .end"));
         }
         let head = tokens[0];
         let keyword = head.to_ascii_lowercase();
-        let factor = unit.unwrap_or(1.0);
+        // The unit in force for *this* line: a line that needs one and was
+        // read before `.units` is rejected by the method that reads it.
+        let factor = self.unit.unwrap_or(1.0);
 
         if let Some(directive) = keyword.strip_prefix('.') {
-            match directive {
-                "title" => title = Some(tokens[1..].join(" ")),
-                "units" => {
-                    if tokens.len() != 2 {
-                        return Err(err(number, "expected .units <unit>"));
-                    }
-                    if unit.is_some() {
-                        return Err(err(number, "duplicate .units directive"));
-                    }
-                    unit = Some(unit_factor(tokens[1], number)?);
+            return self.apply_directive(directive, tokens, factor, number);
+        }
+
+        match keyword.chars().next() {
+            Some('n') => self.apply_node(tokens, factor, number),
+            Some('e') => self.apply_segment(tokens, factor, number),
+            Some('g') => self.apply_ground_plane(tokens, factor, number),
+            _ => Err(err(
+                number,
+                format!("unrecognized line '{head}' (expected N…, E…, or a .directive)"),
+            )),
+        }
+    }
+
+    /// Dispatches a `.`-prefixed line; `directive` is the keyword with its
+    /// leading `.` stripped and already lowercased.
+    fn apply_directive(
+        &mut self,
+        directive: &str,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        match directive {
+            "title" => {
+                self.title = Some(tokens[1..].join(" "));
+                Ok(())
+            }
+            "units" => self.apply_units(tokens, number),
+            "default" => self.apply_default(tokens, factor, number),
+            "external" => self.apply_external(tokens, number),
+            "freq" => self.apply_freq(tokens, number),
+            "equiv" => self.apply_equiv(tokens, number),
+            "couples" => self.apply_couples(tokens, number),
+            "hole" => self.apply_hole(tokens, factor, number),
+            "contact" => self.apply_contact(tokens, factor, number),
+            "end" => {
+                if tokens.len() != 1 {
+                    return Err(err(number, "expected .end (no arguments)"));
                 }
-                "default" => {
-                    if unit.is_none() {
-                        return Err(err(number, ".default before .units (lengths need a unit)"));
-                    }
-                    one_conductivity(&tokens[1..], number)?;
-                    for token in &tokens[1..] {
-                        let (key, raw_value) = parse_field(token, number)?;
-                        let value = parse_value(&key, &raw_value, factor, number)?;
-                        set_default(&mut defaults, &key, value, number)?;
-                    }
-                }
-                "external" => {
-                    if tokens.len() != 3 && tokens.len() != 4 {
-                        return Err(err(number, "expected .external N<+> N<-> [name]"));
-                    }
-                    let positive = names.lookup(tokens[1], number)?;
-                    let negative = names.lookup(tokens[2], number)?;
-                    let name = tokens.get(3).map(|name| name.to_string());
-                    ports.push(Port {
-                        positive: NodeId(positive),
-                        negative: NodeId(negative),
-                        name: name.or_else(|| Some(format!("{}/{}", tokens[1], tokens[2]))),
-                    });
-                }
-                "freq" => {
-                    if tokens.len() != 4 {
-                        return Err(err(number, "expected .freq fmin=<v> fmax=<v> ndec=<n>"));
-                    }
-                    let (mut fmin, mut fmax, mut ndec) = (None, None, None);
-                    for token in &tokens[1..] {
-                        let (key, raw_value) = parse_field(token, number)?;
-                        match key.as_str() {
-                            "fmin" => fmin = Some(parse_number(&raw_value, number)?),
-                            "fmax" => fmax = Some(parse_number(&raw_value, number)?),
-                            "ndec" => ndec = Some(parse_count(&raw_value, "ndec", number)?),
-                            other => {
-                                return Err(err(
-                                    number,
-                                    format!("unknown .freq field '{other}' (supported: fmin, fmax, ndec)"),
-                                ));
-                            }
-                        }
-                    }
-                    let (fmin, fmax, ndec) = match (fmin, fmax, ndec) {
-                        (Some(fmin), Some(fmax), Some(ndec)) => (fmin, fmax, ndec),
-                        _ => return Err(err(number, ".freq needs fmin=, fmax= and ndec=")),
-                    };
-                    frequencies = frequency_sweep(fmin, fmax, ndec, number)?;
-                }
-                "equiv" => {
-                    if tokens.len() < 3 {
-                        return Err(err(number, "expected .equiv N<a> N<b> [N<c> …]"));
-                    }
-                    let a = names.lookup(tokens[1], number)?;
-                    for name in &tokens[2..] {
-                        let b = names.lookup(name, number)?;
-                        if a == b {
-                            return Err(err(
-                                number,
-                                format!(".equiv of node '{}' with itself", tokens[1]),
-                            ));
-                        }
-                        names.aliases.insert(b, a);
-                        alias_lines.insert(b, number);
-                    }
-                }
-                "couples" => {
-                    if tokens.len() < 2 {
-                        return Err(err(
-                            number,
-                            "expected .couples all | .couples <group> <group> …",
-                        ));
-                    }
-                    let first = *couples_line.get_or_insert(number);
-                    let conflict = || {
-                        err(
-                            number,
-                            format!(
-                                "conflicting .couples declarations (the first is on line {first}): 'all' cannot be combined with named groups"
-                            ),
-                        )
-                    };
-                    if tokens[1].eq_ignore_ascii_case("all") {
-                        if tokens.len() != 2 {
-                            return Err(err(
-                                number,
-                                "'.couples all' takes no group names (it couples everything)",
-                            ));
-                        }
-                        if named_couples {
-                            return Err(conflict());
-                        }
-                        couples_all = true;
-                        continue;
-                    }
-                    if couples_all {
-                        return Err(conflict());
-                    }
-                    named_couples = true;
-                    // Every listed group couples to every other listed one.
-                    for (index, a) in tokens[1..].iter().enumerate() {
-                        for b in &tokens[index + 2..] {
-                            if a == b {
-                                return Err(err(
-                                    number,
-                                    format!("'.couples' lists group '{a}' twice"),
-                                ));
-                            }
-                            couples.push([(*a).to_string(), (*b).to_string()]);
-                        }
-                        // A single name is a legal (and meaningful)
-                        // declaration: it isolates that group without
-                        // coupling it to anything. Remembered separately so
-                        // that it, too, is checked against the segments.
-                        couples_names.push((number, (*a).to_string()));
-                    }
-                }
-                "hole" => {
-                    if tokens.len() != 6 {
-                        return Err(err(number, "expected .hole G<name> x1 y1 x2 y2"));
-                    }
-                    let name = tokens[1];
-                    let mut bounds = [0.0f64; 4];
-                    for (slot, token) in bounds.iter_mut().zip(&tokens[2..]) {
-                        *slot = parse_number(token, number)? * factor;
-                    }
-                    let plane = plane_named(&mut planes, name, ".hole", number)?;
-                    plane.plane.holes.push(Hole::Rect {
-                        lo: [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
-                        hi: [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
-                    });
-                }
-                "contact" => {
-                    if tokens.len() < 6 {
-                        return Err(err(
-                            number,
-                            "expected .contact G<name> x1 y1 x2 y2 [nx=…] [ny=…] [ratio=…]",
-                        ));
-                    }
-                    let name = tokens[1];
-                    let mut bounds = [0.0f64; 4];
-                    for (slot, token) in bounds.iter_mut().zip(&tokens[2..6]) {
-                        *slot = parse_number(token, number)? * factor;
-                    }
-                    let mut cells = [2usize; 2];
-                    let mut ratio = 2.0f64;
-                    for token in &tokens[6..] {
-                        let (key, raw_value) = parse_field(token, number)?;
-                        match key.as_str() {
-                            "nx" => cells[0] = parse_count(&raw_value, "nx", number)?,
-                            "ny" => cells[1] = parse_count(&raw_value, "ny", number)?,
-                            "ratio" => {
-                                ratio = parse_number(&raw_value, number)?;
-                                if ratio < 1.0 {
-                                    return Err(err(
-                                        number,
-                                        format!(
-                                            "contact decay ratio must be ≥ 1 (got {raw_value}); 1 is an ungraded, uniformly fine axis"
-                                        ),
-                                    ));
-                                }
-                            }
-                            other => {
-                                return Err(err(
-                                    number,
-                                    format!(
-                                        "unknown .contact field '{other}' (supported: nx, ny, ratio)"
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                    let plane = plane_named(&mut planes, name, ".contact", number)?;
-                    plane.plane.contacts.push(ContactRegion::new(
-                        [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
-                        [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
-                        cells,
-                        ratio,
+                self.ended = true;
+                Ok(())
+            }
+            other => Err(err(
+                number,
+                format!("'.{other}' is not in the deck subset (the rest of FastHenry is M1+)"),
+            )),
+        }
+    }
+
+    /// `.units km|m|cm|mm|um|in|mils` — mandatory, and at most once.
+    fn apply_units(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
+        if tokens.len() != 2 {
+            return Err(err(number, "expected .units <unit>"));
+        }
+        if self.unit.is_some() {
+            return Err(err(number, "duplicate .units directive"));
+        }
+        self.unit = Some(unit_factor(tokens[1], number)?);
+        Ok(())
+    }
+    /// `.default <field>=<value> …` — the fields later lines fall back to.
+    fn apply_default(
+        &mut self,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        if self.unit.is_none() {
+            return Err(err(number, ".default before .units (lengths need a unit)"));
+        }
+        one_conductivity(&tokens[1..], number)?;
+        for token in &tokens[1..] {
+            let (key, raw_value) = parse_field(token, number)?;
+            let value = parse_value(&key, &raw_value, factor, number)?;
+            set_default(&mut self.defaults, &key, value, number)?;
+        }
+        Ok(())
+    }
+
+    /// `.external N<+> N<-> [name]` — one port.
+    fn apply_external(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
+        if tokens.len() != 3 && tokens.len() != 4 {
+            return Err(err(number, "expected .external N<+> N<-> [name]"));
+        }
+        let positive = self.names.lookup(tokens[1], number)?;
+        let negative = self.names.lookup(tokens[2], number)?;
+        let name = tokens.get(3).map(|name| name.to_string());
+        self.ports.push(Port {
+            positive: NodeId(positive),
+            negative: NodeId(negative),
+            name: name.or_else(|| Some(format!("{}/{}", tokens[1], tokens[2]))),
+        });
+        Ok(())
+    }
+
+    /// `.freq fmin=<v> fmax=<v> ndec=<n>` — the decade sweep, in hertz.
+    fn apply_freq(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
+        if tokens.len() != 4 {
+            return Err(err(number, "expected .freq fmin=<v> fmax=<v> ndec=<n>"));
+        }
+        let (mut fmin, mut fmax, mut ndec) = (None, None, None);
+        for token in &tokens[1..] {
+            let (key, raw_value) = parse_field(token, number)?;
+            match key.as_str() {
+                "fmin" => fmin = Some(parse_number(&raw_value, number)?),
+                "fmax" => fmax = Some(parse_number(&raw_value, number)?),
+                "ndec" => ndec = Some(parse_count(&raw_value, "ndec", number)?),
+                other => {
+                    return Err(err(
+                        number,
+                        format!("unknown .freq field '{other}' (supported: fmin, fmax, ndec)"),
                     ));
                 }
-                "end" => {
-                    if tokens.len() != 1 {
-                        return Err(err(number, "expected .end (no arguments)"));
+            }
+        }
+        let (fmin, fmax, ndec) = match (fmin, fmax, ndec) {
+            (Some(fmin), Some(fmax), Some(ndec)) => (fmin, fmax, ndec),
+            _ => return Err(err(number, ".freq needs fmin=, fmax= and ndec=")),
+        };
+        self.frequencies = frequency_sweep(fmin, fmax, ndec, number)?;
+        Ok(())
+    }
+    /// `.equiv N<a> N<b> [N<c> …]` — join two or more nodes into one.
+    fn apply_equiv(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
+        if tokens.len() < 3 {
+            return Err(err(number, "expected .equiv N<a> N<b> [N<c> …]"));
+        }
+        let a = self.names.lookup(tokens[1], number)?;
+        for name in &tokens[2..] {
+            let b = self.names.lookup(name, number)?;
+            if a == b {
+                return Err(err(
+                    number,
+                    format!(".equiv of node '{}' with itself", tokens[1]),
+                ));
+            }
+            self.names.aliases.insert(b, a);
+            self.alias_lines.insert(b, number);
+        }
+        Ok(())
+    }
+
+    /// `.couples all | .couples <group> <group> …` — which segment groups
+    /// couple; the two forms cannot be mixed in one deck.
+    fn apply_couples(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
+        if tokens.len() < 2 {
+            return Err(err(
+                number,
+                "expected .couples all | .couples <group> <group> …",
+            ));
+        }
+        let first = *self.couples_line.get_or_insert(number);
+        let conflict = || {
+            err(
+                number,
+                format!(
+                    "conflicting .couples declarations (the first is on line {first}): 'all' cannot be combined with named groups"
+                ),
+            )
+        };
+        if tokens[1].eq_ignore_ascii_case("all") {
+            if tokens.len() != 2 {
+                return Err(err(
+                    number,
+                    "'.couples all' takes no group names (it couples everything)",
+                ));
+            }
+            if self.named_couples {
+                return Err(conflict());
+            }
+            self.couples_all = true;
+            return Ok(());
+        }
+        if self.couples_all {
+            return Err(conflict());
+        }
+        self.named_couples = true;
+        // Every listed group couples to every other listed one.
+        for (index, a) in tokens[1..].iter().enumerate() {
+            for b in &tokens[index + 2..] {
+                if a == b {
+                    return Err(err(number, format!("'.couples' lists group '{a}' twice")));
+                }
+                self.couples.push([(*a).to_string(), (*b).to_string()]);
+            }
+            // A single name is a legal (and meaningful) declaration: it
+            // isolates that group without coupling it to anything.
+            // Remembered separately so that it, too, is checked against the
+            // segments.
+            self.couples_names.push((number, (*a).to_string()));
+        }
+        Ok(())
+    }
+    /// `.hole G<name> x1 y1 x2 y2` — a rectangular hole in that plane.
+    fn apply_hole(
+        &mut self,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        if tokens.len() != 6 {
+            return Err(err(number, "expected .hole G<name> x1 y1 x2 y2"));
+        }
+        let name = tokens[1];
+        let mut bounds = [0.0f64; 4];
+        for (slot, token) in bounds.iter_mut().zip(&tokens[2..]) {
+            *slot = parse_number(token, number)? * factor;
+        }
+        let plane = plane_named(&mut self.planes, name, ".hole", number)?;
+        plane.plane.holes.push(Hole::Rect {
+            lo: [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
+            hi: [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
+        });
+        Ok(())
+    }
+
+    /// `.contact G<name> x1 y1 x2 y2 [nx=] [ny=] [ratio=]` — a contact
+    /// region refining that rectangle of the plane's mesh.
+    fn apply_contact(
+        &mut self,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        if tokens.len() < 6 {
+            return Err(err(
+                number,
+                "expected .contact G<name> x1 y1 x2 y2 [nx=…] [ny=…] [ratio=…]",
+            ));
+        }
+        let name = tokens[1];
+        let mut bounds = [0.0f64; 4];
+        for (slot, token) in bounds.iter_mut().zip(&tokens[2..6]) {
+            *slot = parse_number(token, number)? * factor;
+        }
+        let mut cells = [2usize; 2];
+        let mut ratio = 2.0f64;
+        for token in &tokens[6..] {
+            let (key, raw_value) = parse_field(token, number)?;
+            match key.as_str() {
+                "nx" => cells[0] = parse_count(&raw_value, "nx", number)?,
+                "ny" => cells[1] = parse_count(&raw_value, "ny", number)?,
+                "ratio" => {
+                    ratio = parse_number(&raw_value, number)?;
+                    if ratio < 1.0 {
+                        return Err(err(
+                            number,
+                            format!(
+                                "contact decay ratio must be ≥ 1 (got {raw_value}); 1 is an ungraded, uniformly fine axis"
+                            ),
+                        ));
                     }
-                    ended = true;
                 }
                 other => {
                     return Err(err(
                         number,
-                        format!(
-                            "'.{other}' is not in the deck subset (the rest of FastHenry is M1+)"
-                        ),
+                        format!("unknown .contact field '{other}' (supported: nx, ny, ratio)"),
                     ));
                 }
             }
-            continue;
         }
+        let plane = plane_named(&mut self.planes, name, ".contact", number)?;
+        plane.plane.contacts.push(ContactRegion::new(
+            [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
+            [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
+            cells,
+            ratio,
+        ));
+        Ok(())
+    }
 
-        match keyword.chars().next() {
-            Some('n') => {
-                if unit.is_none() {
-                    return Err(err(number, "node before .units (lengths need a unit)"));
-                }
-                let mut coordinates = [defaults.x, defaults.y, defaults.z];
-                for token in &tokens[1..] {
-                    let (key, raw_value) = parse_field(token, number)?;
-                    let value = parse_value(&key, &raw_value, factor, number)?;
-                    match key.as_str() {
-                        "x" => coordinates[0] = Some(value),
-                        "y" => coordinates[1] = Some(value),
-                        "z" => coordinates[2] = Some(value),
-                        other => {
-                            return Err(err(
-                                number,
-                                format!("unknown node field '{other}' (supported: x, y, z)"),
-                            ));
-                        }
-                    }
-                }
-                let position = match coordinates {
-                    [Some(x), Some(y), Some(z)] => [x, y, z],
-                    _ => {
-                        return Err(err(
-                            number,
-                            format!(
-                                "node '{head}': a coordinate is unset and no .default covers it (set it, or .default x=… y=… z=…)"
-                            ),
-                        ));
-                    }
-                };
-                positions.push(position);
-                names.define(head, positions.len() - 1, number)?;
-            }
-            Some('e') => {
-                if unit.is_none() {
-                    return Err(err(number, "element before .units (lengths need a unit)"));
-                }
-                if tokens.len() < 3 {
-                    return Err(err(number, "expected E<name> N<a> N<b> [field]=<value> …"));
-                }
-                let a = names.lookup(tokens[1], number)?;
-                let b = names.lookup(tokens[2], number)?;
-                one_conductivity(&tokens[3..], number)?;
-                let mut w = defaults.w;
-                let mut h = defaults.h;
-                let mut nwinc = defaults.nwinc;
-                let mut nhinc = defaults.nhinc;
-                let mut rw = defaults.rw;
-                let mut rh = defaults.rh;
-                let mut width_dir = defaults.width_dir;
-                let mut sigma = defaults.sigma;
-                let mut group = String::new();
-                for token in &tokens[3..] {
-                    let (key, raw_value) = parse_field(token, number)?;
-                    if key == "group" {
-                        // A name, not a number, and case-sensitive like the
-                        // node names — so it is taken before parse_value.
-                        group = raw_value;
-                        continue;
-                    }
-                    let value = parse_value(&key, &raw_value, factor, number)?;
-                    match key.as_str() {
-                        "w" => w = Some(value.abs()),
-                        "h" => h = Some(value.abs()),
-                        "nwinc" => nwinc = Some(value as usize),
-                        "nhinc" => nhinc = Some(value as usize),
-                        "rw" => rw = Some(value),
-                        "rh" => rh = Some(value),
-                        "wx" | "wy" | "wz" => {
-                            let axis = width_dir_axis(&key).expect("matched a width-direction key");
-                            width_dir[axis] = Some(value);
-                        }
-                        // Already converted to S/m by parse_value either way.
-                        "sigma" | "rho" => sigma = Some(value),
-                        "x" | "y" | "z" => {
-                            return Err(err(
-                                number,
-                                format!("'{key}' is a node field, not a segment field"),
-                            ));
-                        }
-                        other => {
-                            return Err(err(
-                                number,
-                                format!("unknown field '{other}' (supported: {SEGMENT_FIELDS})"),
-                            ));
-                        }
-                    }
-                }
-                let (w, h, sigma) = match (w, h, sigma) {
-                    (Some(w), Some(h), Some(sigma)) => (w, h, sigma),
-                    (None, _, _) => {
-                        return Err(err(
-                            number,
-                            format!("segment '{head}' has no width: set w= here or in .default"),
-                        ));
-                    }
-                    (_, None, _) => {
-                        return Err(err(
-                            number,
-                            format!("segment '{head}' has no height: set h= here or in .default"),
-                        ));
-                    }
-                    (_, _, None) => {
-                        return Err(err(
-                            number,
-                            format!("segment '{head}' has no conductivity: set sigma= or rho= here or in .default"),
-                        ));
-                    }
-                };
-                let width_dir = resolve_width_dir(width_dir, head, number)?;
-                if let Some(direction) = width_dir {
-                    // Parallel to the declared centreline: caught here, on
-                    // this line, by the library's own orientation check.
-                    let [pa, pb] = [positions[a], positions[b]];
-                    let probe = Segment::new(
-                        Node::new(pa[0], pa[1], pa[2]),
-                        Node::new(pb[0], pb[1], pb[2]),
-                        w,
-                        h,
-                        sigma,
-                    )
-                    .with_width_dir(direction);
-                    if let Err(SegmentError::InvalidWidthDirection) = probe.basis() {
-                        return Err(err(
-                            number,
-                            format!(
-                                "segment '{head}': width direction (wx, wy, wz) = ({}, {}, {}) is parallel to the segment and fixes no orientation",
-                                direction[0], direction[1], direction[2]
-                            ),
-                        ));
-                    }
-                }
-                segment_defs.push(SegmentSpec {
-                    a,
-                    b,
-                    width: w,
-                    height: h,
-                    sigma,
-                    width_dir,
-                    line: number,
-                });
-                subdivisions.push(AxisGrading::new(
-                    nwinc.unwrap_or(1),
-                    nhinc.unwrap_or(1),
-                    rw.unwrap_or(1.0),
-                    rh.unwrap_or(1.0),
-                ));
-                segment_groups.push(group);
-            }
-            Some('g') => {
-                if unit.is_none() {
+    /// `N<name> [x]=<v> [y]=<v> [z]=<v>` — a node, each coordinate falling
+    /// back to its `.default`.
+    fn apply_node(
+        &mut self,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        let head = tokens[0];
+        if self.unit.is_none() {
+            return Err(err(number, "node before .units (lengths need a unit)"));
+        }
+        let mut coordinates = [self.defaults.x, self.defaults.y, self.defaults.z];
+        for token in &tokens[1..] {
+            let (key, raw_value) = parse_field(token, number)?;
+            let value = parse_value(&key, &raw_value, factor, number)?;
+            match key.as_str() {
+                "x" => coordinates[0] = Some(value),
+                "y" => coordinates[1] = Some(value),
+                "z" => coordinates[2] = Some(value),
+                other => {
                     return Err(err(
                         number,
-                        "ground plane before .units (lengths need a unit)",
+                        format!("unknown node field '{other}' (supported: x, y, z)"),
                     ));
                 }
-                // Two grammars, told apart by the shape of the first token
-                // after the name: a bare number starts the extension form,
-                // anything else (`x1=…`) the FastHenry corner-point form.
-                // A deck may mix them freely.
-                if tokens
-                    .get(1)
-                    .is_some_and(|token| token.parse::<f64>().is_err())
-                {
-                    one_conductivity(&tokens[1..], number)?;
-                    let (spec, plane_nodes_here) = parse_plane_statement(
-                        head,
-                        &tokens[1..].join(" "),
-                        factor,
-                        &defaults,
-                        number,
-                    )?;
-                    let index = planes.len();
-                    for (name, position) in plane_nodes_here {
-                        positions.push(position);
-                        names.define(&name, positions.len() - 1, number)?;
-                        plane_nodes.push((positions.len() - 1, index, number));
-                    }
-                    planes.push(spec);
-                    continue;
-                }
-                if tokens.len() < 8 {
-                    return Err(err(
-                        number,
-                        "expected G<name> x1 y1 z1 x2 y2 z2 thickness [nx=…] [ny=…] [nhinc=…], or the FastHenry corner-point form G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=… thick=… seg1=… seg2=…",
-                    ));
-                }
-                let mut corners = [None; 7];
-                for (slot, token) in corners.iter_mut().zip(&tokens[1..8]) {
-                    *slot = Some(
-                        parse_number(token, number).map_err(|mut error| {
-                            error.line = number;
-                            error
-                        })? * factor,
-                    );
-                }
-                let mut nx = 1usize;
-                let mut ny = 1usize;
-                let mut nhinc = 1usize;
-                let mut sigma = defaults.sigma;
-                one_conductivity(&tokens[8..], number)?;
-                for token in &tokens[8..] {
-                    let (key, raw_value) = parse_field(token, number)?;
-                    let value = parse_value(&key, &raw_value, factor, number)?;
-                    match key.as_str() {
-                        "nx" => nx = value as usize,
-                        "ny" => ny = value as usize,
-                        "nhinc" => nhinc = value as usize,
-                        // Already converted to S/m by parse_value either way.
-                        "sigma" | "rho" => sigma = Some(value),
-                        other => {
-                            return Err(err(
-                                number,
-                                format!(
-                                    "unknown G field '{other}' (supported: nx, ny, nhinc, sigma, rho)"
-                                ),
-                            ));
-                        }
-                    }
-                }
-                let corners: Vec<f64> = corners.into_iter().flatten().collect();
-                let [x1, y1, z1, x2, y2, z2, thickness] = [
-                    corners[0], corners[1], corners[2], corners[3], corners[4], corners[5],
-                    corners[6],
-                ];
-                if nx < 1 || ny < 1 {
-                    return Err(err(
-                        number,
-                        format!(
-                            "ground plane '{head}' needs nx and ny >= 1 (got nx={nx}, ny={ny})"
-                        ),
-                    ));
-                }
-                planes.push(PlaneSpec {
-                    name: head.to_string(),
-                    plane: GroundPlane {
-                        lo: [x1.min(x2), y1.min(y2)],
-                        hi: [x1.max(x2), y1.max(y2)],
-                        z_top: z1.max(z2),
-                        thickness,
-                        nx,
-                        ny,
-                        sigma: sigma.ok_or_else(|| {
-                            err(
-                                number,
-                                format!(
-                                    "ground plane '{head}' has no conductivity: set sigma= or rho= here or in .default"
-                                ),
-                            )
-                        })?,
-                        holes: Vec::new(),
-                        contacts: Vec::new(),
-                    },
-                    nhinc,
-                });
             }
+        }
+        let position = match coordinates {
+            [Some(x), Some(y), Some(z)] => [x, y, z],
             _ => {
                 return Err(err(
                     number,
-                    format!("unrecognized line '{head}' (expected N…, E…, or a .directive)"),
+                    format!(
+                        "node '{head}': a coordinate is unset and no .default covers it (set it, or .default x=… y=… z=…)"
+                    ),
+                ));
+            }
+        };
+        self.positions.push(position);
+        self.names.define(head, self.positions.len() - 1, number)?;
+        Ok(())
+    }
+
+    /// `E<name> N<a> N<b> [field]=<v> …` — a segment between two nodes.
+    fn apply_segment(
+        &mut self,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        let head = tokens[0];
+        if self.unit.is_none() {
+            return Err(err(number, "element before .units (lengths need a unit)"));
+        }
+        if tokens.len() < 3 {
+            return Err(err(number, "expected E<name> N<a> N<b> [field]=<value> …"));
+        }
+        let a = self.names.lookup(tokens[1], number)?;
+        let b = self.names.lookup(tokens[2], number)?;
+        one_conductivity(&tokens[3..], number)?;
+        let mut w = self.defaults.w;
+        let mut h = self.defaults.h;
+        let mut nwinc = self.defaults.nwinc;
+        let mut nhinc = self.defaults.nhinc;
+        let mut rw = self.defaults.rw;
+        let mut rh = self.defaults.rh;
+        let mut width_dir = self.defaults.width_dir;
+        let mut sigma = self.defaults.sigma;
+        let mut group = String::new();
+        for token in &tokens[3..] {
+            let (key, raw_value) = parse_field(token, number)?;
+            if key == "group" {
+                // A name, not a number, and case-sensitive like the node
+                // names — so it is taken before parse_value.
+                group = raw_value;
+                continue;
+            }
+            let value = parse_value(&key, &raw_value, factor, number)?;
+            match key.as_str() {
+                "w" => w = Some(value.abs()),
+                "h" => h = Some(value.abs()),
+                "nwinc" => nwinc = Some(value as usize),
+                "nhinc" => nhinc = Some(value as usize),
+                "rw" => rw = Some(value),
+                "rh" => rh = Some(value),
+                "wx" | "wy" | "wz" => {
+                    let axis = width_dir_axis(&key).expect("matched a width-direction key");
+                    width_dir[axis] = Some(value);
+                }
+                // Already converted to S/m by parse_value either way.
+                "sigma" | "rho" => sigma = Some(value),
+                "x" | "y" | "z" => {
+                    return Err(err(
+                        number,
+                        format!("'{key}' is a node field, not a segment field"),
+                    ));
+                }
+                other => {
+                    return Err(err(
+                        number,
+                        format!("unknown field '{other}' (supported: {SEGMENT_FIELDS})"),
+                    ));
+                }
+            }
+        }
+        let (w, h, sigma) = match (w, h, sigma) {
+            (Some(w), Some(h), Some(sigma)) => (w, h, sigma),
+            (None, _, _) => {
+                return Err(err(
+                    number,
+                    format!("segment '{head}' has no width: set w= here or in .default"),
+                ));
+            }
+            (_, None, _) => {
+                return Err(err(
+                    number,
+                    format!("segment '{head}' has no height: set h= here or in .default"),
+                ));
+            }
+            (_, _, None) => {
+                return Err(err(
+                    number,
+                    format!(
+                        "segment '{head}' has no conductivity: set sigma= or rho= here or in .default"
+                    ),
+                ));
+            }
+        };
+        let width_dir = resolve_width_dir(width_dir, head, number)?;
+        if let Some(direction) = width_dir {
+            // Parallel to the declared centreline: caught here, on this
+            // line, by the library's own orientation check.
+            let [pa, pb] = [self.positions[a], self.positions[b]];
+            let probe = Segment::new(
+                Node::new(pa[0], pa[1], pa[2]),
+                Node::new(pb[0], pb[1], pb[2]),
+                w,
+                h,
+                sigma,
+            )
+            .with_width_dir(direction);
+            if let Err(SegmentError::InvalidWidthDirection) = probe.basis() {
+                return Err(err(
+                    number,
+                    format!(
+                        "segment '{head}': width direction (wx, wy, wz) = ({}, {}, {}) is parallel to the segment and fixes no orientation",
+                        direction[0], direction[1], direction[2]
+                    ),
                 ));
             }
         }
-    }
-
-    if !ended {
-        return Err(err(last_number, "deck has no .end directive"));
-    }
-    if unit.is_none() {
-        return Err(err(
-            last_number,
-            format!(
-                "deck has no .units directive (units are mandatory: .units <unit>, one of {UNITS})"
-            ),
+        self.segment_defs.push(SegmentSpec {
+            a,
+            b,
+            width: w,
+            height: h,
+            sigma,
+            width_dir,
+            line: number,
+        });
+        self.subdivisions.push(AxisGrading::new(
+            nwinc.unwrap_or(1),
+            nhinc.unwrap_or(1),
+            rw.unwrap_or(1.0),
+            rh.unwrap_or(1.0),
         ));
-    }
-    if ports.is_empty() {
-        return Err(err(0, "deck has no .external port"));
-    }
-    if frequencies.is_empty() {
-        return Err(err(0, "deck has no .freq sweep"));
+        self.segment_groups.push(group);
+        Ok(())
     }
 
-    // Apply .equiv: compact aliased-away nodes out of the geometry and
-    // remap every reference. Resolution follows the alias chain, so a
-    // reference declared *before* the .equiv directive lands on the
-    // canonical node too — the deck is one circuit, not a timeline.
-    let compaction = names.compaction(positions.len());
-    let resolve = |slot: usize| -> usize {
-        let mut id = slot;
-        while let Some(&target) = names.aliases.get(&id) {
-            id = target;
+    /// A `G` statement, in either grammar. The two are told apart by the
+    /// shape of the first token after the name: a bare number starts the
+    /// extension form, anything else (`x1=…`) the FastHenry corner-point
+    /// form. A deck may mix them freely.
+    fn apply_ground_plane(
+        &mut self,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        if self.unit.is_none() {
+            return Err(err(
+                number,
+                "ground plane before .units (lengths need a unit)",
+            ));
         }
-        compaction[id].expect("a canonical node is live by construction")
-    };
-    // Assembly: ground-plane meshes first (their cell nodes and bars), then
-    // the declared nodes, then the segments — with every endpoint that
-    // lands in a plane's footprint snapped to the nearest live cell node.
-    let mut geometry = Geometry::new();
-    let mut plane_meshes: Vec<(&PlaneSpec, Vec<Vec<Option<NodeId>>>)> = Vec::new();
-    // One subdivision per plane bar, in geometry order: every bar of a
-    // plane carries that plane's `nhinc` filaments through the thickness.
+        if tokens
+            .get(1)
+            .is_some_and(|token| token.parse::<f64>().is_err())
+        {
+            return self.apply_plane_corner_form(tokens, factor, number);
+        }
+        self.apply_plane_extent_form(tokens, factor, number)
+    }
+
+    /// The FastHenry corner-point `G` grammar: three corners, `thick=`,
+    /// `seg1=`/`seg2=`, and the `N…` / `hole …` / `contact …` clauses
+    /// [`parse_plane_statement`] reads.
+    fn apply_plane_corner_form(
+        &mut self,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        let head = tokens[0];
+        one_conductivity(&tokens[1..], number)?;
+        let (spec, plane_nodes_here) =
+            parse_plane_statement(head, &tokens[1..].join(" "), factor, &self.defaults, number)?;
+        let index = self.planes.len();
+        for (name, position) in plane_nodes_here {
+            self.positions.push(position);
+            self.names.define(&name, self.positions.len() - 1, number)?;
+            self.plane_nodes
+                .push((self.positions.len() - 1, index, number));
+        }
+        self.planes.push(spec);
+        Ok(())
+    }
+
+    /// The extension `G` grammar: `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=]
+    /// [nhinc=] [sigma=|rho=]` — extent, top surface `z`, thickness down.
+    fn apply_plane_extent_form(
+        &mut self,
+        tokens: &[&str],
+        factor: f64,
+        number: usize,
+    ) -> Result<(), ParseError> {
+        let head = tokens[0];
+        if tokens.len() < 8 {
+            return Err(err(
+                number,
+                "expected G<name> x1 y1 z1 x2 y2 z2 thickness [nx=…] [ny=…] [nhinc=…], or the FastHenry corner-point form G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=… thick=… seg1=… seg2=…",
+            ));
+        }
+        let mut corners = [None; 7];
+        for (slot, token) in corners.iter_mut().zip(&tokens[1..8]) {
+            *slot = Some(
+                parse_number(token, number).map_err(|mut error| {
+                    error.line = number;
+                    error
+                })? * factor,
+            );
+        }
+        let mut nx = 1usize;
+        let mut ny = 1usize;
+        let mut nhinc = 1usize;
+        let mut sigma = self.defaults.sigma;
+        one_conductivity(&tokens[8..], number)?;
+        for token in &tokens[8..] {
+            let (key, raw_value) = parse_field(token, number)?;
+            let value = parse_value(&key, &raw_value, factor, number)?;
+            match key.as_str() {
+                "nx" => nx = value as usize,
+                "ny" => ny = value as usize,
+                "nhinc" => nhinc = value as usize,
+                // Already converted to S/m by parse_value either way.
+                "sigma" | "rho" => sigma = Some(value),
+                other => {
+                    return Err(err(
+                        number,
+                        format!("unknown G field '{other}' (supported: nx, ny, nhinc, sigma, rho)"),
+                    ));
+                }
+            }
+        }
+        let corners: Vec<f64> = corners.into_iter().flatten().collect();
+        let [x1, y1, z1, x2, y2, z2, thickness] = [
+            corners[0], corners[1], corners[2], corners[3], corners[4], corners[5], corners[6],
+        ];
+        if nx < 1 || ny < 1 {
+            return Err(err(
+                number,
+                format!("ground plane '{head}' needs nx and ny >= 1 (got nx={nx}, ny={ny})"),
+            ));
+        }
+        self.planes.push(PlaneSpec {
+            name: head.to_string(),
+            plane: GroundPlane {
+                lo: [x1.min(x2), y1.min(y2)],
+                hi: [x1.max(x2), y1.max(y2)],
+                z_top: z1.max(z2),
+                thickness,
+                nx,
+                ny,
+                sigma: sigma.ok_or_else(|| {
+                    err(
+                        number,
+                        format!(
+                            "ground plane '{head}' has no conductivity: set sigma= or rho= here or in .default"
+                        ),
+                    )
+                })?,
+                holes: Vec::new(),
+                contacts: Vec::new(),
+            },
+            nhinc,
+        });
+        Ok(())
+    }
+
+    /// The deck-level checks that belong to no single directive: the ones a
+    /// deck fails by *omission*. A missing `.end` or `.units` is reported on
+    /// the deck's last physical line, the rest on line 0.
+    fn check_complete(&self, last_number: usize) -> Result<(), ParseError> {
+        if !self.ended {
+            return Err(err(last_number, "deck has no .end directive"));
+        }
+        if self.unit.is_none() {
+            return Err(err(
+                last_number,
+                format!(
+                    "deck has no .units directive (units are mandatory: .units <unit>, one of {UNITS})"
+                ),
+            ));
+        }
+        if self.ports.is_empty() {
+            return Err(err(0, "deck has no .external port"));
+        }
+        if self.frequencies.is_empty() {
+            return Err(err(0, "deck has no .freq sweep"));
+        }
+        Ok(())
+    }
+
+    /// Assembles the read deck into a [`Deck`]: the deck-level checks, then
+    /// `.equiv` compaction, ground-plane meshes, endpoint snapping, node and
+    /// segment assembly, the discretization, and the coupling.
+    ///
+    /// `last_number` is [`FoldedDeck::last_number`] — the line a missing
+    /// `.end` or `.units` is reported on.
+    fn finish(self, last_number: usize) -> Result<Deck, ParseError> {
+        self.check_complete(last_number)?;
+        let DeckBuilder {
+            title,
+            names,
+            positions,
+            segment_defs,
+            subdivisions,
+            segment_groups,
+            couples,
+            couples_names,
+            couples_line,
+            named_couples,
+            mut ports,
+            frequencies,
+            planes,
+            plane_nodes,
+            alias_lines,
+            ..
+        } = self;
+
+        // Apply .equiv: compact aliased-away nodes out of the geometry and
+        // remap every reference. Resolution follows the alias chain, so a
+        // reference declared *before* the .equiv directive lands on the
+        // canonical node too — the deck is one circuit, not a timeline.
+        let compaction = names.compaction(positions.len());
+        let resolve = |slot: usize| -> usize {
+            let mut id = slot;
+            while let Some(&target) = names.aliases.get(&id) {
+                id = target;
+            }
+            compaction[id].expect("a canonical node is live by construction")
+        };
+        // Assembly: ground-plane meshes first (their cell nodes and bars), then
+        // the declared nodes, then the segments — with every endpoint that
+        // lands in a plane's footprint snapped to the nearest live cell node.
+        let mut geometry = Geometry::new();
+        let (plane_meshes, plane_subdivisions) = build_plane_meshes(&planes, &mut geometry)?;
+        let plane_bars = geometry.segment_count();
+        let plane_node_at =
+            plane_node_owners(&plane_nodes, &planes, &positions, &alias_lines, resolve)?;
+        // Endpoint resolution: follow `.equiv` aliases to the canonical slot,
+        // take that slot's position, and if it lands in a plane's footprint,
+        // snap to the nearest live cell node. Plane ids are final here; the
+        // declared nodes that are still referenced as themselves get their ids
+        // below (a snapped endpoint's declared node is dropped, not orphaned).
+        let snap = |slot: usize| -> Result<Option<usize>, ParseError> {
+            let live = resolve(slot);
+            if let Some(&(index, position)) = plane_node_at.get(&live) {
+                let (spec, centres) = &plane_meshes[index];
+                return Ok(Some(
+                    spec.plane
+                        .attach(centres, position)
+                        .map_err(|error| ParseError {
+                            line: 0,
+                            message: error.to_string(),
+                        })?
+                        .0,
+                ));
+            }
+            let position = live_position(live, &positions, &compaction);
+            for (spec, centres) in &plane_meshes {
+                if spec.plane.contains(position, 0.0) {
+                    return Ok(Some(
+                        spec.plane
+                            .attach(centres, position)
+                            .map_err(|error| ParseError {
+                                line: 0,
+                                message: error.to_string(),
+                            })?
+                            .0,
+                    ));
+                }
+            }
+            Ok(None)
+        };
+
+        // One endpoint: the plane node it snapped to (final id), or the live
+        // declared slot it stays on (id assigned below).
+        let endpoint = |slot: usize| -> Result<(Option<usize>, usize), ParseError> {
+            Ok((snap(slot)?, resolve(slot)))
+        };
+        type End = (Option<usize>, usize);
+        let segment_ends: Vec<(End, End, &SegmentSpec)> = segment_defs
+            .iter()
+            .map(|spec| Ok((endpoint(spec.a)?, endpoint(spec.b)?, spec)))
+            .collect::<Result<_, ParseError>>()?;
+        let port_ends: Vec<(End, End)> = ports
+            .iter()
+            .map(|port| Ok((endpoint(port.positive.0)?, endpoint(port.negative.0)?)))
+            .collect::<Result<_, ParseError>>()?;
+
+        // Live declared slots still referenced as themselves keep their nodes.
+        let mut used = vec![false; positions.len()];
+        let mark = |endpoint: &(Option<usize>, usize), used: &mut Vec<bool>| {
+            if endpoint.0.is_none() {
+                used[endpoint.1] = true;
+            }
+        };
+        for (a, b, _) in &segment_ends {
+            mark(a, &mut used);
+            mark(b, &mut used);
+        }
+        for (a, b) in &port_ends {
+            mark(a, &mut used);
+            mark(b, &mut used);
+        }
+        let mut live_to_id = vec![usize::MAX; positions.len()];
+        let mut next_id = geometry.nodes().len();
+        for (slot, &position) in positions.iter().enumerate() {
+            let Some(live) = compaction[slot] else {
+                continue; // aliased away by .equiv
+            };
+            if !used[live] {
+                continue; // every reference snapped into a plane
+            }
+            geometry
+                .add_node(Node::new(position[0], position[1], position[2]))
+                .map_err(|error| ParseError {
+                    line: 0,
+                    message: error.to_string(),
+                })?;
+            live_to_id[live] = next_id;
+            next_id += 1;
+        }
+
+        let final_id = |endpoint: &(Option<usize>, usize)| -> usize {
+            endpoint.0.unwrap_or(live_to_id[endpoint.1])
+        };
+        for (a, b, spec) in &segment_ends {
+            let mut def = SegmentDef::new(
+                NodeId(final_id(a)),
+                NodeId(final_id(b)),
+                spec.width,
+                spec.height,
+                spec.sigma,
+            );
+            if let Some(direction) = spec.width_dir {
+                def = def.with_width_dir(direction);
+            }
+            // A segment the geometry rejects is reported on its own `E` line.
+            geometry.add_segment(def).map_err(|error| ParseError {
+                line: spec.line,
+                message: error.to_string(),
+            })?;
+        }
+        for (port, (positive, negative)) in ports.iter_mut().zip(&port_ends) {
+            port.positive = NodeId(final_id(positive));
+            port.negative = NodeId(final_id(negative));
+        }
+
+        let discretization = discretization_of(plane_subdivisions, subdivisions);
+
+        let coupling = if named_couples {
+            truncated_coupling(
+                plane_bars,
+                segment_groups,
+                couples,
+                &couples_names,
+                couples_line,
+                geometry.segment_count(),
+            )?
+        } else {
+            Coupling::all_pairs()
+        };
+
+        Ok(Deck {
+            title,
+            geometry,
+            ports,
+            discretization,
+            coupling,
+            frequencies,
+        })
+    }
+}
+
+/// A built ground plane: its statement, and the cell-centre nodes its mesh
+/// produced — what an endpoint landing in its footprint snaps to.
+type PlaneMesh<'a> = (&'a PlaneSpec, Vec<Vec<Option<NodeId>>>);
+
+/// Builds every declared ground plane's mesh into `geometry`, in deck order
+/// and ahead of the declared nodes and segments. Returns each plane with the
+/// cell-centre nodes its mesh produced, and one [`Subdivision`] per plane bar
+/// in geometry order — every bar of a plane carrying that plane's `nhinc`
+/// filaments through the thickness.
+fn build_plane_meshes<'a>(
+    planes: &'a [PlaneSpec],
+    geometry: &mut Geometry,
+) -> Result<(Vec<PlaneMesh<'a>>, Vec<Subdivision>), ParseError> {
+    let mut plane_meshes: Vec<PlaneMesh> = Vec::new();
     let mut plane_subdivisions: Vec<Subdivision> = Vec::new();
-    for spec in &planes {
+    for spec in planes {
         let centres = spec
             .plane
-            .build_into(&mut geometry)
+            .build_into(geometry)
             .map_err(|error| ParseError {
                 line: 0,
                 message: error.to_string(),
@@ -1968,13 +2316,28 @@ pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, Par
         plane_subdivisions.resize(geometry.segment_count(), Subdivision::new(1, spec.nhinc));
         plane_meshes.push((spec, centres));
     }
-    let plane_bars = geometry.segment_count();
-    // An in-plane node's `.equiv` class attaches to *its* plane, wherever
-    // the class's canonical node happens to sit: joining a via's segment
-    // node to an in-plane node is how a deck wires into a plane, and the
-    // join must not depend on which of the two the directive named first.
+    Ok((plane_meshes, plane_subdivisions))
+}
+
+/// Which plane each in-plane node's `.equiv` class belongs to, keyed by the
+/// class's canonical (live) slot, with the position the class was declared
+/// at.
+///
+/// An in-plane node's `.equiv` class attaches to *its* plane, wherever the
+/// class's canonical node happens to sit: joining a via's segment node to an
+/// in-plane node is how a deck wires into a plane, and the join must not
+/// depend on which of the two the directive named first. A class that
+/// reaches the in-plane nodes of two *different* planes is rejected, on the
+/// `.equiv` line that joined them.
+fn plane_node_owners(
+    plane_nodes: &[(usize, usize, usize)],
+    planes: &[PlaneSpec],
+    positions: &[[f64; 3]],
+    alias_lines: &HashMap<usize, usize>,
+    resolve: impl Fn(usize) -> usize,
+) -> Result<HashMap<usize, (usize, [f64; 3])>, ParseError> {
     let mut plane_node_at: HashMap<usize, (usize, [f64; 3])> = HashMap::new();
-    for &(slot, index, line) in &plane_nodes {
+    for &(slot, index, line) in plane_nodes {
         let live = resolve(slot);
         match plane_node_at.get(&live) {
             Some(&(other, _)) if other != index => {
@@ -1992,178 +2355,75 @@ pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, Par
             }
         }
     }
-    // Endpoint resolution: follow `.equiv` aliases to the canonical slot,
-    // take that slot's position, and if it lands in a plane's footprint,
-    // snap to the nearest live cell node. Plane ids are final here; the
-    // declared nodes that are still referenced as themselves get their ids
-    // below (a snapped endpoint's declared node is dropped, not orphaned).
-    let snap = |slot: usize| -> Result<Option<usize>, ParseError> {
-        let live = resolve(slot);
-        if let Some(&(index, position)) = plane_node_at.get(&live) {
-            let (spec, centres) = &plane_meshes[index];
-            return Ok(Some(
-                spec.plane
-                    .attach(centres, position)
-                    .map_err(|error| ParseError {
-                        line: 0,
-                        message: error.to_string(),
-                    })?
-                    .0,
+    Ok(plane_node_at)
+}
+
+/// The deck's filament discretization: the plane bars' grids (first, in
+/// geometry order) followed by the `E` lines' own, narrowed to the least
+/// specific form that still describes every segment.
+fn discretization_of(
+    plane_subdivisions: Vec<Subdivision>,
+    subdivisions: Vec<AxisGrading>,
+) -> Discretization {
+    let mut all: Vec<AxisGrading> = plane_subdivisions
+        .into_iter()
+        .map(AxisGrading::from)
+        .collect();
+    all.extend(subdivisions);
+    // A ratio only matters on an axis cut into more than one filament.
+    let graded = all.iter().any(|grid| {
+        (grid.nw > 1 && grid.width_ratio != 1.0) || (grid.nh > 1 && grid.height_ratio != 1.0)
+    });
+    if graded {
+        return Discretization::PerSegmentGraded(all);
+    }
+    let subdivisions: Vec<Subdivision> = all
+        .iter()
+        .map(|grid| Subdivision::new(grid.nw, grid.nh))
+        .collect();
+    let first = subdivisions[0];
+    if subdivisions.iter().all(|&sub| sub == first) {
+        Discretization::Uniform(first)
+    } else {
+        Discretization::PerSegment(subdivisions)
+    }
+}
+
+/// The coupling a deck that named groups on `.couples` asks for.
+///
+/// Ground-plane bars come first in the geometry and carry no group tag, so
+/// they share the default group with any untagged segment. `couples_line` is
+/// the first `.couples` directive's line, which a validation failure of the
+/// declaration as a whole is reported on.
+fn truncated_coupling(
+    plane_bars: usize,
+    segment_groups: Vec<String>,
+    couples: Vec<[String; 2]>,
+    couples_names: &[(usize, String)],
+    couples_line: Option<usize>,
+    segment_count: usize,
+) -> Result<Coupling, ParseError> {
+    let mut groups = vec![String::new(); plane_bars];
+    groups.extend(segment_groups);
+    // A name no segment carries is a typo, not a silent no-op — and a name
+    // declared on its own reaches no pair, so it is checked here rather than
+    // by `Coupling::validate` below.
+    for (line, name) in couples_names {
+        if !groups.iter().any(|group| group == name) {
+            return Err(err(
+                *line,
+                format!("'.couples' names group '{name}', which no segment carries"),
             ));
         }
-        let position = live_position(live, &positions, &compaction);
-        for (spec, centres) in &plane_meshes {
-            if spec.plane.contains(position, 0.0) {
-                return Ok(Some(
-                    spec.plane
-                        .attach(centres, position)
-                        .map_err(|error| ParseError {
-                            line: 0,
-                            message: error.to_string(),
-                        })?
-                        .0,
-                ));
-            }
-        }
-        Ok(None)
-    };
-
-    // One endpoint: the plane node it snapped to (final id), or the live
-    // declared slot it stays on (id assigned below).
-    let endpoint = |slot: usize| -> Result<(Option<usize>, usize), ParseError> {
-        Ok((snap(slot)?, resolve(slot)))
-    };
-    type End = (Option<usize>, usize);
-    let segment_ends: Vec<(End, End, &SegmentSpec)> = segment_defs
-        .iter()
-        .map(|spec| Ok((endpoint(spec.a)?, endpoint(spec.b)?, spec)))
-        .collect::<Result<_, ParseError>>()?;
-    let port_ends: Vec<(End, End)> = ports
-        .iter()
-        .map(|port| Ok((endpoint(port.positive.0)?, endpoint(port.negative.0)?)))
-        .collect::<Result<_, ParseError>>()?;
-
-    // Live declared slots still referenced as themselves keep their nodes.
-    let mut used = vec![false; positions.len()];
-    let mark = |endpoint: &(Option<usize>, usize), used: &mut Vec<bool>| {
-        if endpoint.0.is_none() {
-            used[endpoint.1] = true;
-        }
-    };
-    for (a, b, _) in &segment_ends {
-        mark(a, &mut used);
-        mark(b, &mut used);
     }
-    for (a, b) in &port_ends {
-        mark(a, &mut used);
-        mark(b, &mut used);
+    let mut coupling = Coupling::truncated(groups);
+    for [a, b] in couples {
+        coupling = coupling.coupled(a, b);
     }
-    let mut live_to_id = vec![usize::MAX; positions.len()];
-    let mut next_id = geometry.nodes().len();
-    for (slot, &position) in positions.iter().enumerate() {
-        let Some(live) = compaction[slot] else {
-            continue; // aliased away by .equiv
-        };
-        if !used[live] {
-            continue; // every reference snapped into a plane
-        }
-        geometry
-            .add_node(Node::new(position[0], position[1], position[2]))
-            .map_err(|error| ParseError {
-                line: 0,
-                message: error.to_string(),
-            })?;
-        live_to_id[live] = next_id;
-        next_id += 1;
-    }
-
-    let final_id = |endpoint: &(Option<usize>, usize)| -> usize {
-        endpoint.0.unwrap_or(live_to_id[endpoint.1])
-    };
-    for (a, b, spec) in &segment_ends {
-        let mut def = SegmentDef::new(
-            NodeId(final_id(a)),
-            NodeId(final_id(b)),
-            spec.width,
-            spec.height,
-            spec.sigma,
-        );
-        if let Some(direction) = spec.width_dir {
-            def = def.with_width_dir(direction);
-        }
-        // A segment the geometry rejects is reported on its own `E` line.
-        geometry.add_segment(def).map_err(|error| ParseError {
-            line: spec.line,
-            message: error.to_string(),
-        })?;
-    }
-    for (port, (positive, negative)) in ports.iter_mut().zip(&port_ends) {
-        port.positive = NodeId(final_id(positive));
-        port.negative = NodeId(final_id(negative));
-    }
-
-    let discretization = {
-        let mut all: Vec<AxisGrading> = plane_subdivisions
-            .into_iter()
-            .map(AxisGrading::from)
-            .collect();
-        all.extend(subdivisions);
-        // A ratio only matters on an axis cut into more than one filament.
-        let graded = all.iter().any(|grid| {
-            (grid.nw > 1 && grid.width_ratio != 1.0) || (grid.nh > 1 && grid.height_ratio != 1.0)
-        });
-        if graded {
-            Discretization::PerSegmentGraded(all)
-        } else {
-            let subdivisions: Vec<Subdivision> = all
-                .iter()
-                .map(|grid| Subdivision::new(grid.nw, grid.nh))
-                .collect();
-            let first = subdivisions[0];
-            if subdivisions.iter().all(|&sub| sub == first) {
-                Discretization::Uniform(first)
-            } else {
-                Discretization::PerSegment(subdivisions)
-            }
-        }
-    };
-
-    // Ground-plane bars come first in the geometry and carry no group tag,
-    // so they share the default group with any untagged segment.
-    let coupling = if named_couples {
-        let mut groups = vec![String::new(); plane_bars];
-        groups.extend(segment_groups);
-        // A name no segment carries is a typo, not a silent no-op — and a
-        // name declared on its own reaches no pair, so it is checked here
-        // rather than by `Coupling::validate` below.
-        for (line, name) in &couples_names {
-            if !groups.iter().any(|group| group == name) {
-                return Err(err(
-                    *line,
-                    format!("'.couples' names group '{name}', which no segment carries"),
-                ));
-            }
-        }
-        let mut coupling = Coupling::truncated(groups);
-        for [a, b] in couples {
-            coupling = coupling.coupled(a, b);
-        }
-        coupling
-            .validate(geometry.segment_count())
-            .map_err(|error| err(couples_line.unwrap_or(0), error.to_string()))?;
-        coupling
-    } else {
-        Coupling::all_pairs()
-    };
-
-    Ok(Deck {
-        title,
-        geometry,
-        ports,
-        discretization,
-        coupling,
-        frequencies,
-    })
+    coupling
+        .validate(segment_count)
+        .map_err(|error| err(couples_line.unwrap_or(0), error.to_string()))?;
+    Ok(coupling)
 }
 
 /// The position of the `live`-th surviving slot (the index space `resolve`
