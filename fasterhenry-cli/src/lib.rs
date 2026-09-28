@@ -19,12 +19,20 @@ use fasterhenry::{
 };
 
 /// Reads a problem from a file: `.inp`/`.fh` decks by extension, anything
-/// else as a JSON problem document.
+/// else as a JSON problem document. Decks are read with the default
+/// [`inp::ParseOptions`]; see [`read_inputs_with`].
 pub fn read_inputs(path: &Path) -> Result<Problem, String> {
+    read_inputs_with(path, inp::ParseOptions::default())
+}
+
+/// [`read_inputs`], reading a deck under `options` (for example
+/// [`inp::ParseOptions::fasthenry_compat`]). JSON problem documents ignore
+/// `options`.
+pub fn read_inputs_with(path: &Path, options: inp::ParseOptions) -> Result<Problem, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("inp") | Some("fh") => inp::parse(&text)
+        Some("inp") | Some("fh") => inp::parse_with_options(&text, options)
             .map(Problem::from)
             .map_err(|error| error.to_string()),
         _ => serde_json::from_str(&text)

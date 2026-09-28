@@ -5,8 +5,9 @@
 
 use clap::Parser;
 use fasterhenry_cli::cli::{Cli, Command};
+use fasterhenry_cli::inp::ParseOptions;
 use fasterhenry_cli::spice::write_spice_subckt;
-use fasterhenry_cli::{read_inputs, run_reporting_with, solver_for};
+use fasterhenry_cli::{read_inputs_with, run_reporting_with, solver_for};
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -19,8 +20,10 @@ fn main() -> anyhow::Result<()> {
             spice,
             spice_freq,
             solver,
+            fasthenry_compat,
         } => {
-            let problem = read_inputs(&input).map_err(|m| anyhow::anyhow!("{m}"))?;
+            let options = ParseOptions { fasthenry_compat };
+            let problem = read_inputs_with(&input, options).map_err(|m| anyhow::anyhow!("{m}"))?;
             let override_frequencies = match &freq {
                 Some(values) => Some(decade_frequencies(values[0], values[1], values[2])?),
                 None => None,
