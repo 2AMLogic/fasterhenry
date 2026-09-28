@@ -116,8 +116,9 @@ records how each documented field maps.
 | `contact connection N<name> (x, y, z, xwidth, ywidth, ratio)` | Supported | Issue #101. The documented shorthand: exactly a `contact equiv_rect` over the rectangle plus a `contact decay_rect` over the same rectangle with cells `xwidth/ratio`, `ywidth/ratio` and no decay limit (the negative-`maxcell` sentinel in the row above). Writing the two clauses out by hand produces an identical deck, which is what `connection_is_an_equiv_rect_plus_a_decay_rect` in `inp.rs` asserts. `ratio` must be > 1 — it divides the widths into the contact's own cells — and a ratio of 1 or less is a line-numbered error rather than a rectangle that grades nothing. |
 | `hole user1 (…)` … `hole user7 (…)` | Not supported, permanent | Issue #99. Rejected by name on the statement's own line, and the rejection is final rather than deferred — see the decision below. The error names the alternatives: the declarative shapes above, and `fasterhenry::plane::GroundPlane::mesh` + `fasterhenry::plane::Hole::Point` for a shape none of them describe. |
 | `contact point (x, y, z, xcell, ycell)`, `contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)` | Supported, differs | Issue #100. Every cell holding the point, or crossed by the line, is no larger than `xcell` × `ycell`. Both map onto one `fasterhenry::plane::ContactRegion`: the locus's bounding box padded by half a requested cell on every side, cut into the fewest cells no larger than that cell — so a point is exactly one `xcell × ycell` cell centred on it, and a zero-length line is that point. Outside it the mesh grades back at ratio 2, the reader's `contact rect` default (neither shape documents a decay). A requested cell at or above the plane's background cell is already met and is clamped there rather than coarsening the mesh; a point or line met on both axes adds nothing. Both ends are checked against the plane's slab and footprint. **The difference**: a diagonal line refines its whole padded bounding box, because this engine's mesh is a tensor product — a refined band on one axis spans the plane on the other, so any refinement covering the line (a chain of rectangles included) has the same bands. That costs about `(Lx/xcell)·(Ly/ycell)` fine cells where a mesh following the diagonal would need about `Lx/xcell + Ly/ycell`; an axis-aligned line costs nothing extra. |
-| `contact trace (…)` | Deferred | Issues #80, #98, #100 and #101 took `decay_rect`, `hole point`/`hole circle`, `contact point`/`contact line` and `contact equiv_rect`/`contact connection`; this one stays rejected by name, on the statement's own line, rather than approximated. Tracked as issue #110: how `trace_width` and `scale_factor` set the cell size is still to be pinned. |
-| `contact circle (…)` | Not supported, permanent | Issue #109. Rejected by name on the statement's own line — but unlike the row above this is not deferred work: the public description of the `contact` family names the simple refinement utilities `point`, `line`, `rect` and `decay_rect`, the contact-*area* utility `equiv_rect`, the grouped `connection` and `trace` built on them, and the `initial_grid`/`initial_mesh_grid` pair — no disc among them. `circle` is a **hole** shape (`hole circle (x, y, z, r)`), so there is no argument list to pin and nothing in a deck to read — see the decision below. The geometry is not what is missing: on this tensor-product mesh the whole of what a disc could mean is `contact decay_rect` over its bounding square, and the error names that. |
+| `contact trace (x0, y0, z0, x1, y1, z1, trace_width, scale_factor)` along x or y | Supported | Issue #110. Refines the plane finely across the trace's projection, not along it. Source: the public memo *Nonuniformly Discretized Reference Planes in FastHenry 3.0* (M. Kamon, 10 October 1996, section "Grouped contact utilities"), whose worked example expands an x-directed trace of width `w` and length `L` into five `contact line`s — at the trace and at `±w/2` with cells `(L, w/2)`, and at `±3w/2` with cells `(L, w)` — and which states that `scale_factor` has no effect on a trace parallel to x or y. This reader performs exactly that expansion (axes swapped for a trace along y), each line mapping as in the `contact line` row above; writing the five lines out by hand gives the same mesh, which `contact_trace_along_x_is_the_documented_five_lines` in `inp.rs` asserts. `scale_factor` is checked to be positive and otherwise unused. The trace's own ends are checked against the plane's slab and footprint on the statement's line; the side lines are clipped to the plane (and dropped where they miss it), so a trace along the plane's edge is accepted. A zero-length trace has no direction and is a line-numbered error naming `contact point`. |
+| `contact trace (…)` not parallel to x or y | Not supported, permanent | Issue #110. Rejected by name on the statement's own line, as a decision rather than deferred work — see "Decision: a diagonal `contact trace` is rejected" below. The error names `contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)`, which states the cell size outright. |
+| `contact circle (…)` | Not supported, permanent | Issue #109. Rejected by name on the statement's own line — and, like the diagonal `contact trace` row above, this is not deferred work: the public description of the `contact` family names the simple refinement utilities `point`, `line`, `rect` and `decay_rect`, the contact-*area* utility `equiv_rect`, the grouped `connection` and `trace` built on them, and the `initial_grid`/`initial_mesh_grid` pair — no disc among them. `circle` is a **hole** shape (`hole circle (x, y, z, r)`), so there is no argument list to pin and nothing in a deck to read — see the decision below. The geometry is not what is missing: on this tensor-product mesh the whole of what a disc could mean is `contact decay_rect` over its bounding square, and the error names that. |
 | `contact initial_grid (n1, n2)` | Supported | Issue #113, which pinned the convention #101 left open: `n1` cells along `p1 → p2` and `n2` along `p2 → p3` — the same pair `seg1`/`seg2` set, as the clause's own public description states ("`seg1=10 seg2=12` could be replaced with `file=NONE contact initial_grid (10,12)`"). See the decision below for the evidence, including why the description's word *rows* does not overturn it. The counts are cells, not grid lines. Because the two clauses are one statement, a plane giving both `contact initial_grid` and `seg1`/`seg2` (in either order), or two initial grids, is a line-numbered error rather than a race between them. `file=NONE`, which the public example pairs with the clause, is still rejected by name (see the `file=` row above and issue #122); this reader needs no such marker, since the initial grid is the only discretization it reads. |
 | `contact initial_mesh_grid (n1, n2)` | Supported, differs | Issue #113. That same initial grid, plus the documented checkerboard: "every cell that has an even value for both of its indices where the numbering is from the top left" — so, with the cells numbered from 1 at the plane's own origin (its `p1` corner) along each axis, every cell whose two indices are **both even**. An axis of one cell has no even index and so no hole. The difference is what each hole *is*: a `Hole::Rect` over the holed cell's own rectangle rather than a `Hole::Point` at its centre. On the initial grid alone the two are the same cut; the grid is *initial*, though, and a later `contact` clause may refine that region — the documented hole is the square ("no conductor will be defined in that square region"), not whichever smaller cell a refinement leaves under the centre. Numbering from `p1` is what fixes the checkerboard's phase: for an odd count either end selects the same cells, but for an even count the two differ by one cell, and `p1` is the origin of the plane coordinate system the same description defines (and the corner its own uniform-plane figure draws at the top left). |
 | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=] [sigma=\|rho=]`, `.hole`, `.contact` | Supported, extended | This project's own shorthand plane form and its separate refinement directives — not documented FastHenry syntax. Told apart from the corner-point form by the first token after the plane name, so a deck may mix the two; both build the same plane. |
@@ -132,8 +133,9 @@ mean** — they are arguments to a function this project does not have and,
 under the clean-room rule, may not go looking for.
 
 That makes them unlike every other rejected shape in the table above. A
-`contact trace` is a *shape this reader cannot represent yet*: its meaning
-is public, and issue #110 tracks the work that would represent it. A
+diagonal `contact trace` is a shape whose *public description disagrees
+with itself* (issue #110, decided below) — a statement away, not a model
+away. A
 `contact initial_grid` was a shape whose *value list* was not pinned down
 here — one documented fact away, not a model away, and issue #113 has since
 read that fact out of the public description (the decision below). A
@@ -218,7 +220,7 @@ routines do not support the hole utility at all.
 
 So the earlier "argument list still to be pinned" wording had the situation
 backwards, and this row is now rejected the way `hole user1`…`user7` are
-rather than the way `contact trace` is: not deferred work, but a name with
+rather than as deferred work: but a name with
 no meaning to read. The reader keeps rejecting it by name, on the
 statement's own line, and the error says which family each name belongs to
 so a deck that meant `hole circle` is told exactly that.
@@ -243,6 +245,54 @@ the disc misses.
 `contact circle` utility *and* its value list. Then the row becomes a
 two-line parser arm over the mapping above, with the padding rule
 `contact point` already uses. Nothing about the plane model would change.
+
+### Decision: a diagonal `contact trace` is rejected (issue #110)
+
+A `contact trace` parallel to x or y is supported (its row above): the
+public memo *Nonuniformly Discretized Reference Planes in FastHenry 3.0*
+(M. Kamon, 1996, section "Grouped contact utilities") writes that case out
+line by line, and says `scale_factor` does not affect it. For a trace at
+an angle θ to the x axis, the same section gives the cells under the trace
+as magnified by `scale_factor` — and states that magnification two ways
+that do not agree:
+
+1. As a law: the cell sizes handed to `contact line` are multiplied by
+   `scale_factor^|tan θ|`.
+2. As prose: the magnification varies continuously from 1 to
+   `scale_factor` as the angle goes from 0° to 45° **or from 90° to 45°**.
+
+For θ between 0° and 45° the two agree. For θ between 45° and 90° they do
+not: `|tan θ|` exceeds 1 and grows without bound toward 90°, so the law
+magnifies the cells by *more* than `scale_factor` — without limit for a
+nearly-vertical trace — where the prose keeps the factor between 1 and
+`scale_factor` and returns it to 1 at 90°. A reader has to pick one, and
+the other is a different mesh. Even below 45° the memo leaves two further
+facts unstated that the cell size turns on:
+
+- **Where the side lines go.** The axis-aligned expansion offsets its four
+  side lines by `±w/2` and `±3w/2` across the trace; for a diagonal trace
+  "across" could mean perpendicular to it or along one axis, and the memo
+  shows neither.
+- **What cell the lines ask for along the trace.** An axis-aligned trace
+  asks for the trace's own length along it — no refinement there. A
+  diagonal trace has no axis "along it"; the memo's 45° example gives the
+  cell *directly under* the trace (`scale_factor · trace_width / 2`), which
+  implies both axes get the magnified across-cell there, but says nothing of
+  a 10° trace, where refining the whole bounding box to `~trace_width/2` in
+  x is precisely what the utility exists to avoid.
+
+So the cell size a diagonal `contact trace` asks for is not determined by
+the public description, and the clean-room rule (`CONTRIBUTING.md`) forbids
+settling it from anywhere else. The error therefore does not guess: it names
+`contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)`, with which a deck
+states the cell it wants outright (on this engine's tensor-product mesh a
+diagonal line refines its padded bounding box — see the `contact line` row
+— which is also what any reading of the diagonal `contact trace` would
+cost here).
+
+**What would reopen this.** A public statement that settles the 45°–90°
+law and the diagonal side-line placement — not a deck, since a deck can
+only repeat the ambiguous clause.
 
 ### Decision: `(n1, n2)` counts `p1 → p2` then `p2 → p3` (issue #113)
 
@@ -359,7 +409,10 @@ as a result of this table beyond what is listed below.
   trace` to issues #109 and #110. Issue #109 has since been *decided*
   rather than implemented, like #99: `contact circle` is not a documented
   shape at all, so it is permanently rejected — see "Decision: `contact
-  circle` is not a documented shape" above. Issue #101 has since been implemented for
+  circle` is not a documented shape" above. Issue #110 has since implemented
+  `contact trace` along x or y and *decided* the diagonal case as a
+  permanent rejection — see its rows above and "Decision: a diagonal
+  `contact trace` is rejected". Issue #101 has since been implemented for
   `contact equiv_rect` and `contact connection` — their own rows above —
   and filed #113 for the two initial-grid forms it deliberately left
   rejected.)
