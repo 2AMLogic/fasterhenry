@@ -64,6 +64,8 @@
 //! +       hole circle (x, y, z, r) …
 //! +       contact rect (x1, y1, z1, x2, y2, z2) …
 //! +       contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell) …
+//! +       contact point (x, y, z, xcell, ycell) …
+//! +       contact line (x0, y0, z0, x1, y1, z1, xcell, ycell) …
 //! ```
 //!
 //! * **The three corner points** give one corner and its two neighbours:
@@ -154,14 +156,51 @@
 //!   centres the plane meshes to and a
 //!   [`fasterhenry::plane::Hole::Point`] at each centre an arbitrary rule
 //!   selects removes precisely those cells.
+//! * **`contact point (x, y, z, xcell, ycell)`** and **`contact line (x0,
+//!   y0, z0, x1, y1, z1, xcell, ycell)`** (issue #100) ask that every cell
+//!   holding the point, or crossed by the line, be no larger than `xcell`
+//!   across x and `ycell` across y. Both map onto a
+//!   [`fasterhenry::plane::ContactRegion`]:
+//!     * the region is the locus's bounding box padded by half a requested
+//!       cell on every side, cut into the fewest cells no larger than that
+//!       cell — so a point is exactly **one** `xcell × ycell` cell centred
+//!       on it (a via landing there snaps onto that cell's centre), a line
+//!       along x is a one-cell-high strip reaching half a cell past each
+//!       end, and a zero-length line is the point at its ends;
+//!     * outside, the cells grade back to the background at ratio 2, the
+//!       same default `contact rect` and `.contact` use: neither shape
+//!       documents a decay of its own, and a tensor-product mesh has to
+//!       return to the background cell somehow;
+//!     * a requested cell at or above the plane's background cell is
+//!       already met there (grading never grows a cell past the
+//!       background cell), so that axis is clamped to the background cell
+//!       rather than coarsened, and a point or line met on both axes adds
+//!       no region at all;
+//!     * both ends are checked against the plane's slab and footprint, on
+//!       the statement's own line.
+//!
+//!   A **diagonal** line refines its whole padded bounding box, not a
+//!   band along the diagonal. That is the exact cost of this engine's
+//!   tensor-product mesh rather than an approximation of the request: a
+//!   refined band on one axis spans the plane on the other (see the
+//!   `fasterhenry::plane` module documentation), so any refinement that
+//!   covers the line — a chain of small rectangles along it included —
+//!   produces these same x- and y-bands, and their crossing is the box. A
+//!   line running `Lx` by `Ly` therefore costs about `(Lx/xcell) ·
+//!   (Ly/ycell)` fine cells where a mesh free to follow it would need
+//!   about `Lx/xcell + Ly/ycell`; an axis-aligned line costs nothing
+//!   extra. The request itself is always honoured, overlapping regions
+//!   included: merged bands keep their finest cell.
 //! * Every other documented shape is **rejected by name** too, on the
-//!   statement's own line: this engine's holes and contacts are
-//!   rectangles, points or circles, and a shape it cannot represent must
-//!   not be quietly approximated by one. Unlike the user-defined holes,
-//!   these *are* representable — each needs a change to the plane model,
-//!   tracked separately:
-//!     * `contact point`, `contact line`, `contact circle`,
-//!       `contact trace` — issue #100;
+//!   statement's own line: this engine's holes are rectangles, points or
+//!   circles and its contacts rectangles, points or lines, and a shape
+//!   whose semantics have not been stated and tested must not be quietly
+//!   approximated by one of those. Unlike the user-defined holes, these
+//!   have a public meaning, and each is tracked separately:
+//!     * `contact circle` — issue #109 (its argument list still to be
+//!       pinned from the public documentation);
+//!     * `contact trace` — issue #110 (how `trace_width` and
+//!       `scale_factor` set the cell size still to be pinned);
 //!     * `contact equiv_rect`, `contact connection`,
 //!       `contact initial_grid`, `contact initial_mesh_grid` — issue #101.
 //! * The remaining documented plane parameters are rejected by name too,
@@ -850,6 +889,81 @@ fn decay_rect_values(
     })
 }
 
+/// A `contact point` or `contact line` clause, kept raw until the plane's
+/// own geometry — and so its background cell — is known. A point is the
+/// line whose two ends coincide.
+#[derive(Clone, Copy, Debug)]
+struct RefineLine {
+    /// The locus's two ends `(x, y, z)`, metres (equal for a point).
+    ends: [[f64; 3]; 2],
+    /// The largest cell wanted along it, per axis `[x, y]`, metres.
+    cell: [f64; 2],
+}
+
+/// The values of a `contact point (x, y, z, xcell, ycell)` or `contact line
+/// (x0, y0, z0, x1, y1, z1, xcell, ycell)` clause. See the [module
+/// documentation](self).
+fn refine_line_values(
+    values: &[String],
+    line_shape: bool,
+    what: &str,
+    unit: f64,
+    line: usize,
+) -> Result<RefineLine, ParseError> {
+    let (count, form) = if line_shape {
+        (8, "x0, y0, z0, x1, y1, z1, xcell, ycell")
+    } else {
+        (5, "x, y, z, xcell, ycell")
+    };
+    if values.len() != count {
+        return Err(err(
+            line,
+            format!("{what} takes {count} values ({form}), got {}", values.len()),
+        ));
+    }
+    let first = triple(&values[..3], what, unit, line)?;
+    let (ends, rest) = if line_shape {
+        (
+            [first, triple(&values[3..6], what, unit, line)?],
+            &values[6..],
+        )
+    } else {
+        ([first, first], &values[3..])
+    };
+    let mut cell = [0.0f64; 2];
+    for axis in 0..2 {
+        cell[axis] = parse_number(&rest[axis], line)? * unit;
+        // `parse_number` has already rejected a non-finite value.
+        if cell[axis] <= 0.0 {
+            return Err(err(
+                line,
+                format!(
+                    "{what}: {}cell={} metres must be > 0 — it is the largest cell wanted along the {}",
+                    ['x', 'y'][axis],
+                    cell[axis],
+                    if line_shape { "line" } else { "point" }
+                ),
+            ));
+        }
+    }
+    Ok(RefineLine { ends, cell })
+}
+
+/// The fewest uniform cells across `span` whose extent is no larger than
+/// `cell` — `ceil(span / cell)`, except that a span that is an exact
+/// multiple of `cell` must not gain a spurious extra cell from a last-bit
+/// rounding of the division.
+fn cells_no_coarser_than(span: f64, cell: f64) -> usize {
+    let quotient = span / cell;
+    let rounded = quotient.round();
+    (if (quotient - rounded).abs() <= 1e-9 * rounded {
+        rounded
+    } else {
+        quotient.ceil()
+    } as usize)
+        .max(1)
+}
+
 /// Parses a FastHenry-form `G` ground-plane statement — the corner-point
 /// grammar — into the same [`PlaneSpec`] the extension form produces, plus
 /// its in-plane node declarations. See the [module documentation](self).
@@ -880,6 +994,8 @@ fn parse_plane_statement(
     let mut hole_circles: Vec<([f64; 3], f64)> = Vec::new();
     let mut contact_rects: Vec<[[f64; 3]; 2]> = Vec::new();
     let mut contact_decays: Vec<DecayRect> = Vec::new();
+    // `contact point` / `contact line`, with the clause's own name.
+    let mut contact_lines: Vec<(&'static str, RefineLine)> = Vec::new();
 
     for item in scan_plane_items(body, line)? {
         match item {
@@ -995,6 +1111,18 @@ fn parse_plane_statement(
                     ("contact", "decay_rect") => {
                         contact_decays.push(decay_rect_values(&values, &what, unit, line)?);
                     }
+                    ("contact", "point") => {
+                        contact_lines.push((
+                            "'contact point'",
+                            refine_line_values(&values, false, &what, unit, line)?,
+                        ));
+                    }
+                    ("contact", "line") => {
+                        contact_lines.push((
+                            "'contact line'",
+                            refine_line_values(&values, true, &what, unit, line)?,
+                        ));
+                    }
                     ("hole", other) if is_user_hole(other) => {
                         return Err(err(
                             line,
@@ -1015,7 +1143,7 @@ fn parse_plane_statement(
                         return Err(err(
                             line,
                             format!(
-                                "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)' or 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)' (and '.contact' to set a rectangle's refinement directly)"
+                                "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)' or 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' (and '.contact' to set a rectangle's refinement directly)"
                             ),
                         ));
                     }
@@ -1172,7 +1300,8 @@ fn parse_plane_statement(
             radius,
         });
     }
-    let mut contacts = Vec::with_capacity(contact_rects.len() + contact_decays.len());
+    let mut contacts =
+        Vec::with_capacity(contact_rects.len() + contact_decays.len() + contact_lines.len());
     for rect in contact_rects {
         let (lo, hi) = footprint("'contact rect'", rect)?;
         contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
@@ -1192,13 +1321,7 @@ fn parse_plane_statement(
             // than the deck's `<axis>cell`; a width that is an exact
             // multiple of it must not gain a spurious extra cell from a
             // last-bit rounding of the division.
-            let quotient = decay.widths[axis] / decay.cell[axis];
-            let rounded = quotient.round();
-            region_cells[axis] = if (quotient - rounded).abs() <= 1e-9 * rounded {
-                rounded
-            } else {
-                quotient.ceil()
-            } as usize;
+            region_cells[axis] = cells_no_coarser_than(decay.widths[axis], decay.cell[axis]);
             // The documented decay law: with `r0` the requested cell as a
             // fraction of the rectangle's width, each cell outside the
             // rectangle is `1/(1 − r0)` times its inward neighbour.
@@ -1221,6 +1344,51 @@ fn parse_plane_statement(
             region_cells,
             ratio,
         ));
+    }
+    // `contact point` / `contact line`: the segment's bounding box, padded
+    // by half a requested cell each side, cut into cells no coarser than
+    // that cell and graded outward at the reader's default ratio 2. See
+    // the module documentation for why the box is exact, not a
+    // compromise, on this engine's tensor-product mesh.
+    for (what, refine) in contact_lines {
+        for end in refine.ends {
+            in_slab(what, end)?;
+            if !(end[0] >= lo[0] - tolerance
+                && end[0] <= hi[0] + tolerance
+                && end[1] >= lo[1] - tolerance
+                && end[1] <= hi[1] + tolerance)
+            {
+                return Err(err(
+                    line,
+                    format!(
+                        "{what}: ({}, {}) metres is outside ground plane '{head}'",
+                        end[0], end[1]
+                    ),
+                ));
+            }
+        }
+        let mut region = ([0.0f64; 2], [0.0f64; 2]);
+        let mut region_cells = [0usize; 2];
+        let mut already_met = true;
+        for axis in 0..2 {
+            // A request at or above the background cell is already met by
+            // the background mesh (no cell is ever coarser than it), so it
+            // is clamped there: a refinement must never coarsen the plane.
+            let background = (hi[axis] - lo[axis]) / cells[axis] as f64;
+            let cell = if refine.cell[axis] >= background * (1.0 - 1e-9) {
+                background
+            } else {
+                already_met = false;
+                refine.cell[axis]
+            };
+            let (a, b) = (refine.ends[0][axis], refine.ends[1][axis]);
+            region.0[axis] = a.min(b) - cell / 2.0;
+            region.1[axis] = a.max(b) + cell / 2.0;
+            region_cells[axis] = cells_no_coarser_than(region.1[axis] - region.0[axis], cell);
+        }
+        if !already_met {
+            contacts.push(ContactRegion::new(region.0, region.1, region_cells, 2.0));
+        }
     }
 
     for (name, position) in &nodes {
@@ -3296,6 +3464,233 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         ));
     }
 
+    /// The corner-point plane every `contact point` / `contact line` test
+    /// below uses: 10 × 6 mm, 2 mm background cells each way, as a library
+    /// value carrying the given contacts.
+    fn refine_test_plane(contacts: Vec<ContactRegion>) -> GroundPlane {
+        GroundPlane {
+            lo: [0.0, 0.0],
+            hi: [10e-3, 6e-3],
+            z_top: 0.02e-3,
+            thickness: 0.04e-3,
+            nx: 5,
+            ny: 3,
+            sigma: 5.8e7,
+            holes: Vec::new(),
+            contacts,
+        }
+    }
+
+    /// The index of the cell whose extent (edges included) holds `value`.
+    fn cell_holding(edges: &[f64], value: f64) -> usize {
+        edges
+            .windows(2)
+            .position(|pair| pair[0] - 1e-15 <= value && value <= pair[1] + 1e-15)
+            .expect("the value lies on the plane")
+    }
+
+    const REFINE_PLANE: &str = "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3";
+
+    /// A deck whose plane is `REFINE_PLANE` carrying one extra clause.
+    fn refine_deck(clause: &str) -> String {
+        plane_deck(&format!("{REFINE_PLANE}\n+ {clause}"), "")
+    }
+
+    /// `contact point (x, y, z, xcell, ycell)` is one fine cell of exactly
+    /// `xcell × ycell` centred on the point, graded outward at ratio 2 —
+    /// the same region a `.contact` directive names by its corners. The
+    /// point is then that cell's centre, so the via landing on it (the
+    /// deck's `Nb` at (5, 3)) snaps to it exactly.
+    #[test]
+    fn contact_point_is_one_fine_cell_centred_on_the_point() {
+        let point = parse_ok(&refine_deck("contact point (5, 3, 0, 0.5, 0.25)"));
+        let directive = parse_ok(&plane_deck(
+            REFINE_PLANE,
+            ".contact Gp 4.75 2.875 5.25 3.125 nx=1 ny=1 ratio=2",
+        ));
+        assert_eq!(point.geometry, directive.geometry);
+        assert_eq!(point.ports, directive.ports);
+
+        let mesh = refine_test_plane(vec![ContactRegion::new(
+            [4.75e-3, 2.875e-3],
+            [5.25e-3, 3.125e-3],
+            [1, 1],
+            2.0,
+        )])
+        .mesh()
+        .unwrap();
+        let i = cell_holding(mesh.x_edges(), 5e-3);
+        let j = cell_holding(mesh.y_edges(), 3e-3);
+        assert!(mesh.dx(i) <= 0.5e-3 + 1e-15, "{}", mesh.dx(i));
+        assert!(mesh.dy(j) <= 0.25e-3 + 1e-15, "{}", mesh.dy(j));
+        let centre = mesh.centre(i, j);
+        assert!((centre[0] - 5e-3).abs() < 1e-12 && (centre[1] - 3e-3).abs() < 1e-12);
+        assert!(
+            point
+                .geometry
+                .nodes()
+                .iter()
+                .any(|n| (n.x - 5e-3).abs() < 1e-12 && (n.y - 3e-3).abs() < 1e-12),
+            "the landing snaps onto the refined cell's centre"
+        );
+    }
+
+    /// A requested cell at or above the plane's background cell is
+    /// already met by the background mesh, so that axis is clamped to the
+    /// background cell rather than coarsened — and a point met on both
+    /// axes changes nothing at all.
+    #[test]
+    fn contact_point_never_coarsens_the_background() {
+        let plain = parse_ok(&plane_deck(REFINE_PLANE, ""));
+        let met = parse_ok(&refine_deck("contact point (5, 3, 0, 2, 3)"));
+        assert_eq!(met.geometry, plain.geometry);
+
+        // x asks for 4 mm (met by the 2 mm background: clamped to 2 mm),
+        // y for 0.5 mm.
+        let half = parse_ok(&refine_deck("contact point (5, 3, 0, 4, 0.5)"));
+        let directive = parse_ok(&plane_deck(
+            REFINE_PLANE,
+            ".contact Gp 4 2.75 6 3.25 nx=1 ny=1 ratio=2",
+        ));
+        assert_eq!(half.geometry, directive.geometry);
+    }
+
+    /// A point near the plane's edge: its region is clipped to the plane
+    /// and widened over the sliver it leaves, and the widened band is cut
+    /// into cells no coarser than the one requested — the cell holding the
+    /// point still honours `xcell`.
+    #[test]
+    fn contact_point_at_the_plane_edge_keeps_its_cell_size() {
+        let edge = parse_ok(&refine_deck("contact point (0.8, 3, 0, 1, 1)"));
+        let directive = parse_ok(&plane_deck(
+            REFINE_PLANE,
+            ".contact Gp 0.3 2.5 1.3 3.5 nx=1 ny=1 ratio=2",
+        ));
+        // The same mesh, up to the last bit of `0.8 − 0.5` against `0.3`.
+        let (a, b) = (edge.geometry.nodes(), directive.geometry.nodes());
+        assert_eq!(a.len(), b.len());
+        assert_eq!(
+            edge.geometry.segment_count(),
+            directive.geometry.segment_count()
+        );
+        for (p, q) in a.iter().zip(b) {
+            assert!((p.x - q.x).abs() < 1e-15 && (p.y - q.y).abs() < 1e-15 && p.z == q.z);
+        }
+        let mesh = refine_test_plane(vec![ContactRegion::new(
+            [0.3e-3, 2.5e-3],
+            [1.3e-3, 3.5e-3],
+            [1, 1],
+            2.0,
+        )])
+        .mesh()
+        .unwrap();
+        let i = cell_holding(mesh.x_edges(), 0.8e-3);
+        assert!(mesh.dx(i) <= 1e-3 + 1e-15, "{}", mesh.dx(i));
+        // Exactly on the plane's corner is still on the plane.
+        parse_ok(&refine_deck("contact point (0, 0, 0, 0.5, 0.5)"));
+        parse_ok(&refine_deck("contact point (10, 6, 0, 0.5, 0.5)"));
+    }
+
+    /// `contact line` along x refines a one-cell-high strip covering the
+    /// segment plus half a cell past each end; a zero-length line is
+    /// exactly the `contact point` at its ends.
+    #[test]
+    fn contact_line_along_an_axis_is_a_padded_strip() {
+        let strip = parse_ok(&refine_deck("contact line (2, 3, 0, 8, 3, 0, 0.5, 0.25)"));
+        // x: 1.75 … 8.25 is 13 cells of 0.5 mm; y: one 0.25 mm cell.
+        let directive = parse_ok(&plane_deck(
+            REFINE_PLANE,
+            ".contact Gp 1.75 2.875 8.25 3.125 nx=13 ny=1 ratio=2",
+        ));
+        assert_eq!(strip.geometry, directive.geometry);
+        // The ends may be given either way round.
+        let reversed = parse_ok(&refine_deck("contact line (8, 3, 0, 2, 3, 0, 0.5, 0.25)"));
+        assert_eq!(reversed.geometry, strip.geometry);
+
+        let degenerate = parse_ok(&refine_deck("contact line (5, 3, 0, 5, 3, 0, 0.5, 0.25)"));
+        let point = parse_ok(&refine_deck("contact point (5, 3, 0, 0.5, 0.25)"));
+        assert_eq!(degenerate.geometry, point.geometry);
+    }
+
+    /// A diagonal `contact line` refines its whole (padded) bounding box.
+    /// On this engine's tensor-product mesh that is not a compromise: a
+    /// refined band on one axis spans the plane on the other, so any
+    /// refinement that covers the line — a chain of small rectangles
+    /// included — has these same x- and y-bands, and their crossing is the
+    /// box. The cost is stated: 13 × 9 fine cells here, where a mesh free
+    /// to follow the diagonal would need about 13 + 9.
+    #[test]
+    fn contact_line_on_a_diagonal_refines_its_bounding_box() {
+        let diagonal = parse_ok(&refine_deck("contact line (2, 1, 0, 8, 5, 0, 0.5, 0.5)"));
+        let directive = parse_ok(&plane_deck(
+            REFINE_PLANE,
+            ".contact Gp 1.75 0.75 8.25 5.25 nx=13 ny=9 ratio=2",
+        ));
+        assert_eq!(diagonal.geometry, directive.geometry);
+
+        // Every cell the line passes through honours the requested size.
+        let mesh = refine_test_plane(vec![ContactRegion::new(
+            [1.75e-3, 0.75e-3],
+            [8.25e-3, 5.25e-3],
+            [13, 9],
+            2.0,
+        )])
+        .mesh()
+        .unwrap();
+        for step in 0..=600 {
+            let t = f64::from(step) / 600.0;
+            let (x, y) = (2e-3 + t * 6e-3, 1e-3 + t * 4e-3);
+            let i = cell_holding(mesh.x_edges(), x);
+            let j = cell_holding(mesh.y_edges(), y);
+            assert!(mesh.dx(i) <= 0.5e-3 + 1e-15, "dx {} at x={x}", mesh.dx(i));
+            assert!(mesh.dy(j) <= 0.5e-3 + 1e-15, "dy {} at y={y}", mesh.dy(j));
+        }
+    }
+
+    /// Every `contact point` / `contact line` value the reader cannot
+    /// honour is rejected by name on the statement's own line.
+    #[test]
+    fn contact_point_and_line_parameter_errors() {
+        for (clause, expected) in [
+            // The pre-#100 three-value form is a point with no cell size:
+            // not guessed at.
+            ("contact point (5, 3, 0)", "takes 5 values"),
+            ("contact point (5, 3, 0, 1, 1, 1)", "takes 5 values"),
+            ("contact line (1, 1, 0, 9, 5, 0, 0.2)", "takes 8 values"),
+            ("contact point (5, 3, 0, 0, 1)", "xcell=0"),
+            ("contact point (5, 3, 0, 1, -1)", "ycell=-0.001"),
+            ("contact line (1, 1, 0, 9, 5, 0, 0.2, 0)", "ycell=0"),
+            // z is checked against the plane's slab, as every clause's is.
+            (
+                "contact point (5, 3, 3, 1, 1)",
+                "is not in ground plane 'Gp'",
+            ),
+            (
+                "contact line (1, 1, 0, 9, 5, 3, 0.2, 0.2)",
+                "is not in ground plane 'Gp'",
+            ),
+            // …and x/y against its footprint.
+            (
+                "contact point (11, 3, 0, 1, 1)",
+                "is outside ground plane 'Gp'",
+            ),
+            (
+                "contact line (1, 1, 0, 9, 7, 0, 0.2, 0.2)",
+                "is outside ground plane 'Gp'",
+            ),
+        ] {
+            let error = parse(&refine_deck(clause)).unwrap_err();
+            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
+            assert!(
+                error.message.contains(expected),
+                "'{clause}' must name what it rejects, got: {}",
+                error.message
+            );
+        }
+    }
+
     /// `seg1` counts cells along `p1 → p2` and `seg2` along `p2 → p3`,
     /// whichever axis each of those edges runs along.
     #[test]
@@ -3488,10 +3883,6 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ("wibble=1", "unknown ground-plane parameter 'wibble'"),
             ("hole user1 (5, 3, 0)", "'hole user1' is not supported"),
             (
-                "contact point (5, 3, 0)",
-                "'contact point' is not supported",
-            ),
-            (
                 "contact circle (5, 3, 0, 1)",
                 "'contact circle' is not supported",
             ),
@@ -3502,10 +3893,6 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             (
                 "contact initial_mesh_grid (5, 5)",
                 "'contact initial_mesh_grid' is not supported",
-            ),
-            (
-                "contact line (1, 1, 0, 9, 5, 0, 0.2, 0.2)",
-                "'contact line' is not supported",
             ),
             (
                 "contact connection (5, 3, 0, 2, 2, 2)",
