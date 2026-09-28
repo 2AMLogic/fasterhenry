@@ -103,7 +103,7 @@ records how each documented field maps.
 | `seg1=`, `seg2=` | Supported, differs | Become the background cell counts of this engine's own cell-centre PEEC mesh, not FastHenry's panel mesh: equal counts mean equal resolution, not an identical node set. |
 | `sigma=` | Supported | Per deck unit, falling back to the `.default` conductivity (`.default sigma=` or `.default rho=`). |
 | `nhinc=` | Supported | Filaments through the plane's thickness. |
-| `rho=` on the corner-point form | Not supported | Rejected by name with the alternative: give `sigma = 1/rho`, or a `.default rho=` (which does reach corner-point planes). The extension form below accepts `rho=` on the line (issue #70). |
+| `rho=` | Supported | Issue #88. Per deck unit, the exact reciprocal of `sigma=` and accepted on the corner-point statement itself (continuation lines included); naming both `sigma=` and `rho=` on one statement is a line-numbered error, as it is elsewhere. |
 | `rh=`, `segwid1=`/`segwid2=`, `relx=`/`rely=`/`relz=`, `file=` | Not supported | Each rejected by name with the reason and the alternative (plane filaments are uniform; bar widths follow the cells; name in-plane nodes instead; no output-file option). Nothing on a `G` statement is silently ignored. |
 | In-plane node `N<name> (x, y, z)` | Supported | An ordinary deck node belonging to the plane; a reference to it lands on the nearest live cell-centre node of that plane. |
 | `hole rect (…)`, `contact rect (…)` | Supported | Map onto the plane model's rectangular hole and contact region; the redundant `z` coordinates are checked against the plane's slab. An inline `contact rect` uses 2 × 2 fine cells at ratio 2 — use `.contact` to choose other values. |

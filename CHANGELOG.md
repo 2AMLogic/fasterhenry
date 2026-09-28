@@ -34,8 +34,7 @@ breaking changes to the API or the command-line interface; patch releases
   planes is rejected rather than silently attaching to one.
   `nhinc=` is also accepted on the shorthand form.
   Every remaining documented plane parameter is rejected by name, with the
-  statement's line number and the alternative: `rho` (on this form give
-  `sigma = 1/rho` or a `.default rho=`), `rh`, `segwid1`/`segwid2`,
+  statement's line number and the alternative: `rh`, `segwid1`/`segwid2`,
   `relx`/`rely`/`relz`, `file`, and every hole or contact shape other than `rect` (`point`, `circle`,
   `decay_rect`, `trace`, the `initial_*`/`equiv_*` forms and the
   user-defined `user1…user7`) — nothing on a `G` statement is silently
@@ -49,9 +48,16 @@ breaking changes to the API or the command-line interface; patch releases
   reciprocal of `sigma=` (issue #70); `rho` must be positive, and giving
   both `sigma=` and `rho=` on one line is a line-numbered error. The
   extension form `G<name> x1 y1 z1 x2 y2 z2 t` now also takes a per-plane
-  `sigma=` overriding `.default`, alongside its `nx=`/`ny=`/`nhinc=`. The
-  corner-point `G` form keeps its `sigma=` and still rejects `rho=` by
-  name (a `.default rho=` does reach its planes).
+  `sigma=` overriding `.default`, alongside its `nx=`/`ny=`/`nhinc=`.
+- Deck reader: `rho=` is accepted directly on the corner-point `G`
+  ground-plane statement too — the syntax real FastHenry decks use — so the
+  whole deck format now takes the conductivity either way wherever it takes
+  it at all (issue #88, follow-up to #70). It converts to a conductivity
+  exactly as elsewhere (`1/rho` per deck unit), so a corner-point plane with
+  `rho=0.5` parses to the same deck as one with `sigma=2`; naming both
+  `sigma=` and `rho=` on one corner-point statement — continuation lines
+  included — is the same line-numbered error as everywhere else, and naming
+  neither still falls back to the `.default` conductivity.
 - Deck reader: `.units` accepts the full documented list — `km`, `m`, `cm`,
   `mm`, `um`, `in`, `mils` (`mil` kept as a synonym) — case-insensitively.
 - `docs/fasthenry-compat.md`: a field-by-field compatibility table auditing

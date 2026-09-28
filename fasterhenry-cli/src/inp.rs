@@ -19,7 +19,7 @@
 //! | `E<name> N<a> N<b> [field]=<v> …` | Segment between two nodes; fields as for `.default` minus `x`/`y`/`z`, plus `group=<name>` |
 //! | `.external N<+> N<-> [name]` | A port: current in at `N<+>`, out at `N<->`, labelled `name` (extension; default `<+>/<->`) |
 //! | `.freq fmin=<v> fmax=<v> ndec=<n>` | Frequency sweep in hertz (see below) |
-//! | `G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=… thick=… seg1=… seg2=… [sigma=] [nhinc=]` | Ground plane, FastHenry corner-point form (see below) |
+//! | `G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=… thick=… seg1=… seg2=… [sigma=\|rho=] [nhinc=]` | Ground plane, FastHenry corner-point form (see below) |
 //! | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=] [sigma=\|rho=]` | Ground plane, extension form: extent, top surface `z`, thickness `t` down, `nx × ny` cells; conductivity falls back to `.default` |
 //! | `.hole G<name> x1 y1 x2 y2` | Rectangular hole in that plane's footprint |
 //! | `.contact G<name> x1 y1 x2 y2 [nx=] [ny=] [ratio=]` | Contact region: refine that rectangle to `nx × ny` cells, decaying outward by `ratio` |
@@ -57,7 +57,7 @@
 //!
 //! ```text
 //! G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=…
-//! +       thick=… seg1=… seg2=… [sigma=…] [nhinc=…]
+//! +       thick=… seg1=… seg2=… [sigma=…|rho=…] [nhinc=…]
 //! +       N<name> (x, y, z) …
 //! +       hole rect (x1, y1, z1, x2, y2, z2) …
 //! +       contact rect (x1, y1, z1, x2, y2, z2) …
@@ -78,10 +78,12 @@
 //!   PEEC discretization, not FastHenry's panel mesh (see the
 //!   `fasterhenry::plane` module documentation), so equal cell counts mean
 //!   equal resolution, not an identical node set.
-//! * **`sigma=`** is per deck unit exactly as elsewhere, and falls back to
-//!   the `.default` conductivity (`.default sigma=` or `.default rho=`).
-//!   **`nhinc=`** cuts every bar of the plane into that many filaments
-//!   through the thickness.
+//! * **`sigma=`** is per deck unit exactly as elsewhere, and so is its
+//!   reciprocal **`rho=`**, which this form takes on the statement too;
+//!   naming both on one statement — continuation lines included — is an
+//!   error, and giving neither falls back to the `.default` conductivity
+//!   (`.default sigma=` or `.default rho=`). **`nhinc=`** cuts every bar of
+//!   the plane into that many filaments through the thickness.
 //! * **`N<name> (x, y, z)`** declares an in-plane node. It is an ordinary
 //!   deck node that belongs to this plane: reference it from a segment or
 //!   `.external`, or join it to a segment node with `.equiv`, and the
@@ -100,10 +102,8 @@
 //!   represent must not be quietly approximated by one. Representing them
 //!   needs a change to the plane model, tracked separately (issue #80).
 //! * The remaining documented plane parameters are rejected by name too,
-//!   each with the reason and the alternative: `rho` (on this form, give
-//!   `sigma = 1/rho` or a `.default rho=`; the extension form takes `rho=`
-//!   on the line), `rh`
-//!   (plane filaments are uniform), `segwid1`/`segwid2` (bar widths follow
+//!   each with the reason and the alternative: `rh` (plane filaments are
+//!   uniform), `segwid1`/`segwid2` (bar widths follow
 //!   the cells), `relx`/`rely`/`relz` (name the in-plane nodes instead),
 //!   and `file` (an output option this engine does not have). Nothing on a
 //!   `G` statement is silently ignored.
@@ -726,16 +726,10 @@ fn parse_plane_statement(
                     "thick" => thickness = Some(parse_number(&raw, line)?.abs() * unit),
                     "seg1" => segments[0] = Some(parse_count(&raw, "seg1", line)?),
                     "seg2" => segments[1] = Some(parse_count(&raw, "seg2", line)?),
-                    "sigma" => sigma = Some(parse_number(&raw, line)? / unit),
+                    // Already converted to S/m by parse_value either way; a
+                    // line naming both is rejected before we get here.
+                    "sigma" | "rho" => sigma = Some(parse_value(&key, &raw, unit, line)?),
                     "nhinc" => nhinc = parse_count(&raw, "nhinc", line)?,
-                    "rho" => {
-                        return Err(err(
-                            line,
-                            format!(
-                                "ground plane '{head}': 'rho' is not accepted on the corner-point form; give sigma = 1/rho (per deck unit) here, or set '.default rho=' (the 'G<name> x1 y1 z1 x2 y2 z2 t' extension form takes 'rho=' on the line)"
-                            ),
-                        ));
-                    }
                     "rh" => {
                         return Err(err(
                             line,
@@ -780,7 +774,7 @@ fn parse_plane_statement(
                         return Err(err(
                             line,
                             format!(
-                                "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, nhinc)"
+                                "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, rho, nhinc)"
                             ),
                         ));
                     }
@@ -1568,6 +1562,7 @@ pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, Par
                     .get(1)
                     .is_some_and(|token| token.parse::<f64>().is_err())
                 {
+                    one_conductivity(&tokens[1..], number)?;
                     let (spec, plane_nodes_here) = parse_plane_statement(
                         head,
                         &tokens[1..].join(" "),
@@ -2669,7 +2664,6 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             .unwrap_err()
         };
         for (extra, expected) in [
-            ("rho=1.7e-8", "sigma = 1/rho"),
             ("nhinc=3 rh=2", "'rh'"),
             ("segwid1=0.5", "'segwid1'"),
             ("segwid2=0.5", "'segwid2'"),
@@ -2951,11 +2945,11 @@ e1 n1 n2 w=0.2 h=0.035 sigma=5.8e4
         );
     }
 
-    /// Conductivity composes with the other per-plane fields: on the
-    /// extension form `sigma=`/`rho=` sit alongside `nx=`/`ny=`/`nhinc=` in
-    /// any order, and build the same plane as the corner-point form given
-    /// the equivalent `sigma=`. The corner-point form itself still rejects
-    /// `rho=` by name, but a `.default rho=` reaches its planes.
+    /// Conductivity composes with the other per-plane fields: on either
+    /// grammar `sigma=`/`rho=` sit alongside the cell counts and `nhinc=` in
+    /// any order, and both grammars build the same plane given equivalent
+    /// conductivities — and a `.default rho=` reaches a corner-point plane
+    /// that names neither.
     #[test]
     fn plane_conductivity_composes_with_nhinc_and_both_grammars() {
         let corner = parse_ok(&plane_deck(
@@ -2993,20 +2987,52 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         assert_eq!(error.line, 3, "{error}");
         assert!(error.message.contains("both"), "{error}");
 
-        // The corner-point form rejects rho= on the statement by name, and
-        // says what to do instead.
+        // The corner-point form takes rho= on the statement itself, in any
+        // order and across continuation lines, and builds the same deck as
+        // the equivalent sigma=.
+        for fields in [
+            "thick=0.04 seg1=5 seg2=3 rho=0.5 nhinc=3",
+            "rho=0.5 thick=0.04 seg1=5 seg2=3 nhinc=3",
+            "thick=0.04 seg1=5 seg2=3 nhinc=3\n+ rho=0.5",
+        ] {
+            let by_rho = parse_ok(&plane_deck(
+                &format!("Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0\n+ {fields}"),
+                "",
+            ));
+            assert_eq!(by_rho, corner, "{fields}");
+            assert_eq!(
+                by_rho.geometry.segment(0).unwrap().sigma,
+                2.0 / 1e-3,
+                "{fields}"
+            );
+        }
+        // sigma= and rho= together on one corner-point statement is the same
+        // line-numbered error as everywhere else, continuations included.
+        for fields in [
+            "thick=0.04 seg1=5 seg2=3 sigma=2 rho=0.5",
+            "thick=0.04 seg1=5 seg2=3 rho=0.5 sigma=2",
+            "thick=0.04 seg1=5 seg2=3 sigma=2\n+ nhinc=3 rho=0.5",
+        ] {
+            let error = parse(&plane_deck(
+                &format!("Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0\n+ {fields}"),
+                "",
+            ))
+            .unwrap_err();
+            assert_eq!(error.line, 3, "{error}");
+            assert!(error.message.contains("both"), "{error}");
+        }
+        // A non-positive rho is rejected here as it is elsewhere.
         let error = parse(&plane_deck(
             "\
 Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
-+ thick=0.04 seg1=5 seg2=3 rho=0.5 nhinc=3",
++ thick=0.04 seg1=5 seg2=3 rho=0",
             "",
         ))
         .unwrap_err();
         assert_eq!(error.line, 3, "{error}");
-        assert!(error.message.contains("'rho'"), "{error}");
-        assert!(error.message.contains("corner-point"), "{error}");
-        assert!(error.message.contains("sigma = 1/rho"), "{error}");
-        // A `.default rho=` is the deck's conductivity, and reaches it.
+        assert!(error.message.contains("rho"), "{error}");
+        // A `.default rho=` is the deck's conductivity, and reaches a
+        // corner-point plane that names neither.
         let corner_plane = "\
 Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
 + thick=0.04 seg1=5 seg2=3 nhinc=3";
