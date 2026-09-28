@@ -229,8 +229,6 @@
 //!   quietly approximated by one of those. Unlike the user-defined holes,
 //!   these have a public meaning, and each is rejected for its own stated
 //!   reason:
-//!     * `contact circle` — issue #109 (its argument list still to be
-//!       pinned from the public documentation);
 //!     * `contact trace` — issue #110 (how `trace_width` and
 //!       `scale_factor` set the cell size still to be pinned);
 //!     * `contact initial_grid (rows, cols)` and
@@ -244,6 +242,30 @@
 //!       wrong way round, so the error names `seg1`/`seg2` instead of
 //!       guessing (issue #113; the clean-room rule in `CONTRIBUTING.md`
 //!       forbids guessing an undocumented argument order).
+//! * **`contact circle` is rejected by name as well — and it is not a
+//!   documented shape at all** (issue #109). The public description of the
+//!   `contact` family names the simple refinement utilities `point`,
+//!   `line`, `rect` and `decay_rect`, the contact-*area* utility
+//!   `equiv_rect`, the grouped `connection` and `trace` built on them, and
+//!   the `initial_grid`/`initial_mesh_grid` pair that pre-divides the
+//!   plane; `circle` is a **hole** shape (`hole circle (x, y, z, r)`), not
+//!   a contact one.
+//!   So there is no argument list to pin, nothing in the deck says what a
+//!   `contact circle`'s values would mean, and the rejection stands unless
+//!   documentation for such a utility surfaces — it is not work awaiting an
+//!   implementation here.
+//!
+//!   The geometry is not what is missing. A disc needs no new shape on this
+//!   mesh: a refined x-band spans the plane in y and a y-band spans it in
+//!   x, so *any* refinement that covers a disc produces the disc's
+//!   bounding-square bands — exactly the argument the diagonal `contact
+//!   line` above rests on. `contact decay_rect (x, y, z, 2r, 2r, xcell,
+//!   ycell, xmaxcell, ymaxcell)` over that bounding square is therefore the
+//!   whole of what a `contact circle` could mean here, at the same cost
+//!   (the square's corners are refined too, the disc's `4/π` overhead) —
+//!   widen each width by its own cell, as `contact point` pads by half a
+//!   cell on each side, to keep the cells grazing the rim fine as well. The
+//!   error says exactly that rather than leaving the reader to work it out.
 //! * The remaining documented plane parameters are rejected by name too,
 //!   each with the reason and the alternative: `rh` (plane filaments are
 //!   uniform), `segwid1`/`segwid2` (bar widths follow
@@ -1466,6 +1488,28 @@ impl<'a> PlaneStatement<'a> {
                         } else {
                             ""
                         }
+                    ),
+                )
+            }
+            ("contact", "circle") => {
+                // Issue #109. The public documentation of the `contact`
+                // family — "Nonuniformly Discretized Reference Planes in
+                // FastHenry 3.0" (M. Kamon, 10 October 1996), the
+                // supplement the FastHenry 3.0 user's guide points at for
+                // nonuniform planes — names the simple refinement
+                // utilities point, line, rect and decay_rect, the
+                // contact-area utility equiv_rect, the grouped connection
+                // and trace built on them, and the initial_grid /
+                // initial_mesh_grid pair. There is no circle among them:
+                // `circle` is a *hole* shape, and the same supplement
+                // records that the hole utility does not apply to
+                // nonuniformly discretized planes. So there is no
+                // documented argument list to read, and the clean-room
+                // rule forbids inventing one.
+                err(
+                    line,
+                    format!(
+                        "ground plane '{head}': 'contact circle' is not supported, and no contact shape of that name is documented: 'circle' is a *hole* shape ('hole circle (x, y, z, r)'), while the documented contact utilities are point, line, rect, decay_rect, equiv_rect, connection, trace and initial_grid/initial_mesh_grid — none of them a disc, so nothing here says what these values mean. Refine the disc's bounding square instead: 'contact decay_rect (x, y, z, 2r, 2r, xcell, ycell, xmaxcell, ymaxcell)' (widen each width by its own cell to keep the cells grazing the rim fine too), or 'contact point (x, y, z, xcell, ycell)' at the centre of a disc smaller than one cell. That costs nothing a disc would not: this engine's mesh is a tensor product, so a refined band on one axis spans the plane on the other and any refinement covering a disc refines its bounding square anyway (see docs/fasthenry-compat.md)"
                     ),
                 )
             }
@@ -4206,6 +4250,115 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         }
     }
 
+    /// `contact circle` is rejected by name on the statement's own line,
+    /// whatever value list it carries — there is no arity to get right,
+    /// because no contact shape of that name is documented (`circle` is a
+    /// *hole* shape). The error says that, and names the bounding-square
+    /// alternative rather than leaving the reader to guess. Issue #109.
+    #[test]
+    fn contact_circle_is_rejected_by_name_and_names_the_bounding_square() {
+        for clause in [
+            // The shape as a `hole circle`'s values would spell it…
+            "contact circle (5, 3, 0, 1)",
+            // …and as the other `contact` shapes' cell sizes would.
+            "contact circle (5, 3, 0, 1, 0.5, 0.5)",
+            "contact circle (5, 3, 0, 1, 0.5)",
+            "contact circle (5, 3, 1)",
+        ] {
+            let error = parse(&refine_deck(clause)).unwrap_err();
+            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
+            for expected in [
+                "'contact circle' is not supported",
+                "no contact shape of that name is documented",
+                "hole circle (x, y, z, r)",
+                "contact decay_rect (x, y, z, 2r, 2r, xcell, ycell, xmaxcell, ymaxcell)",
+                "contact point (x, y, z, xcell, ycell)",
+            ] {
+                assert!(
+                    error.message.contains(expected),
+                    "'{clause}' must name {expected}, got: {}",
+                    error.message
+                );
+            }
+        }
+    }
+
+    /// The alternative that error names is the whole of what a disc could
+    /// mean on this mesh, which is why nothing is lost by rejecting the
+    /// shape: `contact decay_rect` over the disc's bounding square refines
+    /// every cell the disc touches — and, because the mesh is a tensor
+    /// product, the square's corners with it. That over-refinement is the
+    /// disc's cost here (4/π of its area), not an approximation of the
+    /// request: a refined x-band spans the plane in y, so any refinement
+    /// covering the disc has these same bands and their crossing is the
+    /// square. Issue #109, the same argument as the diagonal `contact
+    /// line`'s.
+    #[test]
+    fn a_discs_bounding_square_is_what_refining_a_disc_costs() {
+        // A 1 mm disc at the plane's centre, asking for 0.5 mm cells:
+        // centre (5, 3), full widths 2r = 2 mm each way, 4 × 4 fine cells.
+        let deck = parse_ok(&refine_deck(
+            "contact decay_rect (5, 3, 0, 2, 2, 0.5, 0.5, -1, -1)",
+        ));
+        let ratio = 1.0 / (1.0 - 0.5 / 2.0);
+        let plane = refine_test_plane(vec![ContactRegion::graded_per_axis(
+            [4e-3, 2e-3],
+            [6e-3, 4e-3],
+            [4, 4],
+            [ratio, ratio],
+        )]);
+        let mesh = plane.mesh().unwrap();
+        assert_eq!(deck.geometry.nodes().len(), mesh.nx() * mesh.ny() + 1);
+        assert_eq!(deck.geometry.segment_count(), mesh.bars() + 1);
+
+        // Every cell holding a point inside the disc honours the request…
+        let fine_at = |mesh: &fasterhenry::plane::PlaneMesh, x: f64, y: f64| {
+            let i = cell_holding(mesh.x_edges(), x);
+            let j = cell_holding(mesh.y_edges(), y);
+            mesh.dx(i) <= 0.5e-3 + 1e-15 && mesh.dy(j) <= 0.5e-3 + 1e-15
+        };
+        for step in 0..720 {
+            let angle = f64::from(step) * std::f64::consts::TAU / 720.0;
+            for radius in [0.0, 0.5e-3, 0.999e-3] {
+                let (x, y) = (5e-3 + radius * angle.cos(), 3e-3 + radius * angle.sin());
+                assert!(fine_at(&mesh, x, y), "coarse cell at ({x}, {y})");
+            }
+        }
+        // …and so does the bounding square's corner, which the disc misses
+        // by a quarter of its own radius: that is the stated cost, 4/π of
+        // the disc's area refined instead of the disc.
+        let corner = [4.25e-3f64, 2.25e-3f64];
+        assert!(
+            (corner[0] - 5e-3).hypot(corner[1] - 3e-3) > 1e-3,
+            "the sampled corner is outside the disc"
+        );
+        assert!(fine_at(&mesh, corner[0], corner[1]));
+
+        // The rim itself lies on the square's edge, so a cell outside may
+        // graze it — pad each width by one cell (as `contact point` pads by
+        // half a cell on each side) and the rim's own cells are fine too.
+        let padded = refine_test_plane(vec![ContactRegion::graded_per_axis(
+            [3.75e-3, 1.75e-3],
+            [6.25e-3, 4.25e-3],
+            [5, 5],
+            [1.0 / (1.0 - 0.5 / 2.5); 2],
+        )])
+        .mesh()
+        .unwrap();
+        let deck = parse_ok(&refine_deck(
+            "contact decay_rect (5, 3, 0, 2.5, 2.5, 0.5, 0.5, -1, -1)",
+        ));
+        assert_eq!(deck.geometry.nodes().len(), padded.nx() * padded.ny() + 1);
+        for step in 0..720 {
+            let angle = f64::from(step) * std::f64::consts::TAU / 720.0;
+            let (x, y) = (5e-3 + 1e-3 * angle.cos(), 3e-3 + 1e-3 * angle.sin());
+            assert!(
+                fine_at(&padded, x, y),
+                "coarse cell on the rim at ({x}, {y})"
+            );
+        }
+    }
+
     /// A deck that names a contact *area*: `contact equiv_rect` ties every
     /// cell centre inside its rectangle to the one node it names, and a
     /// reference to that node — here through `.equiv` — lands on the tie
@@ -4701,10 +4854,6 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ("ny=3", "seg1"),
             ("wibble=1", "unknown ground-plane parameter 'wibble'"),
             ("hole user1 (5, 3, 0)", "'hole user1' is not supported"),
-            (
-                "contact circle (5, 3, 0, 1)",
-                "'contact circle' is not supported",
-            ),
             // The initial-grid forms stay rejected, and the error names
             // `seg1`/`seg2` — the unambiguous way to say the same thing.
             ("contact initial_grid (5, 5)", "seg1"),

@@ -116,7 +116,8 @@ records how each documented field maps.
 | `contact connection N<name> (x, y, z, xwidth, ywidth, ratio)` | Supported | Issue #101. The documented shorthand: exactly a `contact equiv_rect` over the rectangle plus a `contact decay_rect` over the same rectangle with cells `xwidth/ratio`, `ywidth/ratio` and no decay limit (the negative-`maxcell` sentinel in the row above). Writing the two clauses out by hand produces an identical deck, which is what `connection_is_an_equiv_rect_plus_a_decay_rect` in `inp.rs` asserts. `ratio` must be > 1 — it divides the widths into the contact's own cells — and a ratio of 1 or less is a line-numbered error rather than a rectangle that grades nothing. |
 | `hole user1 (…)` … `hole user7 (…)` | Not supported, permanent | Issue #99. Rejected by name on the statement's own line, and the rejection is final rather than deferred — see the decision below. The error names the alternatives: the declarative shapes above, and `fasterhenry::plane::GroundPlane::mesh` + `fasterhenry::plane::Hole::Point` for a shape none of them describe. |
 | `contact point (x, y, z, xcell, ycell)`, `contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)` | Supported, differs | Issue #100. Every cell holding the point, or crossed by the line, is no larger than `xcell` × `ycell`. Both map onto one `fasterhenry::plane::ContactRegion`: the locus's bounding box padded by half a requested cell on every side, cut into the fewest cells no larger than that cell — so a point is exactly one `xcell × ycell` cell centred on it, and a zero-length line is that point. Outside it the mesh grades back at ratio 2, the reader's `contact rect` default (neither shape documents a decay). A requested cell at or above the plane's background cell is already met and is clamped there rather than coarsening the mesh; a point or line met on both axes adds nothing. Both ends are checked against the plane's slab and footprint. **The difference**: a diagonal line refines its whole padded bounding box, because this engine's mesh is a tensor product — a refined band on one axis spans the plane on the other, so any refinement covering the line (a chain of rectangles included) has the same bands. That costs about `(Lx/xcell)·(Ly/ycell)` fine cells where a mesh following the diagonal would need about `Lx/xcell + Ly/ycell`; an axis-aligned line costs nothing extra. |
-| Other contact shapes (`contact circle`, `contact trace`) | Deferred | Issues #80, #98, #100 and #101 took `decay_rect`, `hole point`/`hole circle`, `contact point`/`contact line` and `contact equiv_rect`/`contact connection`; these two stay rejected by name, on the statement's own line, rather than approximated. Tracked as issues #109 (`contact circle`: its argument list is still to be pinned from the public documentation) and #110 (`contact trace`: how `trace_width` and `scale_factor` set the cell size is still to be pinned). |
+| `contact trace (…)` | Deferred | Issues #80, #98, #100 and #101 took `decay_rect`, `hole point`/`hole circle`, `contact point`/`contact line` and `contact equiv_rect`/`contact connection`; this one stays rejected by name, on the statement's own line, rather than approximated. Tracked as issue #110: how `trace_width` and `scale_factor` set the cell size is still to be pinned. |
+| `contact circle (…)` | Not supported, permanent | Issue #109. Rejected by name on the statement's own line — but unlike the row above this is not deferred work: the public description of the `contact` family names the simple refinement utilities `point`, `line`, `rect` and `decay_rect`, the contact-*area* utility `equiv_rect`, the grouped `connection` and `trace` built on them, and the `initial_grid`/`initial_mesh_grid` pair — no disc among them. `circle` is a **hole** shape (`hole circle (x, y, z, r)`), so there is no argument list to pin and nothing in a deck to read — see the decision below. The geometry is not what is missing: on this tensor-product mesh the whole of what a disc could mean is `contact decay_rect` over its bounding square, and the error names that. |
 | `contact initial_grid (rows, cols)`, `contact initial_mesh_grid (rows, cols)` | Not supported | Issue #101 took the other two clauses it covered and deliberately left these two rejected; issue #113 tracks what is missing. Neither needs a plane-model change: `seg1`/`seg2` already say what `initial_grid` says, and a checkerboard of `hole point` clauses at the centres `GroundPlane::mesh` reports says what `initial_mesh_grid` adds (the same composition the `hole user1…user7` decision below rests on). What is missing is the one documented fact the value list turns on — which of `(rows, cols)` counts the `p1 → p2` edge — and a transposed guess would silently mesh every non-square plane the wrong way round, which the clean-room rule (`CONTRIBUTING.md`: no guessing an undocumented argument order or row/column convention) forbids. The line-numbered error names `seg1` and `seg2` instead, and `initial_mesh_grid`'s also names the hole clauses and the library composition for the checkerboard. |
 | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=] [sigma=\|rho=]`, `.hole`, `.contact` | Supported, extended | This project's own shorthand plane form and its separate refinement directives — not documented FastHenry syntax. Told apart from the corner-point form by the first token after the plane name, so a deck may mix the two; both build the same plane. |
 
@@ -133,8 +134,10 @@ That makes them unlike every other rejected shape in the table above. A
 `contact trace` is a *shape this reader cannot represent yet*: its meaning
 is public, and issue #110 tracks the work that would represent it. A
 `contact initial_grid` is a shape whose *value list* is not pinned down here
-(issue #113) — one documented fact away, not a model away. A `hole user3` is
-not a shape at all
+(issue #113) — one documented fact away, not a model away. A `contact
+circle` is a shape the format does not have at all (issue #109, the decision
+below), which is a fact about the format rather than about this reader. A
+`hole user3` is not a shape at all
 — no plane model, however general, lets a reader recover a meaning the deck
 never wrote down. So the rejection is not deferred work, and the error says
 so rather than pointing at a tracking issue that could never close.
@@ -188,6 +191,56 @@ cells is the case that would justify paying for `Hole::Predicate`. That is a
 measured need, not a speculative one, and it is what the `#[non_exhaustive]`
 marker is held in reserve for.
 
+### Decision: `contact circle` is not a documented shape (issue #109)
+
+`contact circle` was carried in this table as a *deferred* shape — one whose
+argument list had still to be pinned from the public documentation — ever
+since the first plane-clause audit. Issue #109 went looking for that
+argument list. **There is none, because there is no such clause.**
+
+The `contact` family is not described in the FastHenry user's guide at all:
+the guide's one mention of it is a note recommending `contact equiv_rect`
+for connections to a nonuniformly discretized plane, which points at a
+separate public supplement ("Nonuniformly Discretized Reference Planes in
+FastHenry 3.0", M. Kamon, 10 October 1996). That supplement is where every
+`contact` clause this table records comes from, and it names them all: the
+simple refinement utilities `point`, `line`, `rect` and `decay_rect`; the
+contact-*area* utility `equiv_rect`; the grouped `connection` and `trace`,
+written in terms of the simple ones; and the `initial_grid` /
+`initial_mesh_grid` pair that pre-divides the plane. No disc appears
+anywhere in it. `circle` is a **hole** shape (`hole circle (x, y, z, r)`,
+from the user's guide's uniform-plane section), and holes and contacts do
+not share a shape vocabulary: the same supplement records that these
+routines do not support the hole utility at all.
+
+So the earlier "argument list still to be pinned" wording had the situation
+backwards, and this row is now rejected the way `hole user1`…`user7` are
+rather than the way `contact trace` is: not deferred work, but a name with
+no meaning to read. The reader keeps rejecting it by name, on the
+statement's own line, and the error says which family each name belongs to
+so a deck that meant `hole circle` is told exactly that.
+
+**The geometry was never the obstacle.** Had the clause existed, the mapping
+would have been a one-liner on top of what `contact decay_rect` already
+does: refine the disc's **bounding square**. That is not an approximation of
+a disc on this engine — it is what a disc costs here. The plane mesh is a
+tensor product, so a refined x-band spans the plane in y and a y-band spans
+it in x; any refinement that covers a disc therefore has the disc's
+bounding-square bands, and their crossing is the square. (This is the same
+argument the diagonal `contact line` row above rests on.) Refining `4/π` of
+the disc's area is the price, the same on any tensor-product mesh, and
+`contact decay_rect (x, y, z, 2r, 2r, xcell, ycell, xmaxcell, ymaxcell)`
+buys it today — widen each width by its own cell to keep the cells grazing
+the rim fine too. `a_discs_bounding_square_is_what_refining_a_disc_costs` in
+`fasterhenry-cli/src/inp.rs` asserts both halves of that: every cell inside
+the disc honours the requested size, and so does a bounding-square corner
+the disc misses.
+
+**What would reopen this.** Public input-format documentation naming a
+`contact circle` utility *and* its value list. Then the row becomes a
+two-line parser arm over the mapping above, with the padding rule
+`contact point` already uses. Nothing about the plane model would change.
+
 ## `.couples`
 
 | Status | Notes |
@@ -222,7 +275,10 @@ as a result of this table beyond what is listed below.
   reasons in "Decision: `hole user1`…`user7` are rejected permanently"
   above. Issue #100 has since implemented `contact point` and `contact
   line` — see their row above — and moved `contact circle` and `contact
-  trace` to issues #109 and #110. Issue #101 has since been implemented for
+  trace` to issues #109 and #110. Issue #109 has since been *decided*
+  rather than implemented, like #99: `contact circle` is not a documented
+  shape at all, so it is permanently rejected — see "Decision: `contact
+  circle` is not a documented shape" above. Issue #101 has since been implemented for
   `contact equiv_rect` and `contact connection` — their own rows above —
   and filed #113 for the two initial-grid forms it deliberately left
   rejected.)

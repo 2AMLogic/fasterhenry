@@ -184,8 +184,9 @@ breaking changes to the API or the command-line interface; patch releases
   not an approximation. Both ends are checked against the plane's slab and
   footprint on the statement's own line. `contact circle` and `contact
   trace` keep their line-numbered rejection, now tracked in #109 and #110:
-  the first's argument list and the second's cell-size rule are not yet
-  pinned from the public documentation, and are not guessed.
+  the second's cell-size rule is not yet pinned from the public
+  documentation and is not guessed, and the first turned out not to be a
+  documented shape at all — see its entry under Changed below.
 - Library: `ContactRegion::graded_per_axis`, a contact region whose outward
   decay ratio is chosen per axis — what an anisotropically refined region
   needs, and what `contact decay_rect` derives from the deck (issue #80).
@@ -215,6 +216,22 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader: `contact circle` is now rejected with its own error, and is
+  recorded as a shape the format does not have rather than as deferred work
+  (issue #109, split out of #100). Looking for the argument list that was
+  "still to be pinned" found that there is none: the public description of
+  the `contact` family names the simple refinement utilities `point`,
+  `line`, `rect` and `decay_rect`, the contact-*area* utility `equiv_rect`,
+  the grouped `connection` and `trace` built on them, and the
+  `initial_grid`/`initial_mesh_grid` pair — no disc among them, and
+  `circle` is a **hole** shape. The error now says which family the name belongs to (so
+  a deck that meant `hole circle (x, y, z, r)` is told exactly that) and
+  names what a disc would map to anyway: `contact decay_rect` over its
+  bounding square. That is not an approximation but the disc's cost on a
+  tensor-product mesh — a refined band on one axis spans the plane on the
+  other, so any refinement covering a disc refines its bounding square,
+  `4/π` of the disc's area. The reasoning and what would reopen it are in
+  `docs/fasthenry-compat.md`.
 - Library: a refined band that is widened to absorb a sliver at the plane's
   edge, or merged with an overlapping or adjacent region, is now cut into
   the fewest cells **no larger** than its fine cell (`ceil`) rather than
