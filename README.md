@@ -136,11 +136,15 @@ cd fasterhenry
 MIT — see `LICENSE`.
 
 Dependencies are restricted to permissive licenses (MIT, Apache-2.0, Zlib,
-Unlicense, Unicode-3.0), so nothing in the tree adds an obligation the MIT
-notice above does not already carry — including for the distributed
-`fasterhenry` binary, which links every transitive dependency. The policy is
-enforced in CI by `cargo deny check licenses`; the allowlist and the reason
-each license is on it are in `deny.toml`. Run it locally the same way:
+Unlicense, Unicode-3.0) — nothing copyleft, and nothing that imposes a
+source-disclosure obligation on the distributed `fasterhenry` binary, which
+links every transitive dependency. The Apache-2.0-only dependencies
+(`nalgebra`, `simba`, `approx`, `nalgebra-macros`) do add an attribution term
+the MIT notice above does not discharge: Apache-2.0 §4(a) requires that a
+binary distribution ship a copy of the Apache-2.0 license text alongside that
+notice. None of the four carries a `NOTICE` file, so §4(d) is not engaged. The
+policy is enforced in CI by `cargo deny check licenses`; the allowlist and the
+reason each license is on it are in `deny.toml`. Run it locally the same way:
 
 ```bash
 cargo deny check licenses
