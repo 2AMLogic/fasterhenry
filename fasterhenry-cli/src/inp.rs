@@ -60,6 +60,8 @@
 //! +       thick=… seg1=… seg2=… [sigma=…|rho=…] [nhinc=…]
 //! +       N<name> (x, y, z) …
 //! +       hole rect (x1, y1, z1, x2, y2, z2) …
+//! +       hole point (x, y, z) …
+//! +       hole circle (x, y, z, r) …
 //! +       contact rect (x1, y1, z1, x2, y2, z2) …
 //! +       contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell) …
 //! ```
@@ -127,12 +129,22 @@
 //!   6, 4, 0)` are one region. (That `contact rect` takes corners at all
 //!   is this reader's own choice, mirroring `hole rect`; issue #95 tracks
 //!   reconciling it with the documented centre-and-widths form.)
+//! * **`hole point (x, y, z)`** and **`hole circle (x, y, z, r)`** map onto
+//!   [`fasterhenry::plane::Hole::Point`] and
+//!   [`fasterhenry::plane::Hole::Circle`] (issue #98). A point removes
+//!   exactly the one cell whose own extent — edges included — contains it;
+//!   a point that lands exactly on a shared cell edge or corner is the
+//!   documented tie, and removes every cell touching it rather than
+//!   guessing a single winner. A circle removes every cell whose centre
+//!   lies at or inside its radius `r` (a centre exactly on the circle is
+//!   removed — a closed boundary, unlike `hole rect`'s open one). Both take
+//!   the shape's own `z`, checked against the plane's slab like every other
+//!   clause here.
 //! * Every other documented shape is **rejected by name**, on the
 //!   statement's own line: this engine's holes and contacts are
-//!   axis-aligned rectangles, and a shape it cannot represent must not be
-//!   quietly approximated by one. Representing each needs a change to the
-//!   plane model, tracked separately:
-//!     * `hole point`, `hole circle` — issue #98;
+//!   rectangles, points or circles, and a shape it cannot represent must
+//!   not be quietly approximated by one. Representing each needs a change
+//!   to the plane model, tracked separately:
 //!     * `hole user1` … `user7` — issue #99;
 //!     * `contact point`, `contact line`, `contact circle`,
 //!       `contact trace` — issue #100;
@@ -834,6 +846,10 @@ fn parse_plane_statement(
     // Hole and contact rectangles, kept raw until the plane's own geometry
     // is known (their z is checked against the plane's slab).
     let mut hole_rects: Vec<[[f64; 3]; 2]> = Vec::new();
+    // `hole point (x, y, z)` and `hole circle (x, y, z, r)`: kept raw for
+    // the same reason (`z` checked against the slab below).
+    let mut hole_points: Vec<[f64; 3]> = Vec::new();
+    let mut hole_circles: Vec<([f64; 3], f64)> = Vec::new();
     let mut contact_rects: Vec<[[f64; 3]; 2]> = Vec::new();
     let mut contact_decays: Vec<DecayRect> = Vec::new();
 
@@ -925,6 +941,26 @@ fn parse_plane_statement(
                     ("hole", "rect") => {
                         hole_rects.push(rect_corners(&values, &what, unit, line)?);
                     }
+                    ("hole", "point") => {
+                        hole_points.push(triple(&values, &what, unit, line)?);
+                    }
+                    ("hole", "circle") => {
+                        if values.len() != 4 {
+                            return Err(err(
+                                line,
+                                format!("{what} takes 4 values (x, y, z, r), got {}", values.len()),
+                            ));
+                        }
+                        let centre = triple(&values[..3], &what, unit, line)?;
+                        let radius = parse_number(&values[3], line)? * unit;
+                        if radius < 0.0 {
+                            return Err(err(
+                                line,
+                                format!("{what}: r={radius} metres must be >= 0"),
+                            ));
+                        }
+                        hole_circles.push((centre, radius));
+                    }
                     ("contact", "rect") => {
                         contact_rects.push(rect_corners(&values, &what, unit, line)?);
                     }
@@ -935,7 +971,7 @@ fn parse_plane_statement(
                         return Err(err(
                             line,
                             format!(
-                                "ground plane '{head}': 'hole {other}' is not supported; this engine's holes are axis-aligned rectangles, so use 'hole rect (x1, y1, z1, x2, y2, z2)'"
+                                "ground plane '{head}': 'hole {other}' is not supported; this engine's holes are 'hole rect (x1, y1, z1, x2, y2, z2)', 'hole point (x, y, z)' or 'hole circle (x, y, z, r)'"
                             ),
                         ));
                     }
@@ -1082,10 +1118,23 @@ fn parse_plane_statement(
         }
         Ok((lo, hi))
     };
-    let mut holes = Vec::with_capacity(hole_rects.len());
+    let mut holes = Vec::with_capacity(hole_rects.len() + hole_points.len() + hole_circles.len());
     for rect in hole_rects {
         let (lo, hi) = footprint("'hole rect'", rect)?;
-        holes.push(Hole { lo, hi });
+        holes.push(Hole::Rect { lo, hi });
+    }
+    for point in hole_points {
+        in_slab("'hole point'", point)?;
+        holes.push(Hole::Point {
+            at: [point[0], point[1]],
+        });
+    }
+    for (centre, radius) in hole_circles {
+        in_slab("'hole circle'", centre)?;
+        holes.push(Hole::Circle {
+            centre: [centre[0], centre[1]],
+            radius,
+        });
     }
     let mut contacts = Vec::with_capacity(contact_rects.len() + contact_decays.len());
     for rect in contact_rects {
@@ -1496,7 +1545,7 @@ pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, Par
                         *slot = parse_number(token, number)? * factor;
                     }
                     let plane = plane_named(&mut planes, name, ".hole", number)?;
-                    plane.plane.holes.push(Hole {
+                    plane.plane.holes.push(Hole::Rect {
                         lo: [bounds[0].min(bounds[2]), bounds[1].min(bounds[3])],
                         hi: [bounds[0].max(bounds[2]), bounds[1].max(bounds[3])],
                     });
@@ -2655,6 +2704,159 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         assert_eq!(fasthenry.discretization, extension.discretization);
     }
 
+    /// `hole point (x, y, z)` removes exactly the one cell whose own
+    /// extent contains the point (issue #98) — see
+    /// [`fasterhenry::plane::Hole::Point`] for the rule.
+    #[test]
+    fn hole_point_clause_removes_exactly_the_cell_containing_it() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole point (5.5, 3.5, 0)
+n1 x=50 y=50 z=0
+n2 x=51 y=50 z=0
+e1 n1 n2 w=1 h=1
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        // (5.5, 3.5) mm lies inside cell (2, 1), spanning x in [4, 6] and
+        // y in [2, 4] mm: 15 − 1 = 14 plane nodes, plus the unrelated
+        // segment's own 2 nodes (its endpoints are far outside the plane's
+        // footprint, so neither one snaps onto it).
+        assert_eq!(deck.geometry.nodes().len(), 14 + 2);
+    }
+
+    /// A point exactly on a shared cell boundary is the documented tie:
+    /// every cell touching that edge is removed, not an arbitrarily chosen
+    /// one (issue #98).
+    #[test]
+    fn hole_point_clause_on_a_shared_edge_removes_every_touching_cell() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole point (4, 3.5, 0)
+n1 x=50 y=50 z=0
+n2 x=51 y=50 z=0
+e1 n1 n2 w=1 h=1
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        // (4, 3.5) mm sits exactly on the edge shared by cells (1, 1) and
+        // (2, 1) (x = 4 mm): the tie removes both, 15 − 2 = 13 plane
+        // nodes, plus the unrelated segment's own 2.
+        assert_eq!(deck.geometry.nodes().len(), 13 + 2);
+    }
+
+    /// `hole circle (x, y, z, r)` removes every cell whose centre lies at
+    /// or inside `r` of the circle's centre (issue #98) — see
+    /// [`fasterhenry::plane::Hole::Circle`] for the rule.
+    #[test]
+    fn hole_circle_clause_removes_cells_whose_centre_is_inside() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole circle (5, 1, 0, 2.5)
+n1 x=50 y=50 z=0
+n2 x=51 y=50 z=0
+e1 n1 n2 w=1 h=1
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        // Cell centres sit on a 2 mm grid: a 2.5 mm circle around (5, 1)
+        // mm reaches its three grid neighbours 2 mm away — (3, 1), (7, 1)
+        // in x and (5, 3) in y — but not the diagonal ones (2.83 mm away)
+        // or the row's far ends (4 mm away). 4 of 15 cells removed, 11
+        // plane nodes, plus the unrelated segment's own 2.
+        assert_eq!(deck.geometry.nodes().len(), 11 + 2);
+    }
+
+    /// A hole `point`/`circle` that removes no cells at all — one that
+    /// falls entirely inside an existing rectangular hole, and a circle
+    /// small enough to sit between cell centres — is not an error: it is
+    /// simply a no-op hole (issue #98).
+    #[test]
+    fn hole_point_and_circle_may_remove_zero_cells() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole rect (4, 2, 0, 6, 4, 0)
++ hole point (5, 3.9, 0)
++ hole circle (2, 3, 0, 0.1)
+n1 x=50 y=50 z=0
+n2 x=51 y=50 z=0
+e1 n1 n2 w=1 h=1
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        // The point falls inside the rect hole's cell (already removed);
+        // the circle (0.1 mm radius around (2, 3) mm) is far from every
+        // cell centre (nearest is (3, 3) mm, 1 mm away) so it covers none.
+        // Only the rect hole's one cell is gone: 15 − 1 = 14 plane nodes,
+        // plus the unrelated segment's own 2.
+        assert_eq!(deck.geometry.nodes().len(), 14 + 2);
+    }
+
+    /// A circle wide enough to cover the whole plane removes every cell —
+    /// an edge case distinct from the rectangle hole's degenerate-extent
+    /// rejection, since a circle has no "corners shared" failure mode
+    /// (issue #98).
+    #[test]
+    fn hole_circle_covering_the_whole_plane_removes_every_cell() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole circle (5, 3, 0, 100)
+n1 x=50 y=50 z=0
+n2 x=51 y=50 z=0
+e1 n1 n2 w=1 h=1
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        // No plane node survives; only the unrelated segment's own 2.
+        assert_eq!(deck.geometry.nodes().len(), 2);
+    }
+
+    /// A negative radius is rejected on the statement's own line rather
+    /// than silently accepted as "removes nothing" (issue #98).
+    #[test]
+    fn hole_circle_rejects_a_negative_radius() {
+        let error = parse(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole circle (5, 3, 0, -1)",
+            "",
+        ))
+        .unwrap_err();
+        assert!(error.message.contains("r=-0.001"), "{error}");
+        assert!(error.message.contains(">= 0"), "{error}");
+    }
+
     /// `contact decay_rect` names the same rectangle as `contact rect`
     /// when its numbers say so: centred at (5, 3) mm, 2 mm across each
     /// way, cells no larger than 1 mm, decaying to the background cell.
@@ -2988,8 +3190,6 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ("nx=5", "seg1"),
             ("ny=3", "seg1"),
             ("wibble=1", "unknown ground-plane parameter 'wibble'"),
-            ("hole point (5, 3, 0)", "'hole point' is not supported"),
-            ("hole circle (5, 3, 0, 1)", "'hole circle' is not supported"),
             ("hole user1 (5, 3, 0)", "'hole user1' is not supported"),
             (
                 "contact point (5, 3, 0)",

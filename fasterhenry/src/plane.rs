@@ -1,7 +1,7 @@
 //! Ground planes: thick rectangular sheets discretized into a mesh of
-//! bars, with rectangular holes and locally refined contact regions — the
-//! FastHenry `G` feature, on the same segment/kernel/mesh machinery
-//! everything else uses.
+//! bars, with holes (rectangle, point or circle) and locally refined
+//! contact regions — the FastHenry `G` feature, on the same
+//! segment/kernel/mesh machinery everything else uses.
 //!
 //! # Discretization
 //!
@@ -17,11 +17,12 @@
 //! * a y-directed bar spans `(dyⱼ + dyⱼ₊₁)/2`, with cross-section
 //!   `dxᵢ × thickness`.
 //!
-//! Cells whose centre lies inside a hole are removed together with their
-//! incident bars. This is a PEEC discretization in its own right (not a
-//! transcription of FastHenry's particular panel mesh — see the
-//! clean-room note in the repository README): convergence to the
-//! continuum plane goes as the grid is refined.
+//! A hole removes the cells it covers together with their incident bars —
+//! see [`Hole`] for each shape's exact cell-removal rule. This is a PEEC
+//! discretization in its own right (not a transcription of FastHenry's
+//! particular panel mesh — see the clean-room note in the repository
+//! README): convergence to the continuum plane goes as the grid is
+//! refined.
 //!
 //! # Graded contact regions
 //!
@@ -88,13 +89,79 @@ use thiserror::Error;
 
 use crate::geometry::{Geometry, GeometryError, Node, NodeId, SegmentDef};
 
-/// A rectangular hole in a plane's surface coordinates.
+/// A hole cut into a plane's mesh: the region whose covered cells are
+/// removed together with their incident bars.
+///
+/// Each variant states its own cell-removal rule — and, where the shape can
+/// produce one, the rule at a tie — rather than sharing one geometric test:
+/// a rectangle, a point and a circle are not comparable shapes, so forcing
+/// one rule onto all three would either silently misrepresent one of them
+/// or need an undocumented guess (see [`GroundPlane::build_into`], which
+/// applies every hole in [`GroundPlane::holes`] cell by cell).
+///
+/// `#[non_exhaustive]`: the deck reader documents several more hole shapes
+/// this type does not represent yet (`hole user1`…`user7`, issue #99), so a
+/// future variant should not be a breaking change the way this enum's own
+/// introduction was (issue #98 widened this from a rectangle-only struct).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Hole {
-    /// Inclusive lower corner `(x, y)`.
-    pub lo: [f64; 2],
-    /// Exclusive... see [`GroundPlane::contains`]: a cell centre strictly inside.
-    pub hi: [f64; 2],
+#[non_exhaustive]
+pub enum Hole {
+    /// An axis-aligned rectangle: removes every cell whose **centre**
+    /// lies strictly inside `lo .. hi` (open on both edges) — a centre
+    /// exactly on the rectangle's boundary is not removed. This is the
+    /// original rectangle rule, unchanged from before this type became an
+    /// enum.
+    Rect {
+        /// Inclusive lower corner `(x, y)`.
+        lo: [f64; 2],
+        /// Exclusive upper corner `(x, y)`; see the strict-inequality note
+        /// above.
+        hi: [f64; 2],
+    },
+    /// A single point: removes every cell whose own extent — edges
+    /// included — contains it. A point strictly inside exactly one cell
+    /// removes that cell alone; a point exactly on a shared edge (or
+    /// corner) between cells is the documented tie, and removes every
+    /// cell touching that edge or corner rather than guessing a single
+    /// winner among them.
+    Point {
+        /// The point `(x, y)`.
+        at: [f64; 2],
+    },
+    /// A circle: removes every cell whose **centre** lies at or inside
+    /// `radius` of `centre` — a centre exactly on the circle is removed
+    /// (closed boundary; there is no legacy rectangle-style behaviour to
+    /// match here, so the boundary is defined inclusive).
+    Circle {
+        /// Centre `(x, y)`.
+        centre: [f64; 2],
+        /// Radius, metres. A negative value is not rejected by this type
+        /// (a distance is never negative, so `centre`'s test is simply
+        /// always false and the hole removes nothing) — the deck reader
+        /// validates `radius >= 0` itself, since a negative radius on a
+        /// deck line is a mistake to report, not a shape to build.
+        radius: f64,
+    },
+}
+
+impl Hole {
+    /// Whether this hole removes a cell, given the cell's own centre and
+    /// its extent `(lo, hi)` in the plane's xy coordinates. `bounds` only
+    /// matters for [`Hole::Point`]; see each variant's doc for its test.
+    fn removes(&self, centre: [f64; 3], bounds: ([f64; 2], [f64; 2])) -> bool {
+        match *self {
+            Hole::Rect { lo, hi } => {
+                lo[0] < centre[0] && centre[0] < hi[0] && lo[1] < centre[1] && centre[1] < hi[1]
+            }
+            Hole::Point { at } => {
+                let (lo, hi) = bounds;
+                lo[0] <= at[0] && at[0] <= hi[0] && lo[1] <= at[1] && at[1] <= hi[1]
+            }
+            Hole::Circle { centre: c, radius } => {
+                (centre[0] - c[0]).hypot(centre[1] - c[1]) <= radius
+            }
+        }
+    }
 }
 
 /// A rectangular contact region: the patch of plane under a via landing,
@@ -338,6 +405,16 @@ impl PlaneMesh {
             (self.y[j] + self.y[j + 1]) / 2.0,
             self.z,
         ]
+    }
+
+    /// The lower and upper corners `(x, y)` of cell `(i, j)`'s own extent.
+    ///
+    /// # Panics
+    ///
+    /// If `i >= self.nx()` or `j >= self.ny()`.
+    #[must_use]
+    pub fn cell_bounds(&self, i: usize, j: usize) -> ([f64; 2], [f64; 2]) {
+        ([self.x[i], self.y[j]], [self.x[i + 1], self.y[j + 1]])
     }
 
     /// Bars the mesh would carry with every cell live:
@@ -585,14 +662,10 @@ impl GroundPlane {
         })
     }
 
-    /// Whether a cell centre falls inside a hole.
-    fn holed(&self, centre: [f64; 3]) -> bool {
-        self.holes.iter().any(|hole| {
-            hole.lo[0] < centre[0]
-                && centre[0] < hole.hi[0]
-                && hole.lo[1] < centre[1]
-                && centre[1] < hole.hi[1]
-        })
+    /// Whether a cell is removed by any hole. `bounds` is the cell's own
+    /// extent, `(lo, hi)`; see [`Hole`] for the per-shape removal rule.
+    fn holed(&self, centre: [f64; 3], bounds: ([f64; 2], [f64; 2])) -> bool {
+        self.holes.iter().any(|hole| hole.removes(centre, bounds))
     }
 
     /// Builds the plane's mesh into `geometry`, returning the node id of
@@ -613,7 +686,7 @@ impl GroundPlane {
         for (i, column) in centres.iter_mut().enumerate() {
             for (j, slot) in column.iter_mut().enumerate() {
                 let position = mesh.centre(i, j);
-                if self.holed(position) {
+                if self.holed(position, mesh.cell_bounds(i, j)) {
                     continue;
                 }
                 *slot =
@@ -664,7 +737,7 @@ impl GroundPlane {
     /// Independent count of live bars (for the debug assertion above and
     /// for tests).
     fn live_bars(&self, mesh: &PlaneMesh) -> usize {
-        let live = |i: usize, j: usize| !self.holed(mesh.centre(i, j));
+        let live = |i: usize, j: usize| !self.holed(mesh.centre(i, j), mesh.cell_bounds(i, j));
         let mut bars = 0;
         for i in 0..mesh.nx() {
             for j in 0..mesh.ny() {
@@ -767,7 +840,7 @@ mod tests {
         let mut geometry = Geometry::new();
         let mut plane = test_plane();
         // A hole covering the middle cell (2,1): its centre (5mm, 3mm).
-        plane.holes.push(Hole {
+        plane.holes.push(Hole::Rect {
             lo: [4.9e-3, 2.9e-3],
             hi: [5.1e-3, 3.1e-3],
         });
@@ -779,12 +852,94 @@ mod tests {
         // A hole exactly on a centre boundary does not remove the cell.
         let mut geometry = Geometry::new();
         let mut plane = test_plane();
-        plane.holes.push(Hole {
+        plane.holes.push(Hole::Rect {
             lo: [5e-3, 0.0],
             hi: [6e-3, 6e-3],
         });
         plane.build_into(&mut geometry).unwrap();
         assert_eq!(geometry.nodes().len(), 15);
+    }
+
+    #[test]
+    fn point_hole_removes_the_cell_containing_it() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // Cell (2, 1) spans x in [4mm, 6mm], y in [2mm, 4mm]; a point well
+        // inside it removes only that cell.
+        plane.holes.push(Hole::Point {
+            at: [5.5e-3, 3.5e-3],
+        });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres[2][1].is_none());
+        assert_eq!(geometry.nodes().len(), 14);
+        assert_eq!(geometry.segment_count(), 18);
+
+        // A point exactly on the shared edge between cells (1,1) and (2,1)
+        // (x = 4mm) is the documented tie: both cells are removed.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Point { at: [4e-3, 3.5e-3] });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres[1][1].is_none());
+        assert!(centres[2][1].is_none());
+        assert_eq!(geometry.nodes().len(), 13);
+
+        // A point outside the plane's footprint removes nothing.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Point { at: [50e-3, 3e-3] });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres.iter().flatten().all(Option::is_some));
+    }
+
+    #[test]
+    fn circle_hole_removes_cells_whose_centre_falls_inside() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // Cell centres sit on a 2 mm grid — (1,1), (3,1), (5,1), (7,1),
+        // (9,1) mm on the bottom row (j=0), (1,3)…(9,3) on the row above
+        // (j=1). A circle of radius 2.5 mm around (5, 1) mm reaches its
+        // three grid neighbours 2 mm away — (3,1) and (7,1) in x, (5,3) in
+        // y — but not the diagonal ones (2.83 mm away) or the row's far
+        // ends (4 mm away).
+        plane.holes.push(Hole::Circle {
+            centre: [5e-3, 1e-3],
+            radius: 2.5e-3,
+        });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        for (i, j) in [(1, 0), (2, 0), (3, 0), (2, 1)] {
+            assert!(centres[i][j].is_none(), "cell ({i}, {j}) should be removed");
+        }
+        for (i, j) in [(0, 0), (4, 0), (0, 1), (1, 1), (3, 1), (4, 1)] {
+            assert!(centres[i][j].is_some(), "cell ({i}, {j}) should survive");
+        }
+        assert_eq!(geometry.nodes().len(), 11);
+
+        // A centre exactly on the circle's boundary is removed (closed).
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Circle {
+            centre: [5e-3, 1e-3],
+            radius: 2e-3,
+        });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres[2][0].is_none()); // centre (5, 1) itself
+        assert!(centres[1][0].is_none()); // (3, 1): distance exactly 2mm
+        assert!(centres[3][0].is_none()); // (7, 1): distance exactly 2mm
+        assert!(centres[2][1].is_none()); // (5, 3): distance exactly 2mm
+
+        // A circle large enough to cover the whole plane removes every
+        // cell.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Circle {
+            centre: [5e-3, 3e-3],
+            radius: 100e-3,
+        });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres.iter().flatten().all(Option::is_none));
+        assert_eq!(geometry.nodes().len(), 0);
+        assert_eq!(geometry.segment_count(), 0);
     }
 
     #[test]
@@ -795,7 +950,7 @@ mod tests {
         // dies; a point over the holed corner then snaps to the nearest
         // live centre, cell (0, 1) at (1 mm, 3 mm) — ties resolved by
         // grid order.
-        plane.holes.push(Hole {
+        plane.holes.push(Hole::Rect {
             lo: [0.0, 0.0],
             hi: [2.0e-3, 2.0e-3],
         });
@@ -975,7 +1130,7 @@ mod tests {
     fn contacts_compose_with_holes() {
         let plane = GroundPlane {
             contacts: vec![ContactRegion::centred([5e-3, 3e-3], 1e-3, 2, 2.0)],
-            holes: vec![Hole {
+            holes: vec![Hole::Rect {
                 lo: [4.5e-3, 2.5e-3],
                 hi: [5.5e-3, 3.5e-3],
             }],

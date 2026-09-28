@@ -96,10 +96,28 @@ breaking changes to the API or the command-line interface; patch releases
   a `decay_rect` clause and as a `.contact` directive, and a new test
   requires them to produce the same geometry and the same `Z(ω)`. Every
   other hole and contact shape keeps its line-numbered rejection, now
-  tracked one issue per model change it needs: #98 (`hole point`,
-  `hole circle`), #99 (`hole user1…user7`), #100 (`contact point`,
-  `line`, `circle`, `trace`) and #101 (`contact equiv_rect`, `connection`,
-  `initial_grid`, `initial_mesh_grid`).
+  tracked one issue per model change it needs: `hole point`/`hole circle`
+  (has since been implemented — see #98's own entry below), #99
+  (`hole user1…user7`), #100 (`contact point`, `line`, `circle`, `trace`)
+  and #101 (`contact equiv_rect`, `connection`, `initial_grid`,
+  `initial_mesh_grid`).
+- Library: `fasterhenry::plane::Hole` is now an enum (`Rect`, `Point`,
+  `Circle`) instead of a rectangle-only struct, and the deck reader accepts
+  the corner-point `G` statement's `hole point (x, y, z)` and
+  `hole circle (x, y, z, r)` clauses (issue #98, follow-up to #80). A point
+  removes exactly the one cell whose own extent — edges included — contains
+  it; a point landing exactly on a shared cell edge or corner is the
+  documented tie and removes every cell touching it, rather than guessing a
+  single winner. A circle removes every cell whose centre lies at or inside
+  its radius (a centre exactly on the circle counts — a closed boundary,
+  unlike `hole rect`'s strict-interior test, since there is no prior
+  rectangle behaviour to match). Both are checked against the plane's slab
+  on their own `z`, like every other hole/contact clause. This is a breaking
+  change to `fasterhenry::plane::Hole`'s public shape: existing callers
+  constructing `Hole { lo, hi }` now write `Hole::Rect { lo, hi }`. The enum
+  is `#[non_exhaustive]` from the start, so a future `hole user1`…`user7`
+  variant (#99, which keeps its line-numbered rejection for now) will not
+  need another breaking release the way this one did.
 - Library: `ContactRegion::graded_per_axis`, a contact region whose outward
   decay ratio is chosen per axis — what an anisotropically refined region
   needs, and what `contact decay_rect` derives from the deck (issue #80).
