@@ -66,12 +66,18 @@ __pycache__/
 .loom/metrics/
 .loom/usage-cache.json
 .loom/claude-config/
+.loom/claude-config.*/
+.loom/claude-config-*/
 .loom/native-tools/
 .loom/tokens/
 .loom/tokens.*/
 .loom/tokens-*/
 .loom/accounts.env
+.loom/accounts.env.*
+.loom/accounts.env-*
 .loom/api-keys/
+.loom/api-keys.*/
+.loom/api-keys-*/
 .loom/account-health.json
 .loom/account-health.lock
 .loom/CANARY
@@ -83,7 +89,11 @@ __pycache__/
 .loom/logs/
 .loom/.resync-in-progress
 .loom/gh-config/
+.loom/gh-config.*/
+.loom/gh-config-*/
 .loom/gh-config-by-owner/
+.loom/gh-config-by-owner.*/
+.loom/gh-config-by-owner-*/
 .loom-local/
 # <<< loom-managed <<<
 .loom/health-metrics.json
