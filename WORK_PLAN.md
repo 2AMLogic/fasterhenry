@@ -10,22 +10,22 @@ Prioritized roadmap of upcoming work, maintained by the Guide role.
 
 ## Ready
 
-M0 is complete (2026-09-20/21). M1 underway: **#21 outputs** (PR #26:
-MAT v4 + SPICE, ngspice/scipy-verified) and **#22 ground planes** (PR
-#29: G/.hole + PyPEEC slot-differential gate) are merged; the
-FastHenry head-to-head landed in `docs/benchmarks.md` (sub-0.1 % engine
-agreement on shared fixtures; dense wall-clock wins through 20k
-filaments). Remaining M1, in priority order:
+Released: **0.1.0** and **0.1.1** on crates.io (2026-09-27). Current
+milestone: **0.2.0 — drop-in FastHenry replacement** (epic #76). #69
+(FastHenry `G` ground-plane syntax) is merged. Remaining, in priority
+order:
 
-- **#23**: skin-depth-adaptive filament subdivision
-- **#24**: precorrected-FFT acceleration (14x per-thread gap to close)
-- **#25**: coupling truncation (`.couples`-style)
-- **#27**: committed benchmark suite + the FH contact-dialect plane
-  comparison
+- **#73**: drop-in CLI mode (`fasterhenry deck.inp` writes `Zc.mat`)
+- **#75**: `cargo-deny` license allowlist gate in CI
+- **#80**: plane hole/contact shapes the plane model cannot represent yet
+- **#83** (triage): compatibility mode for third-party decks (implicit
+  first-line title)
 
 ## In Progress
 
-*No issues currently being built.*
+- **#70** — `rho=` and the full `.units` list (PR #82: changes requested, merge conflict)
+- **#71** — `rw`/`rh` filament ratios, `wx`/`wy`/`wz` width direction (PR #85: in review)
+- **#72** — format audit + compatibility table (PR #84: changes requested, merge conflict)
 
 ## Proposed
 
@@ -33,15 +33,18 @@ filaments). Remaining M1, in priority order:
 
 ## Epics
 
-- **#6**: fasterhenry M0 → release (Phase 1 = M0). Done: #1 geometry (PR #11,
-  #17), #2 kernels (PR #13), #3 mesh/solve (PR #18), #5 CLI (PR #19),
-  #8 publish-readiness (PR #10). Remaining for M0: #4; then #9
-  (operator-gated crates.io publish — unblocked now that #8 landed).
+- **#76**: 0.2.0 — drop-in FastHenry replacement. Done: #69. In progress:
+  #70, #71, #72. Next: #73, #75. Operator-run: #74 (real-deck corpus,
+  blocked by #69–#72), #35 (required status checks).
+- **#6**: M0 → release. All four phases have shipped (dense core,
+  physics completeness, pFFT acceleration, crates.io release #9); open
+  only as an operator-owned tracking epic.
 
 ## Backlog Balance
 
 | Tier | Count |
 |------|-------|
-| Tier 1 (goal-advancing) | 2 (#4, #6) |
-| Tier 2 (goal-supporting) | 1 (#9) |
-| Tier 3 (maintenance) | 3 (#14, #15, #16 — blocked follow-ups) |
+| Tier 1 (goal-advancing) | 6 (#6, #70, #71, #72, #73, #76) |
+| Tier 2 (goal-supporting) | 2 (#74, #75) |
+| Tier 3 (maintenance) | 0 |
+| Unlabelled / triage | 4 (#16, #48 blocked; #80, #83) |
