@@ -35,6 +35,13 @@
 //! continuation lines included — is an error, while a per-line value in
 //! either form overrides a `.default` in either form.
 //!
+//! Where this reader knowingly departs from the public format description —
+//! `.title` as an explicit directive rather than an always-ignored first
+//! line, `.units` being mandatory, `.end` rejecting trailing content — the
+//! reasoning is recorded field by field in
+//! [`docs/fasthenry-compat.md`](https://github.com/2AMLogic/fasterhenry/blob/main/docs/fasthenry-compat.md),
+//! alongside every directive this reader does and does not accept.
+//!
 //! # Ground planes: two `G` grammars
 //!
 //! A `G` statement may be written either way, and a deck may mix them; the
@@ -1855,6 +1862,55 @@ e2 n1b n2 w=1e-3 h=1e-3 sigma=1.0
             deck.geometry.segment(1).unwrap().a,
             Node::new(0e0, 0e0, 0e0)
         );
+    }
+
+    #[test]
+    fn equiv_joins_more_than_two_nodes() {
+        // `.equiv a b c` is `.equiv a b` followed by `.equiv a c`: every
+        // later name aliases to the first, so three declared nodes compact
+        // down to the one canonical node.
+        let deck = parse_ok(
+            "\
+.units m
+n1 x=0 y=0 z=0
+n2 x=5 y=5 z=5
+n3 x=7 y=7 z=7
+n4 x=1e-3 y=0 z=0
+e1 n2 n4 w=1e-3 h=1e-3 sigma=1.0
+.equiv n1 n2 n3
+e2 n3 n4 w=1e-3 h=1e-3 sigma=1.0
+.external n1 n4
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        assert_eq!(deck.geometry.nodes().len(), 2);
+        assert_eq!(
+            deck.geometry.segment(0).unwrap().a,
+            Node::new(0e0, 0e0, 0e0)
+        );
+        assert_eq!(
+            deck.geometry.segment(1).unwrap().a,
+            Node::new(0e0, 0e0, 0e0)
+        );
+    }
+
+    #[test]
+    fn equiv_chain_rejects_a_node_repeated_with_itself() {
+        let error = parse(
+            "\
+.units m
+n1 x=0 y=0 z=0
+n2 x=1 y=0 z=0
+e1 n1 n2 w=1 h=1 sigma=1
+.equiv n1 n2 n1
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("with itself"));
     }
 
     #[test]
