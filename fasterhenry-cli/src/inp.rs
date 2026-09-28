@@ -13,14 +13,14 @@
 //!
 //! | Line | Meaning |
 //! |------|---------|
-//! | `.units um\|mm\|cm\|m\|mil` | Length unit for every coordinate and dimension |
-//! | `.default <field>=<v> …` | Defaults for later lines: `x`, `y`, `z`, `w`, `h`, `nwinc`, `nhinc`, `sigma` |
+//! | `.units km\|m\|cm\|mm\|um\|in\|mils` | Length unit for every coordinate and dimension (`mil` also accepted) |
+//! | `.default <field>=<v> …` | Defaults for later lines: `x`, `y`, `z`, `w`, `h`, `nwinc`, `nhinc`, `sigma` or `rho` |
 //! | `N<name> [x]=<v> [y]=<v> [z]=<v>` | Node; each coordinate falls back to its `.default` |
 //! | `E<name> N<a> N<b> [field]=<v> …` | Segment between two nodes; fields as for `.default` minus `x`/`y`/`z`, plus `group=<name>` |
 //! | `.external N<+> N<-> [name]` | A port: current in at `N<+>`, out at `N<->`, labelled `name` (extension; default `<+>/<->`) |
 //! | `.freq fmin=<v> fmax=<v> ndec=<n>` | Frequency sweep in hertz (see below) |
 //! | `G<name> x1=… y1=… z1=… x2=… y2=… z2=… x3=… y3=… z3=… thick=… seg1=… seg2=… [sigma=] [nhinc=]` | Ground plane, FastHenry corner-point form (see below) |
-//! | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=]` | Ground plane, extension form: extent, top surface `z`, thickness `t` down, `nx × ny` cells |
+//! | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=] [sigma=\|rho=]` | Ground plane, extension form: extent, top surface `z`, thickness `t` down, `nx × ny` cells; conductivity falls back to `.default` |
 //! | `.hole G<name> x1 y1 x2 y2` | Rectangular hole in that plane's footprint |
 //! | `.contact G<name> x1 y1 x2 y2 [nx=] [ny=] [ratio=]` | Contact region: refine that rectangle to `nx × ny` cells, decaying outward by `ratio` |
 //! | `.equiv N<a> N<b> [N<c> …]` | Electrically join two or more nodes into one |
@@ -30,8 +30,10 @@
 //! Lines beginning with `*` are comments; a line beginning with `+`
 //! continues the previous line. Directives are case-insensitive; node and
 //! element names are case-sensitive alphanumeric tokens (`N1`, `Ea3`).
-//! `rho=` (resistivity) is not accepted: this engine takes conductivity —
-//! use `sigma = 1/rho`.
+//! Conductivity is given either as `sigma=` or as its reciprocal, the
+//! resistivity `rho=` (which must be positive); naming both on one line —
+//! continuation lines included — is an error, while a per-line value in
+//! either form overrides a `.default` in either form.
 //!
 //! # Ground planes: two `G` grammars
 //!
@@ -69,8 +71,9 @@
 //!   `fasterhenry::plane` module documentation), so equal cell counts mean
 //!   equal resolution, not an identical node set.
 //! * **`sigma=`** is per deck unit exactly as elsewhere, and falls back to
-//!   `.default sigma=`. **`nhinc=`** cuts every bar of the plane into that
-//!   many filaments through the thickness.
+//!   the `.default` conductivity (`.default sigma=` or `.default rho=`).
+//!   **`nhinc=`** cuts every bar of the plane into that many filaments
+//!   through the thickness.
 //! * **`N<name> (x, y, z)`** declares an in-plane node. It is an ordinary
 //!   deck node that belongs to this plane: reference it from a segment or
 //!   `.external`, or join it to a segment node with `.equiv`, and the
@@ -89,7 +92,9 @@
 //!   represent must not be quietly approximated by one. Representing them
 //!   needs a change to the plane model, tracked separately (issue #80).
 //! * The remaining documented plane parameters are rejected by name too,
-//!   each with the reason and the alternative: `rho` (use `sigma`), `rh`
+//!   each with the reason and the alternative: `rho` (on this form, give
+//!   `sigma = 1/rho` or a `.default rho=`; the extension form takes `rho=`
+//!   on the line), `rh`
 //!   (plane filaments are uniform), `segwid1`/`segwid2` (bar widths follow
 //!   the cells), `relx`/`rely`/`relz` (name the in-plane nodes instead),
 //!   and `file` (an output option this engine does not have). Nothing on a
@@ -99,10 +104,13 @@
 //!
 //! * **Units are mandatory.** A deck without an explicit `.units` line is
 //!   rejected rather than silently assuming a default, so a missing unit can
-//!   never scale a result by a factor of 10 or 100. Lengths (coordinates,
-//!   `w`, `h`) scale with the unit; **conductivity is per deck unit** —
-//!   `sigma=5.8e4` under `.units mm` is copper (5.8e4 S/mm = 5.8e7 S/m),
-//!   exactly as resistivity would carry the unit in the original format.
+//!   never scale a result by a factor of 10 or 100. The unit is
+//!   case-insensitive: `km` (10³ m), `m`, `cm`, `mm`, `um` (10⁻⁶ m), `in`
+//!   (0.0254 m) or `mils` (10⁻³ in; `mil` is a synonym). Lengths
+//!   (coordinates, `w`, `h`) scale with the unit; **conductivity and
+//!   resistivity are per deck unit** — `sigma=5.8e4` under `.units mm` is
+//!   copper (5.8e4 S/mm = 5.8e7 S/m), and so is `rho=1.7241e-5`
+//!   (Ω·mm = 1.7241e-8 Ω·m). `rho=r` is exactly `sigma=1/r`.
 //! * **`.freq fmin fmax ndec`** samples `ndec` points per decade,
 //!   log-spaced: `f(k) = fmin · 10^(k/ndec)` for `k = 0 … n−1`, with
 //!   `n = floor(ndec · log10(fmax/fmin)) + 1`; `fmin` is always the first
@@ -223,22 +231,48 @@ fn err(line: usize, message: impl Into<String>) -> ParseError {
 }
 
 /// The `.units` directive's length unit, as a factor to metres.
+/// Case-insensitive, like every other directive; `mil` is accepted as a
+/// synonym of the documented `mils`.
 fn unit_factor(unit: &str, line: usize) -> Result<f64, ParseError> {
-    match unit {
-        "um" => Ok(1e-6),
-        "mm" => Ok(1e-3),
-        "cm" => Ok(1e-2),
+    match unit.to_ascii_lowercase().as_str() {
+        "km" => Ok(1e3),
         "m" => Ok(1.0),
-        "mil" => Ok(25.4e-6),
-        other => Err(err(
+        "cm" => Ok(1e-2),
+        "mm" => Ok(1e-3),
+        "um" => Ok(1e-6),
+        "in" => Ok(0.0254),
+        "mils" | "mil" => Ok(25.4e-6),
+        _ => Err(err(
             line,
-            format!("unknown length unit '{other}' (supported: um, mm, cm, m, mil)"),
+            format!("unknown length unit '{unit}' (supported: {UNITS})"),
         )),
     }
 }
 
+/// The accepted `.units` spellings, for error messages.
+const UNITS: &str = "km, m, cm, mm, um, in, mils";
+
+/// Rejects a line that gives its conductivity both ways: `sigma=` and
+/// `rho=` among the same line's `<field>=<value>` tokens.
+fn one_conductivity(fields: &[&str], line: usize) -> Result<(), ParseError> {
+    let has = |wanted: &str| {
+        fields.iter().any(|token| {
+            token
+                .split_once('=')
+                .is_some_and(|(key, _)| key.eq_ignore_ascii_case(wanted))
+        })
+    };
+    if has("sigma") && has("rho") {
+        return Err(err(
+            line,
+            "both sigma= and rho= on one line: give the conductivity one way (sigma = 1/rho)",
+        ));
+    }
+    Ok(())
+}
+
 /// Per-line field defaults set by `.default`; lengths are already scaled to
-/// metres when stored, sigma to S/m.
+/// metres when stored, sigma (given directly or as `rho`) to S/m.
 #[derive(Clone, Copy, Debug, Default)]
 struct Defaults {
     x: Option<f64>,
@@ -256,7 +290,7 @@ fn parse_field(token: &str, line: usize) -> Result<(String, String), ParseError>
     let (key, value) = token.split_once('=').ok_or_else(|| {
         err(
             line,
-            format!("expected <field>=<value>, got '{token}' (supported: x, y, z, w, h, nwinc, nhinc, sigma)"),
+            format!("expected <field>=<value>, got '{token}' (supported: x, y, z, w, h, nwinc, nhinc, sigma, rho)"),
         )
     })?;
     if key.is_empty() || value.is_empty() {
@@ -289,11 +323,25 @@ fn parse_count(text: &str, what: &str, line: usize) -> Result<usize, ParseError>
 }
 
 /// The value side of a `<field>=<value>` pair: a length (scaled), a
-/// conductivity (per deck unit, converted to S/m), a count, or a
-/// dimensionless ratio.
+/// conductivity (per deck unit, converted to S/m), a resistivity (per deck
+/// unit, converted to a conductivity in S/m), a count, or a dimensionless
+/// ratio.
 fn parse_value(key: &str, value: &str, unit: f64, line: usize) -> Result<f64, ParseError> {
     match key {
         "sigma" => Ok(parse_number(value, line)? / unit),
+        "rho" => {
+            let rho = parse_number(value, line)?;
+            if rho <= 0.0 {
+                return Err(err(
+                    line,
+                    format!("rho (resistivity) must be > 0, got {value}"),
+                ));
+            }
+            // `1/rho` first, then the unit, exactly as `sigma = 1/rho`
+            // would be: the two spellings give bit-identical conductivities
+            // whenever the deck's sigma is the correctly rounded 1/rho.
+            Ok(1.0 / rho / unit)
+        }
         "nwinc" | "nhinc" | "nx" | "ny" => Ok(parse_count(value, key, line)? as f64),
         "ratio" => parse_number(value, line),
         _ => Ok(parse_number(value, line)? * unit),
@@ -315,17 +363,14 @@ fn set_default(
         "h" => defaults.h = Some(value.abs()),
         "nwinc" => defaults.nwinc = Some(value as usize),
         "nhinc" => defaults.nhinc = Some(value as usize),
-        "sigma" => defaults.sigma = Some(value),
-        "rho" => {
-            return Err(err(
-                line,
-                "'rho' (resistivity) is not accepted; this engine takes conductivity: sigma = 1/rho (per deck unit)",
-            ));
-        }
+        // Already converted to S/m by parse_value either way.
+        "sigma" | "rho" => defaults.sigma = Some(value),
         other => {
             return Err(err(
                 line,
-                format!("unknown field '{other}' (supported: x, y, z, w, h, nwinc, nhinc, sigma)"),
+                format!(
+                    "unknown field '{other}' (supported: x, y, z, w, h, nwinc, nhinc, sigma, rho)"
+                ),
             ));
         }
     }
@@ -565,7 +610,9 @@ fn parse_plane_statement(
                     "rho" => {
                         return Err(err(
                             line,
-                            "'rho' (resistivity) is not accepted; this engine takes conductivity: sigma = 1/rho (per deck unit)",
+                            format!(
+                                "ground plane '{head}': 'rho' is not accepted on the corner-point form; give sigma = 1/rho (per deck unit) here, or set '.default rho=' (the 'G<name> x1 y1 z1 x2 y2 z2 t' extension form takes 'rho=' on the line)"
+                            ),
                         ));
                     }
                     "rh" => {
@@ -742,7 +789,7 @@ fn parse_plane_statement(
         err(
             line,
             format!(
-                "ground plane '{head}' has no conductivity: set sigma= on the statement or in .default"
+                "ground plane '{head}' has no conductivity: set sigma= on the statement, or sigma= or rho= in .default"
             ),
         )
     })?;
@@ -990,6 +1037,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                     if unit.is_none() {
                         return Err(err(number, ".default before .units (lengths need a unit)"));
                     }
+                    one_conductivity(&tokens[1..], number)?;
                     for token in &tokens[1..] {
                         let (key, raw_value) = parse_field(token, number)?;
                         let value = parse_value(&key, &raw_value, factor, number)?;
@@ -1227,6 +1275,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                 }
                 let a = names.lookup(tokens[1], number)?;
                 let b = names.lookup(tokens[2], number)?;
+                one_conductivity(&tokens[3..], number)?;
                 let mut w = defaults.w;
                 let mut h = defaults.h;
                 let mut nwinc = defaults.nwinc;
@@ -1247,23 +1296,17 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         "h" => h = Some(value.abs()),
                         "nwinc" => nwinc = Some(value as usize),
                         "nhinc" => nhinc = Some(value as usize),
-                        "sigma" => sigma = Some(value),
+                        "sigma" | "rho" => sigma = Some(value),
                         "x" | "y" | "z" => {
                             return Err(err(
                                 number,
                                 format!("'{key}' is a node field, not a segment field"),
                             ));
                         }
-                        "rho" => {
-                            return Err(err(
-                                number,
-                                "'rho' (resistivity) is not accepted; this engine takes conductivity: sigma = 1/rho (per deck unit)",
-                            ));
-                        }
                         other => {
                             return Err(err(
                                 number,
-                                format!("unknown field '{other}' (supported: w, h, nwinc, nhinc, sigma, group)"),
+                                format!("unknown field '{other}' (supported: w, h, nwinc, nhinc, sigma, rho, group)"),
                             ));
                         }
                     }
@@ -1285,7 +1328,7 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                     (_, _, None) => {
                         return Err(err(
                             number,
-                            format!("segment '{head}' has no conductivity: set sigma= here or in .default"),
+                            format!("segment '{head}' has no conductivity: set sigma= or rho= here or in .default"),
                         ));
                     }
                 };
@@ -1342,6 +1385,8 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                 let mut nx = 1usize;
                 let mut ny = 1usize;
                 let mut nhinc = 1usize;
+                let mut sigma = defaults.sigma;
+                one_conductivity(&tokens[8..], number)?;
                 for token in &tokens[8..] {
                     let (key, raw_value) = parse_field(token, number)?;
                     let value = parse_value(&key, &raw_value, factor, number)?;
@@ -1349,10 +1394,14 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         "nx" => nx = value as usize,
                         "ny" => ny = value as usize,
                         "nhinc" => nhinc = value as usize,
+                        // Already converted to S/m by parse_value either way.
+                        "sigma" | "rho" => sigma = Some(value),
                         other => {
                             return Err(err(
                                 number,
-                                format!("unknown G field '{other}' (supported: nx, ny, nhinc)"),
+                                format!(
+                                    "unknown G field '{other}' (supported: nx, ny, nhinc, sigma, rho)"
+                                ),
                             ));
                         }
                     }
@@ -1379,11 +1428,11 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
                         thickness,
                         nx,
                         ny,
-                        sigma: defaults.sigma.ok_or_else(|| {
+                        sigma: sigma.ok_or_else(|| {
                             err(
                                 number,
                                 format!(
-                                    "ground plane '{head}' has no conductivity: set sigma= in .default"
+                                    "ground plane '{head}' has no conductivity: set sigma= or rho= here or in .default"
                                 ),
                             )
                         })?,
@@ -1408,7 +1457,9 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
     if unit.is_none() {
         return Err(err(
             last_number,
-            "deck has no .units directive (units are mandatory: .units um|mm|cm|m|mil)",
+            format!(
+                "deck has no .units directive (units are mandatory: .units <unit>, one of {UNITS})"
+            ),
         ));
     }
     if ports.is_empty() {
@@ -2399,22 +2450,222 @@ e1 n1 n2 w=1 h=1 sigma=1
         assert!(error.message.contains("deck subset"));
     }
 
-    #[test]
-    fn rho_gets_a_conversion_hint() {
-        let error = parse(
+    /// A one-segment deck under `unit` whose conductivity comes from
+    /// `default_fields` (spliced into `.default`) and `segment_fields`
+    /// (spliced onto the `E` line).
+    fn conductivity_deck(unit: &str, default_fields: &str, segment_fields: &str) -> String {
+        format!(
             "\
-.units m
-n1 x=0 y=0 z=0
-n2 x=1 y=0 z=0
-e1 n1 n2 w=1 h=1 rho=1.7e-8
+.units {unit}
+.default z=0 w=1 h=1 {default_fields}
+n1 x=0 y=0
+n2 x=10 y=0
+e1 n1 n2 {segment_fields}
 .external n1 n2
 .freq fmin=1 fmax=1 ndec=1
 .end
-",
+"
         )
+    }
+
+    #[test]
+    fn rho_on_a_segment_is_one_over_sigma_per_deck_unit() {
+        for (unit, factor) in [("m", 1.0), ("mm", 1e-3), ("um", 1e-6)] {
+            let from_rho = parse_ok(&conductivity_deck(unit, "", "rho=0.5"));
+            let from_sigma = parse_ok(&conductivity_deck(unit, "", "sigma=2"));
+            let sigma = from_rho.geometry.segment(0).unwrap().sigma;
+            // rho=0.5 ohm·unit is sigma=2 S/unit = 2/factor S/m, exactly.
+            assert_eq!(sigma, 2.0 / factor, "{unit}");
+            assert_eq!(from_rho, from_sigma, "{unit}");
+        }
+        // Copper by resistivity in mm: 1.7241e-5 ohm·mm = 1.7241e-8 ohm·m.
+        let copper = parse_ok(&conductivity_deck("mm", "", "rho=1.7241e-5"));
+        let sigma = copper.geometry.segment(0).unwrap().sigma;
+        assert!((sigma - 1.0 / 1.7241e-8).abs() < 1e-12 * sigma);
+    }
+
+    #[test]
+    fn rho_on_default_and_overrides() {
+        let from_default = parse_ok(&conductivity_deck("mm", "rho=0.25", ""));
+        assert_eq!(from_default.geometry.segment(0).unwrap().sigma, 4.0 / 1e-3);
+        // A per-line rho overrides a default sigma, and vice versa.
+        let overridden = parse_ok(&conductivity_deck("mm", "sigma=1", "rho=0.5"));
+        assert_eq!(overridden.geometry.segment(0).unwrap().sigma, 2.0 / 1e-3);
+        let overridden = parse_ok(&conductivity_deck("mm", "rho=0.5", "sigma=8"));
+        assert_eq!(overridden.geometry.segment(0).unwrap().sigma, 8.0 / 1e-3);
+        // Separate .default lines: the later one wins.
+        let later = parse_ok(
+            &conductivity_deck("mm", "sigma=1", "")
+                .replace(".default z=0", ".default rho=0.5\n.default z=0"),
+        );
+        assert_eq!(later.geometry.segment(0).unwrap().sigma, 1.0 / 1e-3);
+    }
+
+    #[test]
+    fn rho_and_sigma_on_one_line_is_an_error() {
+        for (default_fields, segment_fields, line) in [
+            ("", "sigma=2 rho=0.5", 5),
+            ("", "rho=0.5 sigma=2", 5),
+            ("sigma=2 rho=0.5", "", 2),
+        ] {
+            let error =
+                parse(&conductivity_deck("mm", default_fields, segment_fields)).unwrap_err();
+            assert_eq!(error.line, line, "{error}");
+            assert!(error.message.contains("both"), "{error}");
+        }
+        // Across a continuation line it is still one line.
+        let error =
+            parse(&conductivity_deck("mm", "", "sigma=2").replace("sigma=2", "sigma=2\n+ rho=0.5"))
+                .unwrap_err();
+        assert_eq!(error.line, 5);
+        // On a G line too.
+        let error = parse(".units mm\nGp 0 0 0 10 6 0 0.035 sigma=1 rho=1\n.end\n").unwrap_err();
+        assert_eq!(error.line, 2);
+        assert!(error.message.contains("both"), "{error}");
+    }
+
+    #[test]
+    fn rho_must_be_positive() {
+        for bad in ["rho=0", "rho=-1", "rho=0.0"] {
+            let error = parse(&conductivity_deck("mm", "", bad)).unwrap_err();
+            assert_eq!(error.line, 5, "{bad}");
+            assert!(error.message.contains("rho"), "{error}");
+        }
+        let error = parse(&conductivity_deck("mm", "rho=0", "")).unwrap_err();
+        assert_eq!(error.line, 2);
+    }
+
+    #[test]
+    fn g_plane_takes_sigma_or_rho_on_its_line() {
+        let plane_sigma = |text: &str| -> f64 {
+            // The first plane bar carries the plane's conductivity.
+            parse_ok(text).geometry.segment(0).unwrap().sigma
+        };
+        let deck = |g_fields: &str, default_fields: &str| {
+            format!(
+                "\
+.units mm
+.default {default_fields}
+Gp 0 0 0 10 6 0 0.035 nx=5 ny=3 {g_fields}
+n1 x=1 y=0 z=0
+n2 x=9 y=0 z=0
+e1 n1 n2 w=0.2 h=0.035 sigma=5.8e4
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+            )
+        };
+        let by_default = plane_sigma(&deck("", "sigma=2"));
+        assert_eq!(by_default, 2.0 / 1e-3);
+        assert_eq!(plane_sigma(&deck("", "rho=0.5")), by_default);
+        assert_eq!(plane_sigma(&deck("rho=0.5", "z=0")), by_default);
+        assert_eq!(plane_sigma(&deck("sigma=2", "z=0")), by_default);
+        // A per-line value overrides the default.
+        assert_eq!(plane_sigma(&deck("rho=0.5", "sigma=100")), by_default);
+        // The whole deck is the same either way.
+        assert_eq!(
+            parse_ok(&deck("rho=0.5", "z=0")),
+            parse_ok(&deck("", "sigma=2"))
+        );
+    }
+
+    /// Conductivity composes with the other per-plane fields: on the
+    /// extension form `sigma=`/`rho=` sit alongside `nx=`/`ny=`/`nhinc=` in
+    /// any order, and build the same plane as the corner-point form given
+    /// the equivalent `sigma=`. The corner-point form itself still rejects
+    /// `rho=` by name, but a `.default rho=` reaches its planes.
+    #[test]
+    fn plane_conductivity_composes_with_nhinc_and_both_grammars() {
+        let corner = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 sigma=2 nhinc=3",
+            "",
+        ));
+        for fields in [
+            "nx=5 ny=3 nhinc=3 rho=0.5",
+            "rho=0.5 nx=5 ny=3 nhinc=3",
+            "nx=5 nhinc=3 sigma=2 ny=3",
+            "nx=5 ny=3\n+ nhinc=3\n+ rho=0.5",
+        ] {
+            let extension = parse_ok(&plane_deck(
+                &format!("Gp 0 0 0.02 10 6 0.02 0.04 {fields}"),
+                "",
+            ));
+            assert_eq!(extension, corner, "{fields}");
+            // The plane bars carry the per-plane value, not the default...
+            assert_eq!(extension.geometry.segment(0).unwrap().sigma, 2.0 / 1e-3);
+            // ...and nhinc still subdivides them.
+            let Discretization::PerSegment(subdivisions) = &extension.discretization else {
+                panic!("{fields}: {:?}", extension.discretization);
+            };
+            assert_eq!(subdivisions[0], Subdivision::new(1, 3), "{fields}");
+        }
+        // sigma and rho together is still an error next to nhinc, even
+        // split across continuation lines.
+        let error = parse(&plane_deck(
+            "Gp 0 0 0.02 10 6 0.02 0.04 nx=5 ny=3 sigma=2\n+ nhinc=3 rho=0.5",
+            "",
+        ))
         .unwrap_err();
-        assert_eq!(error.line, 4);
-        assert!(error.message.contains("sigma = 1/rho"));
+        assert_eq!(error.line, 3, "{error}");
+        assert!(error.message.contains("both"), "{error}");
+
+        // The corner-point form rejects rho= on the statement by name, and
+        // says what to do instead.
+        let error = parse(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 rho=0.5 nhinc=3",
+            "",
+        ))
+        .unwrap_err();
+        assert_eq!(error.line, 3, "{error}");
+        assert!(error.message.contains("'rho'"), "{error}");
+        assert!(error.message.contains("corner-point"), "{error}");
+        assert!(error.message.contains("sigma = 1/rho"), "{error}");
+        // A `.default rho=` is the deck's conductivity, and reaches it.
+        let corner_plane = "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 nhinc=3";
+        let by_rho = parse_ok(
+            &plane_deck(corner_plane, "").replace(".default sigma=5.8e4", ".default rho=0.5"),
+        );
+        let by_sigma = parse_ok(
+            &plane_deck(corner_plane, "").replace(".default sigma=5.8e4", ".default sigma=2"),
+        );
+        assert_eq!(by_rho, by_sigma);
+        assert_eq!(by_rho.geometry.segment(0).unwrap().sigma, 2.0 / 1e-3);
+    }
+
+    #[test]
+    fn every_documented_unit_scales_lengths_and_conductivity() {
+        for (unit, factor) in [
+            ("km", 1e3),
+            ("m", 1.0),
+            ("cm", 1e-2),
+            ("mm", 1e-3),
+            ("um", 1e-6),
+            ("in", 0.0254),
+            ("mils", 25.4e-6),
+            ("mil", 25.4e-6),
+            // Directives are case-insensitive, and so is the unit.
+            ("MM", 1e-3),
+            ("In", 0.0254),
+            ("MILS", 25.4e-6),
+        ] {
+            let deck = parse_ok(&conductivity_deck(unit, "", "sigma=3"));
+            let segment = deck.geometry.segment(0).unwrap();
+            assert_eq!(segment.length(), 10.0 * factor, "{unit}");
+            assert_eq!(segment.width, factor, "{unit}");
+            assert_eq!(segment.sigma, 3.0 / factor, "{unit}");
+        }
+        let error = parse(&conductivity_deck("furlong", "", "sigma=1")).unwrap_err();
+        assert_eq!(error.line, 1);
+        for unit in ["km", "in", "mils"] {
+            assert!(error.message.contains(unit), "{error}");
+        }
     }
 
     #[test]
