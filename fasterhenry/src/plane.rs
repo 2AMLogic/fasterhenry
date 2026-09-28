@@ -478,6 +478,29 @@ impl PlaneMesh {
     }
 }
 
+/// The fewest uniform cells across `span` whose extent is no larger than
+/// `fine` — `ceil(span / fine)`, at least one.
+///
+/// A span that is an exact multiple of `fine` must not gain a spurious
+/// extra cell from a last-bit rounding of the division, so a quotient
+/// within a relative `1e-9` of an integer counts as that integer. Rounding
+/// to the *nearest* count instead (as band layout once did) could cut a
+/// merged or edge-widened band into cells up to twice the requested fine
+/// cell, breaking the "keeps the finest cell" guarantee the refinement
+/// shapes rely on.
+fn cells_no_coarser_than(span: f64, fine: f64) -> usize {
+    let quotient = span / fine;
+    let rounded = quotient.round();
+    let cells = if (quotient - rounded).abs() <= 1e-9 * rounded {
+        rounded
+    } else {
+        quotient.ceil()
+    };
+    // `as` saturates: an infinite quotient (a fine cell that underflowed
+    // to zero) becomes `usize::MAX`, which the per-axis limit then refuses.
+    (cells as usize).max(1)
+}
+
 /// Appends the cells filling the gap `from … to` to `edges`.
 ///
 /// `left` and `right` carry the `(fine, ratio)` of the refined band
@@ -572,7 +595,7 @@ fn axis_edges(
                 let fine = last.fine().min(band.fine());
                 last.end = last.end.max(band.end);
                 last.ratio = last.ratio.min(band.ratio);
-                last.cells = (((last.end - last.start) / fine).round() as usize).max(1);
+                last.cells = cells_no_coarser_than(last.end - last.start, fine);
             }
             _ => merged.push(band),
         }
@@ -708,7 +731,7 @@ impl GroundPlane {
                 bands.push(Band {
                     start,
                     end,
-                    cells: (((end - start) / fine).round() as usize).max(1),
+                    cells: cells_no_coarser_than(end - start, fine),
                     ratio: contact.ratio[axis],
                 });
             }
@@ -1377,6 +1400,48 @@ mod tests {
             .filter(|&i| (mesh.dx(i) - 0.1e-3).abs() < 1e-12)
             .count();
         assert_eq!(fine, 15, "the merged 1.5 mm band is cut at 0.1 mm");
+    }
+
+    /// A band widened to absorb a sliver at the footprint edge, or merged
+    /// with a neighbour, is cut into the fewest cells *no coarser* than its
+    /// fine cell — never into the nearest count, which could leave a cell
+    /// up to twice as wide as the region asked for.
+    #[test]
+    fn widened_and_merged_bands_never_coarsen_the_fine_cell() {
+        // A one-cell, 1 mm region 0.3 mm from the plane's left edge: the
+        // 0.3 mm sliver is absorbed, and the 1.3 mm band takes two cells
+        // (rounding would have made it one 1.3 mm cell).
+        let plane = GroundPlane {
+            contacts: vec![ContactRegion::new(
+                [0.3e-3, 2.5e-3],
+                [1.3e-3, 3.5e-3],
+                [1, 1],
+                2.0,
+            )],
+            ..test_plane()
+        };
+        let mesh = plane.mesh().unwrap();
+        assert!((mesh.dx(0) - 0.65e-3).abs() < 1e-12, "{}", mesh.dx(0));
+        assert!((mesh.dx(1) - 0.65e-3).abs() < 1e-12, "{}", mesh.dx(1));
+
+        // Two regions 0.1 mm apart merge into one 1.6 mm band at the finer
+        // 0.25 mm cell: 6.4 cells' worth, so 7 cells, none above 0.25 mm.
+        let plane = GroundPlane {
+            contacts: vec![
+                ContactRegion::new([4e-3, 2e-3], [5e-3, 4e-3], [4, 4], 2.0),
+                ContactRegion::new([5.1e-3, 2e-3], [5.6e-3, 4e-3], [1, 4], 2.0),
+            ],
+            ..test_plane()
+        };
+        let mesh = plane.mesh().unwrap();
+        let band: Vec<f64> = (0..mesh.nx())
+            .filter(|&i| {
+                mesh.x_edges()[i] >= 4e-3 - 1e-12 && mesh.x_edges()[i + 1] <= 5.6e-3 + 1e-12
+            })
+            .map(|i| mesh.dx(i))
+            .collect();
+        assert_eq!(band.len(), 7, "{band:?}");
+        assert!(band.iter().all(|&d| d <= 0.25e-3 + 1e-12), "{band:?}");
     }
 
     #[test]

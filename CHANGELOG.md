@@ -99,7 +99,9 @@ breaking changes to the API or the command-line interface; patch releases
   tracked one issue per model change it needs: `hole point`/`hole circle`
   (has since been implemented — see #98's own entry below), #99
   (`hole user1…user7`, since decided as a permanent rejection — see its
-  entry under "Changed"), #100 (`contact point`, `line`, `circle`, `trace`)
+  entry under "Changed"), #100 (`contact point`, `line`, `circle`, `trace`;
+  `point` and `line` have since been implemented — see #100's own entry
+  below, with `circle` and `trace` moved to #109 and #110)
   and #101 (`contact equiv_rect`, `connection`, `initial_grid`,
   `initial_mesh_grid`).
 - Library: `fasterhenry::plane::Hole` is now an enum (`Rect`, `Point`,
@@ -120,6 +122,26 @@ breaking changes to the API or the command-line interface; patch releases
   need another breaking release the way this one did. (The variant this
   anticipated for `hole user1`…`user7` is not being added — see #99's entry
   under "Changed".)
+- Deck reader: the `contact point (x, y, z, xcell, ycell)` and `contact line
+  (x0, y0, z0, x1, y1, z1, xcell, ycell)` clauses on a corner-point `G`
+  ground-plane statement (issue #100, follow-up to #80): every cell holding
+  the point, or crossed by the line, is no larger than `xcell` × `ycell`.
+  Each maps onto one `fasterhenry::plane::ContactRegion` — the locus's
+  bounding box padded by half a requested cell on every side, cut into the
+  fewest cells no larger than that cell, grading back to the background at
+  the reader's default ratio 2 — so a point is exactly one `xcell × ycell`
+  cell centred on it (a via landing there snaps onto its centre) and a
+  zero-length line is that point. A requested cell at or above the plane's
+  background cell is already met and is clamped there rather than
+  coarsening the mesh. A diagonal line refines its whole padded bounding
+  box: on this engine's tensor-product mesh any refinement covering the
+  line has those same per-axis bands, so that is the stated cost (about
+  `(Lx/xcell)·(Ly/ycell)` fine cells rather than `Lx/xcell + Ly/ycell`),
+  not an approximation. Both ends are checked against the plane's slab and
+  footprint on the statement's own line. `contact circle` and `contact
+  trace` keep their line-numbered rejection, now tracked in #109 and #110:
+  the first's argument list and the second's cell-size rule are not yet
+  pinned from the public documentation, and are not guessed.
 - Library: `ContactRegion::graded_per_axis`, a contact region whose outward
   decay ratio is chosen per axis — what an anisotropically refined region
   needs, and what `contact decay_rect` derives from the deck (issue #80).
@@ -149,6 +171,14 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Library: a refined band that is widened to absorb a sliver at the plane's
+  edge, or merged with an overlapping or adjacent region, is now cut into
+  the fewest cells **no larger** than its fine cell (`ceil`) rather than
+  the nearest count (issue #100). Rounding could leave cells up to twice
+  the requested fine cell, contradicting the documented "keeping the finest
+  cell"; a band that divides exactly is unchanged, as is the graded
+  validation fixture (580 bars). A graded plane whose region straddled
+  that rounding now gains a cell or two on that axis.
 - Deck reader / library (decision, no new API): `hole user1 (…)` …
   `hole user7 (…)` are rejected **permanently**, and no predicate or
   callback variant is added to `fasterhenry::plane::Hole` (issue #99,
