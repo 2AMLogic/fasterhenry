@@ -140,12 +140,26 @@
 //!   removed — a closed boundary, unlike `hole rect`'s open one). Both take
 //!   the shape's own `z`, checked against the plane's slab like every other
 //!   clause here.
-//! * Every other documented shape is **rejected by name**, on the
+//! * **`hole user1` … `user7`** are rejected by name, on the statement's
+//!   own line, and that rejection is **permanent** — not a shape awaiting
+//!   implementation (issue #99; the decision and its reasoning are in
+//!   `docs/fasthenry-compat.md`). A user-defined hole is a generator
+//!   compiled into the tool itself: the deck carries a shape name and a
+//!   value list whose meaning is stated nowhere in the deck, so there is no
+//!   geometry here to read, and no amount of plane-model work would let
+//!   this reader read one. The error names two alternatives instead: the
+//!   declarative shapes above, and — for a shape none of them describe —
+//!   building the plane through the library, where
+//!   [`fasterhenry::plane::GroundPlane::mesh`] reports the exact cell
+//!   centres the plane meshes to and a
+//!   [`fasterhenry::plane::Hole::Point`] at each centre an arbitrary rule
+//!   selects removes precisely those cells.
+//! * Every other documented shape is **rejected by name** too, on the
 //!   statement's own line: this engine's holes and contacts are
 //!   rectangles, points or circles, and a shape it cannot represent must
-//!   not be quietly approximated by one. Representing each needs a change
-//!   to the plane model, tracked separately:
-//!     * `hole user1` … `user7` — issue #99;
+//!   not be quietly approximated by one. Unlike the user-defined holes,
+//!   these *are* representable — each needs a change to the plane model,
+//!   tracked separately:
 //!     * `contact point`, `contact line`, `contact circle`,
 //!       `contact trace` — issue #100;
 //!     * `contact equiv_rect`, `contact connection`,
@@ -715,6 +729,20 @@ fn triple(values: &[String], what: &str, unit: f64, line: usize) -> Result<[f64;
     ])
 }
 
+/// Whether `shape` names one of the seven documented **user-defined** hole
+/// generators, `user1` … `user7` — rejected permanently and by name rather
+/// than through the generic "unknown hole shape" arm, because they are not
+/// an unimplemented shape but a shape the deck cannot state at all. See the
+/// [module documentation](self) and `docs/fasthenry-compat.md` (issue #99).
+///
+/// `shape` arrives lowercased from [`scan_plane_items`].
+fn is_user_hole(shape: &str) -> bool {
+    matches!(
+        shape.strip_prefix("user"),
+        Some("1" | "2" | "3" | "4" | "5" | "6" | "7")
+    )
+}
+
 /// The two opposite corners of a `rect` clause: `(x1, y1, z1, x2, y2, z2)`.
 fn rect_corners(
     values: &[String],
@@ -966,6 +994,14 @@ fn parse_plane_statement(
                     }
                     ("contact", "decay_rect") => {
                         contact_decays.push(decay_rect_values(&values, &what, unit, line)?);
+                    }
+                    ("hole", other) if is_user_hole(other) => {
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': 'hole {other}' is not supported, and will not be: a user-defined hole is a generator compiled into the tool itself, so nothing in the deck says what its values mean and there is no shape here to read. Cut the cells you want with 'hole rect (x1, y1, z1, x2, y2, z2)', 'hole point (x, y, z)' or 'hole circle (x, y, z, r)'; for a shape none of those describe, build the plane through the library instead — 'fasterhenry::plane::GroundPlane::mesh' reports the exact cell centres this plane meshes to, and a 'fasterhenry::plane::Hole::Point' at each centre your own rule selects removes precisely those cells (see docs/fasthenry-compat.md)"
+                            ),
+                        ));
                     }
                     ("hole", other) => {
                         return Err(err(
@@ -3229,6 +3265,65 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             assert!(
                 error.message.contains(expected),
                 "'{extra}' must name what it rejects, got: {}",
+                error.message
+            );
+        }
+    }
+
+    /// All seven user-defined holes are rejected on the statement's own
+    /// line, each naming itself, saying the rejection is permanent, and
+    /// naming both alternatives: the declarative shapes, and the library
+    /// path (`GroundPlane::mesh` + `Hole::Point`) for a shape none of them
+    /// describe. Issue #99.
+    #[test]
+    fn user_defined_holes_are_rejected_permanently_and_name_the_alternative() {
+        for n in 1..=7 {
+            let error = parse(&plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 hole user{n} (5, 3, 0, 1, 2)"
+                ),
+                "",
+            ))
+            .unwrap_err();
+            assert_eq!(error.line, 3, "'hole user{n}' reports the statement's line");
+            for expected in [
+                &format!("'hole user{n}' is not supported, and will not be"),
+                "hole rect (x1, y1, z1, x2, y2, z2)",
+                "hole point (x, y, z)",
+                "hole circle (x, y, z, r)",
+                "fasterhenry::plane::GroundPlane::mesh",
+                "fasterhenry::plane::Hole::Point",
+            ] {
+                assert!(
+                    error.message.contains(expected),
+                    "'hole user{n}' must name {expected}, got: {}",
+                    error.message
+                );
+            }
+        }
+
+        // The spelling is exact: `user8` and `usery` are not user-defined
+        // hole names, so they fall to the generic unknown-shape arm, which
+        // makes no claim about permanence.
+        for other in ["user8", "user0", "usery", "user"] {
+            let error = parse(&plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 hole {other} (5, 3, 0)"
+                ),
+                "",
+            ))
+            .unwrap_err();
+            assert_eq!(error.line, 3);
+            assert!(
+                error
+                    .message
+                    .contains(&format!("'hole {other}' is not supported"))
+                    && !error.message.contains("will not be"),
+                "'hole {other}' takes the generic rejection, got: {}",
                 error.message
             );
         }

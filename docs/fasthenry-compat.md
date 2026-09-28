@@ -21,6 +21,9 @@ Status key:
   below.
 - **Deferred** — tracked by a sibling issue in the same epic.
 - **Not supported** — rejected with a line-numbered error; out of scope here.
+- **Not supported, permanent** — rejected with a line-numbered error, and
+  the rejection is a recorded decision rather than pending work; the
+  reasoning is written out below the table it appears in.
 
 ## Deck framing
 
@@ -109,8 +112,75 @@ records how each documented field maps.
 | `hole rect (…)`, `contact rect (…)` | Supported, differs | Map onto the plane model's rectangular hole and contact region; the redundant `z` coordinates are checked against the plane's slab. An inline `contact rect` uses 2 × 2 fine cells at ratio 2 — use `.contact` to choose other values. Both take **two opposite corners** here. That is right for `hole rect` and a divergence for `contact rect`, whose documented form is a centre, full widths and cell sizes like the other `contact` shapes'; issue #95 tracks reconciling it. |
 | `contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` | Supported, differs | Issue #80. Maps onto `fasterhenry::plane::ContactRegion`: centre and full widths give the rectangle, `ceil(width/cell)` per axis gives the fine cells, and the documented decay law `1/(1 − cell/width)` gives that axis's growth ratio. `cell` must be smaller than `width` (the documentation's own `r0 < 1`). The differences are both in the outward limit: this engine's grading levels off at the plane's **background cell** rather than at `maxcell`, so a positive `maxcell` **finer** than the background cell is rejected by name (raise `seg1`/`seg2` instead of shipping a quietly coarser mesh), while one at or above it never binds; a negative `maxcell` — the sentinel the documented `contact connection` shorthand expands to — asks for no limit. The resulting mesh is this engine's own graded cell-centre mesh, not FastHenry's cell subdivision, so equal cell sizes mean equal resolution, not an identical node set. |
 | `hole point (x, y, z)`, `hole circle (x, y, z, r)` | Supported | Issue #98. Map onto `fasterhenry::plane::Hole::Point` and `Hole::Circle`, widening the plane's hole model beyond the axis-aligned rectangle. A point removes exactly the one cell whose own extent (edges included) contains it; a point landing exactly on a shared cell edge or corner is the documented tie and removes every cell touching it, rather than guessing a single winner. A circle removes every cell whose centre lies at or inside its radius `r` — a centre exactly on the circle counts (a closed boundary, unlike `hole rect`'s open one, since there is no prior rectangle behaviour to match). Both check their own `z` against the plane's slab like every other hole/contact clause. |
-| Other hole/contact shapes (`hole user1…user7`, `contact point`, `contact line`, `contact circle`, `contact trace`, `contact equiv_rect`, `contact connection`, `contact initial_grid`, `contact initial_mesh_grid`) | Deferred | Issues #80 and #98 took `decay_rect`, `point` and `circle`; the rest stay rejected by name, on the statement's own line, rather than approximated by a rectangle. Tracked as issues #99 (`hole user1…user7`), #100 (the `contact` refinement primitives) and #101 (the named-equipotential and initial-grid forms). |
+| `hole user1 (…)` … `hole user7 (…)` | Not supported, permanent | Issue #99. Rejected by name on the statement's own line, and the rejection is final rather than deferred — see the decision below. The error names the alternatives: the declarative shapes above, and `fasterhenry::plane::GroundPlane::mesh` + `fasterhenry::plane::Hole::Point` for a shape none of them describe. |
+| Other hole/contact shapes (`contact point`, `contact line`, `contact circle`, `contact trace`, `contact equiv_rect`, `contact connection`, `contact initial_grid`, `contact initial_mesh_grid`) | Deferred | Issues #80 and #98 took `decay_rect`, `point` and `circle`; the rest stay rejected by name, on the statement's own line, rather than approximated by a rectangle. Tracked as issues #100 (the `contact` refinement primitives) and #101 (the named-equipotential and initial-grid forms). |
 | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=] [sigma=\|rho=]`, `.hole`, `.contact` | Supported, extended | This project's own shorthand plane form and its separate refinement directives — not documented FastHenry syntax. Told apart from the corner-point form by the first token after the plane name, so a deck may mix the two; both build the same plane. |
+
+### Decision: `hole user1`…`user7` are rejected permanently (issue #99)
+
+The format documents seven **user-defined** hole generators, `hole user1
+(val1, val2, …)` … `hole user7 (…)`. What they cut is a function the user
+writes and compiles into the tool; the deck carries only the generator's
+number and a bare value list. **Nothing in the deck says what those values
+mean** — they are arguments to a function this project does not have and,
+under the clean-room rule, may not go looking for.
+
+That makes them unlike every other rejected shape in the table above. A
+`contact line` or a `contact initial_grid` is a *shape this reader cannot
+represent yet*: its meaning is public, and issues #100/#101 track the plane
+model changes that would represent it. A `hole user3` is not a shape at all
+— no plane model, however general, lets a reader recover a meaning the deck
+never wrote down. So the rejection is not deferred work, and the error says
+so rather than pointing at a tracking issue that could never close.
+
+**Considered and declined: a predicate hole in the library.** The obvious
+alternative (issue #99's option 1) was a further variant on
+`fasterhenry::plane::Hole` — `Hole::Predicate(…)`, a caller-supplied
+`Fn([f64; 2]) -> bool` over cell centres — giving a *program* the arbitrary
+hole a *deck* cannot express. It was declined for three reasons:
+
+1. **The capability already exists, exactly, with no new API.**
+   `GroundPlane::mesh` does not depend on `GroundPlane::holes` — holes
+   remove cells from the mesh, they never move its edges. So a caller can
+   mesh the plane, apply any rule at all to the cell centres it reports, and
+   cut each selected cell with a `Hole::Point` at its own centre; a centre
+   lies strictly inside its own cell, so each point removes precisely that
+   one cell. The composition is exact, not an approximation, and it holds on
+   a graded mesh too (both are tested in `fasterhenry/src/plane.rs`, and the
+   recipe is a doctest on `Hole`):
+
+   ```rust
+   let mesh = plane.mesh()?;
+   for i in 0..mesh.nx() {
+       for j in 0..mesh.ny() {
+           let c = mesh.centre(i, j);
+           if my_rule([c[0], c[1]]) {
+               plane.holes.push(Hole::Point { at: [c[0], c[1]] });
+           }
+       }
+   }
+   ```
+
+2. **The useful form of the variant would cost the type's derives.** A bare
+   `fn` pointer keeps `Hole: Copy + PartialEq` but cannot capture anything —
+   and a captured parameter list is the whole point of a user hole, so that
+   form would not serve the motivating case. The form that does (a boxed or
+   `Arc`-wrapped `Fn`) costs `Copy` and `PartialEq` on a type introduced one
+   release ago, in exchange for a capability item 1 already provides.
+
+3. **It would be public API with no caller.** The deck reader can never
+   construct it (that is this very decision), and there is no in-repo
+   program that needs it. `Hole` stays `#[non_exhaustive]`, so if a concrete
+   caller does appear the variant can still be added; deferring costs
+   nothing that adding it now would save.
+
+**What would reopen this.** Not a deck — no deck can carry the missing
+meaning. Only a library caller whose rule is genuinely too slow or too
+awkward through item 1: the point-per-cell composition is `O(cells ×
+holes)`, so a very large plane whose rule removes a large fraction of its
+cells is the case that would justify paying for `Hole::Predicate`. That is a
+measured need, not a speculative one, and it is what the `#[non_exhaustive]`
+marker is held in reserve for.
 
 ## `.couples`
 
@@ -141,4 +211,7 @@ as a result of this table beyond what is listed below.
   `contact` refinement primitives, and the named-equipotential /
   initial-grid contact forms. (Issue #98, non-rectangular holes, has since
   been implemented — see its own `hole point (x, y, z)` / `hole circle (x,
-  y, z, r)` row above.)
+  y, z, r)` row above. Issue #99 has since been *decided* rather than
+  implemented: `hole user1`…`user7` are permanently rejected, for the
+  reasons in "Decision: `hole user1`…`user7` are rejected permanently"
+  above.)
