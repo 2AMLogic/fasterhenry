@@ -1,0 +1,76 @@
+# cargo-about configuration — the attribution bundle for a binary distribution.
+#
+# `deny.toml` decides *which* licenses a dependency may carry; this file decides
+# what we have to *ship* because of them. The two are deliberately separate
+# tools with separate jobs, and the allowlists below and in `deny.toml` are kept
+# identical by a CI check (see the `third-party-licenses` job in
+# `.github/workflows/ci.yml`).
+#
+# Why a bundle exists at all: four crates in the distributed closure are
+# Apache-2.0-*only* (`nalgebra`, `simba`, `approx`, `nalgebra-macros`) — their
+# SPDX expression has no MIT arm to fall back on. Apache-2.0 §4(a) requires that
+# a recipient of a distributed binary receive a copy of the Apache-2.0 license
+# text; the MIT `LICENSE` at the repo root does not discharge that. The
+# generated `THIRD_PARTY_LICENSES.md` does.
+#
+# Regenerate it with the one reproducible command:
+#
+#     ./tools/third-party-licenses.sh
+#
+# and `--check` to assert the committed copy is current (what CI runs).
+
+# The licenses a dependency may satisfy its expression with, mirroring
+# `deny.toml`'s `licenses.allow`. Kept byte-identical to it (order included) by
+# the CI check named above: a license allowed through the gate but missing here
+# would make the generator fail rather than silently omit an attribution.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Unlicense",
+    "Zlib",
+    "Unicode-3.0",
+]
+
+# The bundle is a *committed* artifact verified by a CI diff, so it must not
+# depend on which machine generated it. Pinning the target list makes the
+# dependency graph the same everywhere: a contributor on an arm Mac and an
+# ubuntu runner produce the same file. The list is the union of every platform
+# a binary could plausibly be built for, so the bundle over-attributes (it
+# names Windows-only crates even in a Linux tarball) rather than under-
+# attributing — always the safe direction.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+
+# The `normal,build` closure, exactly. Build-dependencies stay in: a proc-macro
+# or build script expands into the shipped binary's source, so its license
+# travels with the artifact (`nalgebra-macros` is here for that reason).
+ignore-build-dependencies = false
+# Dev-dependencies stay out: `criterion` and its Apache-2.0-only `ciborium*`
+# crates are never linked into anything distributed, so §4(a) never attaches to
+# them. `deny.toml` still *checks* them — knowing about a copyleft
+# dev-dependency is useful; attributing one in a shipped bundle is not.
+ignore-dev-dependencies = true
+# Transitive dependencies are the whole point of the file.
+ignore-transitive-dependencies = false
+
+# An unpublished (`publish = false`) workspace member would be skipped. Neither
+# of ours is, so both appear in the bundle under the repo's own MIT terms —
+# harmless, and honest about what a binary contains.
+private = { ignore = true }
+
+# Note on what is deliberately NOT configured here: the generator script passes
+# `--offline` and `--fail`, so license text is only ever read from the local
+# crate sources (no clearlydefined.io lookups — a committed artifact verified by
+# a CI diff cannot depend on a third-party web service returning the same bytes
+# it did yesterday), and a crate whose license cannot be determined fails the
+# run instead of being silently dropped. A failure there is the signal to add a
+# `[<crate-name>]` clarification section below, not to ship an unattributed
+# dependency.

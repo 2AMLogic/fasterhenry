@@ -1,0 +1,65 @@
+{{! The handlebars template for THIRD_PARTY_LICENSES.md -- see            }}
+{{! tools/third-party-licenses.sh, which renders it with cargo-about.     }}
+{{! Nothing machine-specific may be emitted here: the rendered file is    }}
+{{! committed and CI fails the PR when a regeneration would change it, so }}
+{{! an absolute path (cargo-about exposes `source_path` and               }}
+{{! `package.manifest_path`) would make the gate depend on whose machine  }}
+{{! ran it.                                                               }}
+# Third-party licenses
+
+<!--
+  GENERATED FILE -- do not edit by hand.
+
+  Regenerate with `./tools/third-party-licenses.sh`; CI runs the same script
+  with `--check` and fails if the committed copy is out of date.
+-->
+
+This file is the attribution bundle for a **distributed `fasterhenry` binary**.
+A binary links every crate below into the shipped artifact, and some of those
+crates' licenses require that a recipient of the binary receive their license
+text — most importantly Apache-2.0 §4(a), which the MIT `LICENSE` at the repo
+root does not discharge on its own. Ship this file alongside any binary
+artifact.
+
+Coverage is the `normal` + `build` dependency closure of the workspace, for
+every platform a binary might be built for, so one file serves every artifact.
+Development-only dependencies (the `criterion` benchmark stack) are **not**
+here: they are not linked into anything distributed. The workspace's own crates
+appear in the table for completeness; their license is the repo's `LICENSE`.
+
+`fasterhenry` itself is MIT-licensed. Nothing below changes that — these are the
+terms of other people's code that a binary carries with it.
+
+## Crates in a distributed binary
+
+{{#if crates}}| crate | version | license expression |
+| --- | --- | --- |
+{{#each crates}}| `{{package.name}}` | {{package.version}} | {{#if license}}{{license}}{{else}}(see the crate's license file){{/if}} |
+{{/each}}
+{{else}}_No dependencies._
+{{/if}}
+A crate offered under alternative licenses (`A OR B`) is used here under
+whichever arm is listed in `deny.toml`; its license text below is the one the
+crate itself ships.
+
+## License texts
+
+{{#each overview}}- {{name}} (`{{id}}`) — {{count}} crate(s)
+{{/each}}
+
+Each distinct license text below is reproduced in full, once per wording: crates
+sharing a byte-identical file share one section, and a license whose text
+carries a per-crate copyright notice (MIT) appears once per notice.
+{{#each licenses}}
+
+### {{name}} (`{{id}}`)
+
+Applies to:
+
+{{#each used_by}}- `{{crate.name}}` {{crate.version}}
+{{/each}}
+
+```text
+{{{text}}}
+```
+{{/each}}

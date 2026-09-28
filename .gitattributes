@@ -5,3 +5,10 @@
 # fully re-derived by the next resync regardless of which side "wins".
 .loom/install-metadata.json merge=ours
 # END LOOM-MANAGED (merge drivers, #4528)
+
+# The generated third-party license bundle is compared byte-for-byte against a
+# fresh generation in CI (tools/third-party-licenses.sh --check), and the
+# generator normalizes the CRLF line endings some crates' LICENSE files carry.
+# Pin the checkout to LF so a host with core.autocrlf=true cannot turn a clean
+# tree into a permanent diff.
+THIRD_PARTY_LICENSES.md text eol=lf

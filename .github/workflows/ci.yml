@@ -70,6 +70,33 @@ jobs:
       - name: cargo deny check licenses
         run: cargo deny check licenses --show-stats
 
+  third-party-licenses:
+    name: Third-party license bundle (cargo-about)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # cargo-about walks the graph through `cargo metadata`, like cargo-deny
+      # above, so a toolchain is needed even though nothing is compiled here.
+      - uses: dtolnay/rust-toolchain@stable
+      # No Swatinem/rust-cache, for the reason spelled out in the `licenses`
+      # job: nothing is built, and the sparse registry fetch is cheap.
+      #
+      # Unlike that job, the tool is not installed by a step here: the script
+      # pins cargo-about by version AND sha256 and fetches it itself, so the
+      # command below is *exactly* what a contributor runs locally -- one pin,
+      # in one file, that cannot drift from what CI verifies.
+      #
+      # Three ways this fails, all of them things that must not reach a
+      # release: the committed THIRD_PARTY_LICENSES.md no longer matches a
+      # fresh generation (a dependency was added, dropped or bumped);
+      # about.toml's accepted list has drifted from deny.toml's allowlist; or a
+      # workflow distributes a built artifact without shipping the bundle
+      # alongside it, which Apache-2.0 §4(a) requires of the four
+      # Apache-2.0-only crates in the graph.
+      - name: bundle is current (tools/third-party-licenses.sh --check)
+        run: ./tools/third-party-licenses.sh --check
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
