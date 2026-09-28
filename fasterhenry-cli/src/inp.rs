@@ -2779,6 +2779,12 @@ impl DeckBuilder {
         if self.frequencies.is_empty() {
             return Err(err(0, "deck has no .freq sweep"));
         }
+        if self.segment_defs.is_empty() && self.planes.is_empty() {
+            return Err(err(
+                0,
+                "deck has no conductor: no E segment and no G ground plane",
+            ));
+        }
         Ok(())
     }
 
@@ -5024,6 +5030,54 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         assert!(error.message.contains("needs a shape name"), "{error}");
         let error = bad("hole rect (5, 3, 0");
         assert!(error.message.contains("unterminated"), "{error}");
+    }
+
+    #[test]
+    fn deck_with_no_conductor_is_an_error_not_a_panic() {
+        // Nodes and a port, but no `E` segment and no `G` ground plane: there
+        // is nothing to discretize, and it must be a `ParseError`, not the
+        // `subdivisions[0]` index-out-of-bounds panic this regresses.
+        let error = parse(
+            "\
+.units mm
+N1 x=0 y=0 z=0
+N2 x=1 y=0 z=0
+.external N1 N2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("deck has no conductor"), "{error}");
+        assert!(error.message.contains('E'), "{error}");
+        assert!(error.message.contains('G'), "{error}");
+        assert_eq!(error.line, 0);
+
+        // Edge case: an `E` segment with no plane is unaffected.
+        parse_ok(
+            "\
+.units mm
+N1 x=0 y=0 z=0
+N2 x=1 y=0 z=0
+E1 N1 N2 w=1 h=1 sigma=5.8e4
+.external N1 N2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+
+        // Edge case: a `G` plane with no `E` segment is unaffected.
+        parse_ok(
+            "\
+.units mm
+Gp 0 0 0 10 6 0 0.035 nx=5 ny=3 sigma=5.8e4
+N1 x=0 y=0 z=0
+N2 x=1 y=0 z=0
+.external N1 N2
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
     }
 
     #[test]
