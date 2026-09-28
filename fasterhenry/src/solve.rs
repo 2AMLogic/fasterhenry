@@ -132,6 +132,11 @@ pub(crate) const SWEEP_MEMORY_BUDGET_BYTES: usize = 2 << 30;
 pub const DENSE_PATH_MAX_FILAMENTS: usize = 10_000;
 
 /// Which of the two solve paths runs.
+///
+/// Deliberately exhaustive (unlike the crate's error enums and
+/// [`Discretization`]): a new solve path is an architectural change, and
+/// code that dispatches on the path — such as deciding which features a path
+/// can honour — should fail to compile until it has decided for the new one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Solver {
@@ -156,6 +161,8 @@ impl std::fmt::Display for Solver {
 /// [`Auto`](Self::Auto) — the default — resolves to [`Solver::Dense`] at or
 /// below [`DENSE_PATH_MAX_FILAMENTS`] filaments and to
 /// [`Solver::Iterative`] above it; the other two variants force a path.
+///
+/// Deliberately exhaustive, for the same reason as [`Solver`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SolverChoice {
@@ -393,6 +400,7 @@ impl SkinDepthGrading {
 /// How the segments of a geometry are cut into filaments.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Discretization {
     /// The same uniform subdivision for every segment.
     Uniform(Subdivision),
@@ -550,6 +558,7 @@ pub fn skin_depth(frequency_hz: f64, sigma: f64) -> f64 {
 
 /// Why an impedance extraction failed.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum SolveError {
     /// A segment could not be cut into filaments.
     #[error("segment {segment}: {source}")]

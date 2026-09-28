@@ -94,6 +94,7 @@ impl Port {
 
 /// Why a set of ports cannot be attached to a geometry.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum MeshError {
     /// No port was given, so there is no impedance to extract.
     #[error("at least one port is required")]

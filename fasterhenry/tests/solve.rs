@@ -1146,3 +1146,27 @@ fn iterative_errors_are_reported() {
         Err(SolveError::Pfft(_))
     ));
 }
+
+/// `Discretization` is `#[non_exhaustive]` at the enum level only, so code
+/// outside the crate can still build every variant directly — the attribute
+/// restricts exhaustive matching, not construction. If a variant ever gains
+/// its own `#[non_exhaustive]`, this stops compiling.
+#[test]
+fn every_discretization_variant_is_constructible_downstream() {
+    use fasterhenry::{Grading, SkinDepthGrading};
+
+    let variants = [
+        Discretization::Uniform(Subdivision::new(2, 3)),
+        Discretization::PerSegment(vec![Subdivision::SINGLE]),
+        Discretization::Graded(Grading::new(3, 3, 2.0)),
+        Discretization::SkinDepth(SkinDepthGrading::new(1e6, 1.0, 2.0)),
+        Discretization::PerSegmentGraded(vec![AxisGrading::new(3, 3, 2.0, 1.0)]),
+    ];
+    let geometry = geometry(&[[0.0, 0.0, 0.0], [1e-3, 0.0, 0.0]], &[(0, 1, 1e-4, 1e-4)]);
+    for variant in &variants {
+        assert!(
+            variant.filament_count(&geometry).unwrap() >= 1,
+            "{variant:?}"
+        );
+    }
+}
