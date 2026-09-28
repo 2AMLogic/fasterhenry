@@ -91,9 +91,10 @@ filament counts), `.external` ports, `.freq`, `.equiv`, `G` ground planes
 with holes and contact refinement, `.couples` coupling truncation, and
 `.end`. Anything outside it is rejected with a line-numbered error rather
 than guessed at; `src/inp.rs` documents the exact syntax and semantics
-(note that `.units` is mandatory and conductivity is given as `sigma`, not
-`rho`). The JSON problem document is the library's own (validated) types;
-`src/problem.rs` documents it.
+(note that `.units` is mandatory — one of `km`, `m`, `cm`, `mm`, `um`, `in`
+or `mils` — and conductivity is given as `sigma` or resistivity as `rho`,
+both per deck unit, but not both on one line). The JSON problem document
+is the library's own (validated) types; `src/problem.rs` documents it.
 
 ### Ground planes: two `G` grammars
 
@@ -129,7 +130,9 @@ of *that* plane whichever side `.equiv` named first.
 cell-centre PEEC mesh (the `nx`/`ny` of the shorthand form), so equal
 counts mean equal resolution rather than an identical node set. Every other
 documented plane parameter is either mapped or **rejected by name** with the
-statement's line number — `rho` (use `sigma`), `rh`, `segwid1`/`segwid2`,
+statement's line number — `rho` (on the corner-point form give
+`sigma = 1/rho`, or set `.default rho=`; the shorthand takes `sigma=` or
+`rho=` on the line, alongside `nhinc=`), `rh`, `segwid1`/`segwid2`,
 `relx`/`rely`/`relz`, `file`, and every hole or contact shape other than
 `rect`. Nothing on a `G` statement is silently ignored.
 `tests/data/plane_fasthenry.inp` and `tests/data/plane_extension.inp` are
