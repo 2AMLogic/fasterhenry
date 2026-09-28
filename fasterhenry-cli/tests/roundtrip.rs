@@ -199,6 +199,7 @@ e3 n2 n4 w=0.2 h=0.035
         sigma,
         holes: Vec::new(),
         contacts: Vec::new(),
+        equipotentials: Vec::new(),
     };
     let centres = plane.build_into(&mut api).unwrap();
     // Positions computed exactly as the deck computes them (mm * 1e-3):
@@ -294,6 +295,7 @@ e3 n2 n4 w=0.2 h=0.035
                 2.0,
             ),
         ],
+        equipotentials: Vec::new(),
     };
     let mesh = plane.mesh().unwrap();
     let centres = plane.build_into(&mut api).unwrap();

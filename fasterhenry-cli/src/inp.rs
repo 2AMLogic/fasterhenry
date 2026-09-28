@@ -66,6 +66,8 @@
 //! +       contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell) …
 //! +       contact point (x, y, z, xcell, ycell) …
 //! +       contact line (x0, y0, z0, x1, y1, z1, xcell, ycell) …
+//! +       contact equiv_rect N<name> (x, y, z, xwidth, ywidth) …
+//! +       contact connection N<name> (x, y, z, xwidth, ywidth, ratio) …
 //! ```
 //!
 //! * **The three corner points** give one corner and its two neighbours:
@@ -95,8 +97,8 @@
 //!   connection lands on the nearest live cell-centre node of *that* plane
 //!   — whichever side `.equiv` named first. Joining in-plane nodes of two
 //!   *different* planes is rejected (connect the planes with a segment).
-//! * **`hole rect`** maps onto [`fasterhenry::plane::Hole`] and **`contact
-//!   rect`** onto [`fasterhenry::plane::ContactRegion`] (2 × 2 fine cells
+//! * **`hole rect`** maps onto [`fasterhenry::plane::Hole::Rect`] and
+//!   **`contact rect`** onto [`fasterhenry::plane::ContactRegion`] (2 × 2 fine cells
 //!   at ratio 2 — use `.contact` to choose other values). The `z`
 //!   coordinates are redundant for a plane parallel to xy, but are checked
 //!   against the plane's own slab so a rectangle meant for another plane
@@ -191,18 +193,57 @@
 //!   about `Lx/xcell + Ly/ycell`; an axis-aligned line costs nothing
 //!   extra. The request itself is always honoured, overlapping regions
 //!   included: merged bands keep their finest cell.
+//! * **`contact equiv_rect N<name> (x, y, z, xwidth, ywidth)`** declares a
+//!   *contact area*: the rectangle — centre and full widths, as
+//!   `decay_rect` spells it — is tied to one node, named here, so a deck
+//!   can `.equiv` an external node onto a whole landing pad instead of a
+//!   point (issue #101). It maps onto
+//!   [`fasterhenry::plane::Equipotential`]: every live cell centre inside
+//!   the rectangle (its boundary included) shares a single node, the bars
+//!   that ran between those cells are not built, and the bars crossing the
+//!   patch's boundary end on that one node — see the
+//!   [`fasterhenry::plane`] module documentation for exactly what the tie
+//!   does to the mesh. The node itself is an ordinary deck node: name it
+//!   from `.external`, from a segment, or join it with `.equiv`, and the
+//!   whole joined set lands on the patch (an `.equiv` set holding both a
+//!   contact area and a plain in-plane node of the same plane lands on the
+//!   *area* — attaching to the nearest single cell instead would throw away
+//!   the very thing the clause declared). Its name follows the same rule as
+//!   an in-plane node's — it starts with `N` — and a rectangle catching no
+//!   live cell centre is an error naming the plane, not a silent landing on
+//!   a neighbouring cell.
+//! * **`contact connection N<name> (x, y, z, xwidth, ywidth, ratio)`** is
+//!   the documented shorthand for that same rectangle tied *and* refined:
+//!   exactly a `contact equiv_rect` over it plus a `contact decay_rect`
+//!   whose cells are `xwidth/ratio` and `ywidth/ratio` with no decay limit
+//!   (issue #101). `ratio` must be greater than 1 — it is what the widths
+//!   are divided by, so 1 or less asks for a cell as wide as the rectangle
+//!   and grades nothing. Writing the two clauses out by hand gives exactly
+//!   the same deck; the pairing matters because a tie is only as good as the
+//!   mesh under it, and the `decay_rect` is what puts cells inside the
+//!   rectangle for it to tie.
 //! * Every other documented shape is **rejected by name** too, on the
 //!   statement's own line: this engine's holes are rectangles, points or
-//!   circles and its contacts rectangles, points or lines, and a shape
-//!   whose semantics have not been stated and tested must not be quietly
-//!   approximated by one of those. Unlike the user-defined holes, these
-//!   have a public meaning, and each is tracked separately:
+//!   circles and its contacts rectangles, points, lines or tied areas, and
+//!   a shape whose semantics have not been stated and tested must not be
+//!   quietly approximated by one of those. Unlike the user-defined holes,
+//!   these have a public meaning, and each is rejected for its own stated
+//!   reason:
 //!     * `contact circle` — issue #109 (its argument list still to be
 //!       pinned from the public documentation);
 //!     * `contact trace` — issue #110 (how `trace_width` and
 //!       `scale_factor` set the cell size still to be pinned);
-//!     * `contact equiv_rect`, `contact connection`,
-//!       `contact initial_grid`, `contact initial_mesh_grid` — issue #101.
+//!     * `contact initial_grid (rows, cols)` and
+//!       `contact initial_mesh_grid (rows, cols)` need **no** model change:
+//!       `seg1`/`seg2` already say what the first says, and a checkerboard
+//!       of `hole point` clauses at the centres
+//!       [`fasterhenry::plane::GroundPlane::mesh`] reports says what the
+//!       second adds. What is missing is the one fact the value list turns
+//!       on — which of `(rows, cols)` counts the `p1 → p2` edge — and a
+//!       transposed guess would silently mesh every non-square plane the
+//!       wrong way round, so the error names `seg1`/`seg2` instead of
+//!       guessing (issue #113; the clean-room rule in `CONTRIBUTING.md`
+//!       forbids guessing an undocumented argument order).
 //! * The remaining documented plane parameters are rejected by name too,
 //!   each with the reason and the alternative: `rh` (plane filaments are
 //!   uniform), `segwid1`/`segwid2` (bar widths follow
@@ -279,6 +320,10 @@
 //!   within a plane's footprint and depth is snapped to the nearest live
 //!   cell-centre node, wiring the segment into the plane mesh. Declare the
 //!   plane before or after the segment — the assembly is order-independent.
+//!   A landing that is a *pad* rather than a point is a contact **area**
+//!   instead: `contact equiv_rect` (or its `contact connection` shorthand)
+//!   names a rectangle of the plane, ties every cell inside it to one node,
+//!   and lets the deck land on that (see the corner-point form above).
 //! * **`.contact` grades the mesh under a landing.** A plane's `nx`/`ny`
 //!   are its *background* resolution; every `.contact` rectangle is cut
 //!   into `nx × ny` fine cells of its own (default `2 × 2`) and the cells
@@ -300,7 +345,7 @@ use std::collections::HashMap;
 use fasterhenry::coupling::Coupling;
 use fasterhenry::geometry::{Geometry, Node, NodeId, Segment, SegmentDef, SegmentError};
 use fasterhenry::mesh::Port;
-use fasterhenry::plane::{ContactRegion, GroundPlane, Hole};
+use fasterhenry::plane::{ContactRegion, Equipotential, GroundPlane, Hole};
 use fasterhenry::solve::{AxisGrading, Discretization, Subdivision};
 
 /// A parsed `.inp` deck: everything [`fasterhenry::solve::solve`] needs.
@@ -346,6 +391,19 @@ struct PlaneSpec {
     plane: GroundPlane,
     /// Filaments across each plane bar's thickness (`nhinc=`; 1 by default).
     nhinc: usize,
+}
+
+/// An in-plane node awaiting assembly: the declared node slot it occupies,
+/// the plane it belongs to, the equipotential patch it names (for a node a
+/// `contact equiv_rect` / `contact connection` clause declared), its
+/// declared position in metres, and the line it was declared on.
+#[derive(Clone, Copy, Debug)]
+struct PlaneNodeSpec {
+    slot: usize,
+    plane: usize,
+    equipotential: Option<usize>,
+    position: [f64; 3],
+    line: usize,
 }
 
 /// The declared plane a `.hole` / `.contact` line names; the leading `G` is
@@ -607,10 +665,14 @@ enum PlaneItem {
     Field(String, String),
     /// `N<name> (x, y, z)`: an in-plane node declaration.
     Node(String, Vec<String>),
-    /// `hole <shape> (…)` or `contact <shape> (…)`, both lowercased.
+    /// `hole <shape> (…)` or `contact <shape> (…)`, both lowercased — with
+    /// the node name the `contact equiv_rect` / `contact connection` forms
+    /// carry between the shape word and the value list (case-sensitive,
+    /// like every other node name; `None` when the clause has none).
     Clause {
         kind: String,
         shape: String,
+        name: Option<String>,
         values: Vec<String>,
     },
 }
@@ -712,10 +774,24 @@ fn scan_plane_items(body: &str, line: usize) -> Result<Vec<PlaneItem>, ParseErro
                 word.to_ascii_lowercase(),
                 shape.to_ascii_lowercase()
             );
+            // A node name may stand between the shape word and the value
+            // list (`contact equiv_rect N<name> (…)`). It is read for every
+            // clause and rejected by the ones that take none, so a stray
+            // name is named in the error rather than reported as a missing
+            // value list.
+            skip_space(&chars, &mut at);
+            let name = match chars.get(at) {
+                Some(&'(') => None,
+                _ => {
+                    let name = read_word(&chars, &mut at);
+                    (!name.is_empty()).then_some(name)
+                }
+            };
             let values = read_list(&chars, &mut at, &what, line)?;
             items.push(PlaneItem::Clause {
                 kind: word.to_ascii_lowercase(),
                 shape: shape.to_ascii_lowercase(),
+                name,
                 values,
             });
             continue;
@@ -750,8 +826,11 @@ fn scan_plane_items(body: &str, line: usize) -> Result<Vec<PlaneItem>, ParseErro
     }
 }
 
-/// An in-plane node declared inside a `G` statement: name and position (m).
-type PlaneNode = (String, [f64; 3]);
+/// An in-plane node declared inside a `G` statement: its name, its position
+/// (m), and — for a node a `contact equiv_rect` / `contact connection`
+/// clause declared — the index of the [`GroundPlane::equipotentials`] entry
+/// it names, which is what it attaches to instead of the nearest cell.
+type PlaneNode = (String, [f64; 3], Option<usize>);
 
 /// The `(x, y, z)` of a clause or node value list.
 fn triple(values: &[String], what: &str, unit: f64, line: usize) -> Result<[f64; 3], ParseError> {
@@ -802,6 +881,50 @@ fn rect_corners(
         triple(&values[..3], what, unit, line)?,
         triple(&values[3..], what, unit, line)?,
     ])
+}
+
+/// A `contact equiv_rect` / `contact connection` clause: the node it names
+/// and the rectangle that node ties, kept raw until the plane's own
+/// geometry is known (its `z` is checked against the plane's slab).
+#[derive(Clone, Debug)]
+struct EquivRect {
+    /// Which clause declared it, quoted for error messages.
+    what: String,
+    /// The node name the clause carries, as written (case-sensitive).
+    name: String,
+    /// The rectangle's centre `(x, y, z)`, metres.
+    centre: [f64; 3],
+    /// Its full widths `(x, y)`, metres.
+    widths: [f64; 2],
+}
+
+/// The five leading values of a `contact equiv_rect` / `contact connection`
+/// clause: `(x, y, z, xwidth, ywidth)` — the rectangle's centre and its full
+/// widths about that centre, the same centre-and-widths spelling
+/// `contact decay_rect` uses. `values` may be longer (a `connection`'s
+/// trailing `ratio`); the caller checks its own arity first.
+fn equiv_rect_values(
+    values: &[String],
+    what: &str,
+    unit: f64,
+    line: usize,
+) -> Result<([f64; 3], [f64; 2]), ParseError> {
+    let centre = triple(&values[..3], what, unit, line)?;
+    let mut widths = [0.0f64; 2];
+    for axis in 0..2 {
+        let name = ['x', 'y'][axis];
+        widths[axis] = parse_number(&values[3 + axis], line)? * unit;
+        if widths[axis] <= 0.0 {
+            return Err(err(
+                line,
+                format!(
+                    "{what}: {name}width={} must be > 0 — it is the rectangle's full width about its centre, not a corner",
+                    widths[axis]
+                ),
+            ));
+        }
+    }
+    Ok((centre, widths))
 }
 
 /// A `contact decay_rect` clause, kept raw until the plane's own geometry
@@ -996,6 +1119,9 @@ fn parse_plane_statement(
     let mut contact_decays: Vec<DecayRect> = Vec::new();
     // `contact point` / `contact line`, with the clause's own name.
     let mut contact_lines: Vec<(&'static str, RefineLine)> = Vec::new();
+    // `contact equiv_rect` / `contact connection`: the named contact areas,
+    // each becoming one `Equipotential` and one in-plane node.
+    let mut contact_equivs: Vec<EquivRect> = Vec::new();
 
     for item in scan_plane_items(body, line)? {
         match item {
@@ -1073,14 +1199,49 @@ fn parse_plane_statement(
                     ));
                 }
                 let what = format!("in-plane node '{name}'");
-                nodes.push((name, triple(&values, &what, unit, line)?));
+                nodes.push((name, triple(&values, &what, unit, line)?, None));
             }
             PlaneItem::Clause {
                 kind,
                 shape,
+                name,
                 values,
             } => {
                 let what = format!("'{kind} {shape}'");
+                // Only the named contact areas take a node name; anywhere
+                // else it is a mistake to report, not a token to drop.
+                if let Some(name) = &name {
+                    if !matches!(
+                        (kind.as_str(), shape.as_str()),
+                        ("contact", "equiv_rect") | ("contact", "connection")
+                    ) {
+                        return Err(err(
+                            line,
+                            format!(
+                                "{what} takes no node name, but '{name}' stands before its value list; only 'contact equiv_rect' and 'contact connection' name a node"
+                            ),
+                        ));
+                    }
+                }
+                // The node a named contact area declares: `N`-prefixed like
+                // every other node name in a `G` statement's body.
+                let node_name = |name: Option<String>| -> Result<String, ParseError> {
+                    match name {
+                        Some(name) if name.starts_with(['n', 'N']) => Ok(name),
+                        Some(name) => Err(err(
+                            line,
+                            format!(
+                                "{what}: '{name}' is not a node name (node names start with 'N', as in '{kind} {shape} Ncontact (…)')"
+                            ),
+                        )),
+                        None => Err(err(
+                            line,
+                            format!(
+                                "{what} names the node it ties: write '{kind} {shape} N<name> (…)', with the node name between the shape and its values"
+                            ),
+                        )),
+                    }
+                };
                 match (kind.as_str(), shape.as_str()) {
                     ("hole", "rect") => {
                         hole_rects.push(rect_corners(&values, &what, unit, line)?);
@@ -1123,6 +1284,77 @@ fn parse_plane_statement(
                             refine_line_values(&values, true, &what, unit, line)?,
                         ));
                     }
+                    ("contact", "equiv_rect") => {
+                        if values.len() != 5 {
+                            return Err(err(
+                                line,
+                                format!(
+                                    "{what} takes 5 values (x, y, z, xwidth, ywidth), got {}",
+                                    values.len()
+                                ),
+                            ));
+                        }
+                        let (centre, widths) = equiv_rect_values(&values, &what, unit, line)?;
+                        let name = node_name(name)?;
+                        contact_equivs.push(EquivRect {
+                            what,
+                            name,
+                            centre,
+                            widths,
+                        });
+                    }
+                    ("contact", "connection") => {
+                        if values.len() != 6 {
+                            return Err(err(
+                                line,
+                                format!(
+                                    "{what} takes 6 values (x, y, z, xwidth, ywidth, ratio), got {}",
+                                    values.len()
+                                ),
+                            ));
+                        }
+                        let (centre, widths) = equiv_rect_values(&values, &what, unit, line)?;
+                        // The documented shorthand: this rectangle tied to
+                        // one node, plus a `decay_rect` over the same
+                        // rectangle whose cells are its widths divided by
+                        // `ratio`, decaying without a limit.
+                        let ratio = parse_number(&values[5], line)?;
+                        if ratio <= 1.0 {
+                            return Err(err(
+                                line,
+                                format!(
+                                    "{what}: ratio={ratio} must be > 1 — it divides the rectangle's widths into the contact's own cells (xwidth/ratio, ywidth/ratio), so 1 or less asks for a cell as wide as the rectangle and grades nothing"
+                                ),
+                            ));
+                        }
+                        let name = node_name(name)?;
+                        contact_equivs.push(EquivRect {
+                            what,
+                            name,
+                            centre,
+                            widths,
+                        });
+                        contact_decays.push(DecayRect {
+                            centre,
+                            widths,
+                            cell: [widths[0] / ratio, widths[1] / ratio],
+                            limit: [None, None],
+                        });
+                    }
+                    ("contact", other @ ("initial_grid" | "initial_mesh_grid")) => {
+                        let meshed = other == "initial_mesh_grid";
+                        return Err(err(
+                            line,
+                            format!(
+                                "ground plane '{head}': 'contact {other}' is not supported: its (rows, cols) set the plane's *initial* discretization, and this reader will not guess which of the two counts the p1→p2 edge — a transposed guess silently meshes every non-square plane the wrong way round. Say it unambiguously with 'seg1' (cells along p1→p2) and 'seg2' (cells along p2→p3){}",
+                                if meshed {
+                                    ", and cut the meshed plane's holes with 'hole rect (x1, y1, z1, x2, y2, z2)' or 'hole point (x, y, z)' — 'fasterhenry::plane::GroundPlane::mesh' reports the cell centres a checkerboard of 'hole point' clauses would remove (see docs/fasthenry-compat.md)"
+                                } else {
+                                    ""
+                                }
+                            ),
+                        ));
+                    }
                     ("hole", other) if is_user_hole(other) => {
                         return Err(err(
                             line,
@@ -1143,7 +1375,7 @@ fn parse_plane_statement(
                         return Err(err(
                             line,
                             format!(
-                                "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)' or 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' (and '.contact' to set a rectangle's refinement directly)"
+                                "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)' or 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' (and '.contact' to set a rectangle's refinement directly, or 'contact equiv_rect N<name> (x, y, z, xwidth, ywidth)' / 'contact connection N<name> (x, y, z, xwidth, ywidth, ratio)' to tie a rectangle of cells to one node)"
                             ),
                         ));
                     }
@@ -1391,7 +1623,20 @@ fn parse_plane_statement(
         }
     }
 
-    for (name, position) in &nodes {
+    // A named contact area is one equipotential patch plus the in-plane
+    // node that names it; the node sits at the rectangle's centre, so the
+    // footprint and slab checks below cover it like any other.
+    let mut equipotentials = Vec::with_capacity(contact_equivs.len());
+    for equiv in contact_equivs {
+        in_slab(&equiv.what, equiv.centre)?;
+        equipotentials.push(Equipotential::centred(
+            [equiv.centre[0], equiv.centre[1]],
+            equiv.widths,
+        ));
+        nodes.push((equiv.name, equiv.centre, Some(equipotentials.len() - 1)));
+    }
+
+    for (name, position, _) in &nodes {
         if !(position[0] >= lo[0] - tolerance
             && position[0] <= hi[0] + tolerance
             && position[1] >= lo[1] - tolerance
@@ -1421,6 +1666,7 @@ fn parse_plane_statement(
                 sigma,
                 holes,
                 contacts,
+                equipotentials,
             },
             nhinc,
         },
@@ -1653,9 +1899,9 @@ struct DeckBuilder {
     frequencies: Vec<f64>,
     /// Every `G` statement, pending assembly.
     planes: Vec<PlaneSpec>,
-    /// In-plane nodes declared inside a FastHenry-form `G` statement: the
-    /// node slot, the plane it belongs to, and the line it was declared on.
-    plane_nodes: Vec<(usize, usize, usize)>,
+    /// In-plane nodes declared inside a FastHenry-form `G` statement; see
+    /// [`PlaneNodeSpec`] for what each carries.
+    plane_nodes: Vec<PlaneNodeSpec>,
     /// The line each `.equiv` alias was declared on, for the error an
     /// in-plane node joined across two planes has to raise.
     alias_lines: HashMap<usize, usize>,
@@ -2160,11 +2406,16 @@ impl DeckBuilder {
         let (spec, plane_nodes_here) =
             parse_plane_statement(head, &tokens[1..].join(" "), factor, &self.defaults, number)?;
         let index = self.planes.len();
-        for (name, position) in plane_nodes_here {
+        for (name, position, equipotential) in plane_nodes_here {
             self.positions.push(position);
             self.names.define(&name, self.positions.len() - 1, number)?;
-            self.plane_nodes
-                .push((self.positions.len() - 1, index, number));
+            self.plane_nodes.push(PlaneNodeSpec {
+                slot: self.positions.len() - 1,
+                plane: index,
+                equipotential,
+                position,
+                line: number,
+            });
         }
         self.planes.push(spec);
         Ok(())
@@ -2245,6 +2496,7 @@ impl DeckBuilder {
                 })?,
                 holes: Vec::new(),
                 contacts: Vec::new(),
+                equipotentials: Vec::new(),
             },
             nhinc,
         });
@@ -2320,8 +2572,15 @@ impl DeckBuilder {
         let mut geometry = Geometry::new();
         let (plane_meshes, plane_subdivisions) = build_plane_meshes(&planes, &mut geometry)?;
         let plane_bars = geometry.segment_count();
-        let plane_node_at =
-            plane_node_owners(&plane_nodes, &planes, &positions, &alias_lines, resolve)?;
+        // A contact area that ties nothing is a deck mistake whether or not
+        // anything references it — the rectangle names metal the mesh does
+        // not have — so it is checked here rather than only where it is used.
+        for &node in &plane_nodes {
+            if let Some(index) = node.equipotential {
+                contact_area_node(&plane_meshes, node, index)?;
+            }
+        }
+        let plane_node_at = plane_node_owners(&plane_nodes, &planes, &alias_lines, resolve)?;
         // Endpoint resolution: follow `.equiv` aliases to the canonical slot,
         // take that slot's position, and if it lands in a plane's footprint,
         // snap to the nearest live cell node. Plane ids are final here; the
@@ -2329,11 +2588,17 @@ impl DeckBuilder {
         // below (a snapped endpoint's declared node is dropped, not orphaned).
         let snap = |slot: usize| -> Result<Option<usize>, ParseError> {
             let live = resolve(slot);
-            if let Some(&(index, position)) = plane_node_at.get(&live) {
-                let (spec, centres) = &plane_meshes[index];
+            if let Some(&node) = plane_node_at.get(&live) {
+                // A named contact area attaches to the patch's own tie node,
+                // not to whatever cell centre happens to be nearest: the two
+                // differ whenever the rectangle is not centred on a cell.
+                if let Some(index) = node.equipotential {
+                    return Ok(Some(contact_area_node(&plane_meshes, node, index)?.0));
+                }
+                let (spec, centres) = &plane_meshes[node.plane];
                 return Ok(Some(
                     spec.plane
-                        .attach(centres, position)
+                        .attach(centres, node.position)
                         .map_err(|error| ParseError {
                             line: 0,
                             message: error.to_string(),
@@ -2487,9 +2752,38 @@ fn build_plane_meshes<'a>(
     Ok((plane_meshes, plane_subdivisions))
 }
 
+/// The tie node of a named contact area (`contact equiv_rect` / `contact
+/// connection`): the one node every live cell inside its rectangle shares,
+/// as [`build_plane_meshes`] built it.
+///
+/// A rectangle catching no live cell centre ties nothing, which is a deck
+/// mistake rather than an invitation to land on a neighbouring cell — the
+/// clause named metal the mesh does not have.
+fn contact_area_node(
+    plane_meshes: &[PlaneMesh],
+    node: PlaneNodeSpec,
+    index: usize,
+) -> Result<NodeId, ParseError> {
+    let (spec, centres) = &plane_meshes[node.plane];
+    spec.plane
+        .equipotential_node(centres, index)
+        .map_err(|error| ParseError {
+            line: 0,
+            message: error.to_string(),
+        })?
+        .ok_or_else(|| {
+            err(
+                node.line,
+                format!(
+                    "ground plane '{}': the contact area named here covers no live cell of the plane's mesh, so it ties nothing; widen it, or raise 'seg1'/'seg2' (or refine it with a 'contact decay_rect' over the same rectangle) so the mesh has a cell centre inside it",
+                    spec.name
+                ),
+            )
+        })
+}
+
 /// Which plane each in-plane node's `.equiv` class belongs to, keyed by the
-/// class's canonical (live) slot, with the position the class was declared
-/// at.
+/// class's canonical (live) slot.
 ///
 /// An in-plane node's `.equiv` class attaches to *its* plane, wherever the
 /// class's canonical node happens to sit: joining a via's segment node to an
@@ -2498,28 +2792,34 @@ fn build_plane_meshes<'a>(
 /// reaches the in-plane nodes of two *different* planes is rejected, on the
 /// `.equiv` line that joined them.
 fn plane_node_owners(
-    plane_nodes: &[(usize, usize, usize)],
+    plane_nodes: &[PlaneNodeSpec],
     planes: &[PlaneSpec],
-    positions: &[[f64; 3]],
     alias_lines: &HashMap<usize, usize>,
     resolve: impl Fn(usize) -> usize,
-) -> Result<HashMap<usize, (usize, [f64; 3])>, ParseError> {
-    let mut plane_node_at: HashMap<usize, (usize, [f64; 3])> = HashMap::new();
-    for &(slot, index, line) in plane_nodes {
-        let live = resolve(slot);
+) -> Result<HashMap<usize, PlaneNodeSpec>, ParseError> {
+    let mut plane_node_at: HashMap<usize, PlaneNodeSpec> = HashMap::new();
+    for &node in plane_nodes {
+        let live = resolve(node.slot);
         match plane_node_at.get(&live) {
-            Some(&(other, _)) if other != index => {
+            Some(other) if other.plane != node.plane => {
                 return Err(err(
-                    alias_lines.get(&slot).copied().unwrap_or(line),
+                    alias_lines.get(&node.slot).copied().unwrap_or(node.line),
                     format!(
                         "'.equiv' joins in-plane nodes of ground planes '{}' and '{}'; joining two planes to each other is not supported (connect them with a segment)",
-                        planes[other].name, planes[index].name
+                        planes[other.plane].name, planes[node.plane].name
                     ),
                 ));
             }
+            // A set joining a named contact area to a plain in-plane node
+            // of the same plane lands on the contact *area*: attaching to
+            // the nearest single cell instead would silently throw away the
+            // very thing the clause declared.
+            Some(other) if other.equipotential.is_none() && node.equipotential.is_some() => {
+                plane_node_at.insert(live, node);
+            }
             Some(_) => {}
             None => {
-                plane_node_at.insert(live, (index, positions[slot]));
+                plane_node_at.insert(live, node);
             }
         }
     }
@@ -3001,6 +3301,7 @@ e1 n1 n2 w=0.2 h=0.035
             ny: 3,
             sigma: 5.8e7,
             holes: Vec::new(),
+            equipotentials: Vec::new(),
             contacts: vec![ContactRegion::new(
                 [4.5e-3, 2.5e-3],
                 [5.5e-3, 3.5e-3],
@@ -3048,6 +3349,7 @@ e1 n1 n2 w=0.2 h=0.035
             ny: 3,
             sigma: 5.8e7,
             holes: Vec::new(),
+            equipotentials: Vec::new(),
             contacts: vec![ContactRegion::new([4e-3, 2e-3], [6e-3, 4e-3], [2, 2], 2.0)],
         }
         .mesh()
@@ -3369,6 +3671,7 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ny: 3,
             sigma: 5.8e7,
             holes: Vec::new(),
+            equipotentials: Vec::new(),
             contacts: vec![ContactRegion::graded_per_axis(
                 [4e-3, 2e-3],
                 [6e-3, 4e-3],
@@ -3478,6 +3781,7 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             sigma: 5.8e7,
             holes: Vec::new(),
             contacts,
+            equipotentials: Vec::new(),
         }
     }
 
@@ -3691,6 +3995,310 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         }
     }
 
+    /// A deck that names a contact *area*: `contact equiv_rect` ties every
+    /// cell centre inside its rectangle to the one node it names, and a
+    /// reference to that node — here through `.equiv` — lands on the tie
+    /// rather than on the nearest single cell centre.
+    #[test]
+    fn equiv_rect_ties_its_rectangle_to_the_node_it_names() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.035 seg1=5 seg2=3
++ contact equiv_rect Npad (5, 3, 0, 6, 3)
+Nt x=5 y=3 z=0.5
+Nb x=5 y=3 z=0.2
+Ev Nt Nb w=0.2 h=0.2
+.equiv Nb Npad
+.external Nt Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        // The same plane through the library: cell centres sit at
+        // x = 1, 3, 5, 7, 9 and y = 1, 3, 5 mm, so the 6 × 3 mm rectangle
+        // about (5, 3) ties the three cells of the middle row with
+        // x ∈ {3, 5, 7}.
+        let plane = GroundPlane {
+            lo: [0.0, 0.0],
+            hi: [10e-3, 6e-3],
+            z_top: 0.035e-3 / 2.0,
+            thickness: 0.035e-3,
+            nx: 5,
+            ny: 3,
+            sigma: 5.8e7,
+            holes: Vec::new(),
+            contacts: Vec::new(),
+            equipotentials: vec![Equipotential::centred([5e-3, 3e-3], [6e-3, 3e-3])],
+        };
+        let mut geometry = Geometry::new();
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let tie = plane.equipotential_node(&centres, 0).unwrap().unwrap();
+        for (i, column) in centres.iter().enumerate().skip(1).take(3) {
+            assert_eq!(column[1], Some(tie), "cell ({i}, 1) joins the tie");
+        }
+        // 15 cells become 13 nodes (three tied into one), plus the via's
+        // top node; the two bars inside the patch are gone, and the via is
+        // the one segment the deck adds.
+        assert_eq!(deck.geometry.nodes().len(), 13 + 1);
+        assert_eq!(deck.geometry.segment_count(), 22 - 2 + 1);
+        assert_eq!(deck.geometry.nodes().len(), geometry.nodes().len() + 1);
+        assert_eq!(deck.geometry.segment_count(), geometry.segment_count() + 1);
+        // The via's lower end is the patch's tie node — the plane is built
+        // first, so the library's node ids are the deck's.
+        let via = deck.geometry.segment_defs()[deck.geometry.segment_count() - 1];
+        assert_eq!(via.b, tie, "the via lands on the contact area");
+        let node = deck.geometry.nodes()[tie.0];
+        assert!((node.x - 5e-3).abs() < 1e-12, "{}", node.x);
+        assert!((node.y - 3e-3).abs() < 1e-12, "{}", node.y);
+    }
+
+    /// The named node is an ordinary deck node: a port may drive it
+    /// directly, without `.equiv`.
+    #[test]
+    fn a_contact_area_node_can_be_named_by_a_port() {
+        let deck = parse_ok(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.035 seg1=5 seg2=3
++ contact equiv_rect Npad (5, 3, 0, 6, 3)
++ Nfar (9, 5, 0)
+.external Npad Nfar
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        assert_eq!(deck.geometry.nodes().len(), 13);
+        assert_eq!(deck.ports.len(), 1);
+        // The port's positive end is the tie node, its negative the nearest
+        // live centre to the plain in-plane node — two different nodes.
+        assert_ne!(deck.ports[0].positive, deck.ports[0].negative);
+    }
+
+    /// `contact connection` is the documented shorthand: the same rectangle
+    /// tied by an `equiv_rect` *and* refined by a `decay_rect` whose cells
+    /// are the widths divided by `ratio`, with no decay limit. Writing the
+    /// two clauses out by hand must give exactly the same deck.
+    #[test]
+    fn connection_is_an_equiv_rect_plus_a_decay_rect() {
+        let deck = |clauses: &str| {
+            parse_ok(&format!(
+                "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.035 seg1=5 seg2=3
++ {clauses}
+Nt x=5 y=3 z=0.5
+Nb x=5 y=3 z=0.2
+Ev Nt Nb w=0.2 h=0.2
+.equiv Nb Npad
+.external Nt Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+            ))
+        };
+        let shorthand = deck("contact connection Npad (5, 3, 0, 2, 2, 4)");
+        let written_out = deck(
+            "contact equiv_rect Npad (5, 3, 0, 2, 2)\n\
+             + contact decay_rect (5, 3, 0, 2, 2, 0.5, 0.5, -1, -1)",
+        );
+        assert_eq!(shorthand.geometry, written_out.geometry);
+        assert_eq!(shorthand.ports, written_out.ports);
+        // …and the pairing does its job: the refined rectangle is cut into
+        // `ratio` cells per axis, every one of them tied.
+        let plane = GroundPlane {
+            lo: [0.0, 0.0],
+            hi: [10e-3, 6e-3],
+            z_top: 0.035e-3 / 2.0,
+            thickness: 0.035e-3,
+            nx: 5,
+            ny: 3,
+            sigma: 5.8e7,
+            holes: Vec::new(),
+            contacts: vec![ContactRegion::graded_per_axis(
+                [4e-3, 2e-3],
+                [6e-3, 4e-3],
+                [4, 4],
+                [1.0 / (1.0 - 0.25), 1.0 / (1.0 - 0.25)],
+            )],
+            equipotentials: vec![Equipotential::centred([5e-3, 3e-3], [2e-3, 2e-3])],
+        };
+        let mut geometry = Geometry::new();
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let tie = plane.equipotential_node(&centres, 0).unwrap().unwrap();
+        let mesh = plane.mesh().unwrap();
+        let tied = (0..mesh.nx())
+            .flat_map(|i| (0..mesh.ny()).map(move |j| (i, j)))
+            .filter(|&(i, j)| centres[i][j] == Some(tie))
+            .count();
+        assert_eq!(tied, 16, "the 4 × 4 fine cells of the rectangle are tied");
+        assert_eq!(shorthand.geometry.nodes().len(), geometry.nodes().len() + 1);
+        assert_eq!(
+            shorthand.geometry.segment_count(),
+            geometry.segment_count() + 1
+        );
+    }
+
+    /// Every way a named contact area can be written wrong is rejected on
+    /// the statement's own line, naming what it rejects.
+    #[test]
+    fn equiv_rect_and_connection_parameter_errors() {
+        let bad = |clause: &str| -> ParseError {
+            let deck = plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ {clause}"
+                ),
+                "",
+            );
+            match parse(&deck) {
+                Ok(_) => panic!("'{clause}' was accepted"),
+                Err(error) => error,
+            }
+        };
+        for (clause, expected) in [
+            // The node name is the point of the clause, so its absence is
+            // an error rather than an anonymous contact area.
+            (
+                "contact equiv_rect (5, 3, 0, 2, 2)",
+                "names the node it ties",
+            ),
+            (
+                "contact connection (5, 3, 0, 2, 2, 2)",
+                "names the node it ties",
+            ),
+            (
+                "contact equiv_rect Xpad (5, 3, 0, 2, 2)",
+                "is not a node name",
+            ),
+            // The value list is the centre-and-widths spelling, not corners.
+            (
+                "contact equiv_rect Npad (4, 2, 0, 6, 4, 0)",
+                "takes 5 values",
+            ),
+            (
+                "contact equiv_rect Npad (5, 3, 0, 0, 2)",
+                "xwidth=0 must be > 0",
+            ),
+            (
+                "contact equiv_rect Npad (5, 3, 0, 2, -1)",
+                "ywidth=-0.001 must be > 0",
+            ),
+            // The z is checked against the plane's slab, as every other
+            // clause's is.
+            (
+                "contact equiv_rect Npad (5, 3, 3, 2, 2)",
+                "is not in ground plane 'Gp'",
+            ),
+            // …and the rectangle's centre against its footprint.
+            (
+                "contact equiv_rect Npad (50, 3, 0, 2, 2)",
+                "is outside ground plane 'Gp'",
+            ),
+            ("contact connection Npad (5, 3, 0, 2, 2)", "takes 6 values"),
+            (
+                "contact connection Npad (5, 3, 0, 2, 2, 1)",
+                "ratio=1 must be > 1",
+            ),
+            // A node name on a clause that names no node is a mistake, not
+            // a token to drop.
+            (
+                "hole rect Npad (0.5, 4.5, 0, 1.5, 5.5, 0)",
+                "'hole rect' takes no node name",
+            ),
+            (
+                "contact rect Npad (4, 2, 0, 6, 4, 0)",
+                "'contact rect' takes no node name",
+            ),
+        ] {
+            let error = bad(clause);
+            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
+            assert!(
+                error.message.contains(expected),
+                "'{clause}' must name what it rejects, got: {}",
+                error.message
+            );
+        }
+
+        // A name the deck already uses is the ordinary duplicate-node error.
+        assert!(bad("contact equiv_rect Nt (5, 3, 0, 2, 2)")
+            .message
+            .contains("duplicate node name 'Nt'"));
+
+        // A rectangle small enough to fall between two cell centres ties
+        // nothing, and the deck is told so rather than silently landing on
+        // a neighbouring cell.
+        let error = parse(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ contact equiv_rect Npad (2, 2, 0, 0.5, 0.5)",
+            "",
+        ))
+        .unwrap_err();
+        assert_eq!(error.line, 3);
+        assert!(
+            error.message.contains("covers no live cell"),
+            "got: {}",
+            error.message
+        );
+    }
+
+    /// The two initial-grid forms stay rejected, on the statement's own
+    /// line, and the error names the unambiguous alternative rather than
+    /// guessing which of `(rows, cols)` counts which edge.
+    #[test]
+    fn the_initial_grid_forms_name_seg1_and_seg2_in_the_error() {
+        for clause in ["contact initial_grid", "contact initial_mesh_grid"] {
+            let error = parse(&plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 {clause} (5, 3)"
+                ),
+                "",
+            ))
+            .unwrap_err();
+            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
+            for expected in [
+                &format!("'{clause}' is not supported"),
+                "seg1",
+                "seg2",
+                "p1→p2",
+            ] {
+                assert!(
+                    error.message.contains(expected.trim()),
+                    "'{clause}' must name {expected}, got: {}",
+                    error.message
+                );
+            }
+        }
+        // Only the meshed form points at the holes it would have punched.
+        let holes = |clause: &str| {
+            parse(&plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 {clause} (5, 3)"
+                ),
+                "",
+            ))
+            .unwrap_err()
+            .message
+            .contains("hole point (x, y, z)")
+        };
+        assert!(holes("contact initial_mesh_grid"));
+        assert!(!holes("contact initial_grid"));
+    }
+
     /// `seg1` counts cells along `p1 → p2` and `seg2` along `p2 → p3`,
     /// whichever axis each of those edges runs along.
     #[test]
@@ -3886,25 +4494,13 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
                 "contact circle (5, 3, 0, 1)",
                 "'contact circle' is not supported",
             ),
-            (
-                "contact initial_grid (5, 5)",
-                "'contact initial_grid' is not supported",
-            ),
-            (
-                "contact initial_mesh_grid (5, 5)",
-                "'contact initial_mesh_grid' is not supported",
-            ),
-            (
-                "contact connection (5, 3, 0, 2, 2, 2)",
-                "'contact connection' is not supported",
-            ),
+            // The initial-grid forms stay rejected, and the error names
+            // `seg1`/`seg2` — the unambiguous way to say the same thing.
+            ("contact initial_grid (5, 5)", "seg1"),
+            ("contact initial_mesh_grid (5, 5)", "seg2"),
             (
                 "contact trace (1, 1, 0, 9, 5, 0, 0.2)",
                 "'contact trace' is not supported",
-            ),
-            (
-                "contact equiv_rect (4, 2, 0, 6, 4, 0)",
-                "'contact equiv_rect' is not supported",
             ),
         ] {
             let error = bad(extra);

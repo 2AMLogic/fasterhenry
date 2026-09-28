@@ -63,6 +63,35 @@
 //! cell, so it is thin at both ends and coarse in the middle. The axis
 //! total is `k + Σ m` cells.
 //!
+//! # Equipotential contacts
+//!
+//! A landing that is a *pad* rather than a point — a wide via, a bond pad,
+//! the footprint of a connector — shorts a whole patch of the plane to one
+//! potential. An [`Equipotential`] rectangle says exactly that: every live
+//! cell centre inside it shares a single node, so the patch has no internal
+//! drop and current enters it across its whole boundary instead of through
+//! one cell. This is what a deck's *named contact area* needs, and it is a
+//! different thing from a [`ContactRegion`], which only grades the mesh.
+//!
+//! The tie changes the mesh, not just a label, so its consequences are
+//! stated rather than left to be inferred:
+//!
+//! * the bars **inside** the patch disappear — both of their ends are the
+//!   same node, and a perfect conductor carries no drop across itself;
+//! * the bars that **cross the patch's boundary** run from their own cell
+//!   centre to the tie node, which sits at the mean of the cell centres it
+//!   ties. The model is therefore exact for a patch covering one cell; for
+//!   a larger patch each entering bar reaches that one point through metal
+//!   the mesh still treats as ordinary plane rather than as the perfect
+//!   conductor the patch is, which over-states the patch's own resistance
+//!   rather than under-stating it — and, unlike landing on a single cell
+//!   centre, the over-statement does not grow as the mesh is refined;
+//! * two rectangles that tie a cell in common are **one** equipotential
+//!   (two overlapping perfect conductors are one conductor), so overlapping
+//!   regions merge rather than needing a tie-break;
+//! * a rectangle catching no live cell centre ties nothing, and
+//!   [`GroundPlane::equipotential_node`] reports `None` for it.
+//!
 //! # Cost
 //!
 //! Bars grow as `2·nx·ny − nx − ny` for an `nx × ny` mesh; each becomes
@@ -83,7 +112,11 @@
 //! **snapped** to the nearest live cell-centre node ([`GroundPlane::attach`]): the
 //! segment then shares that node with the plane mesh, closing the current
 //! path. Snapping is explicit in the API and in the deck reader (`G`'
-//! footprint), never silent elsewhere.
+//! footprint), never silent elsewhere. An endpoint landing inside an
+//! [`Equipotential`] rectangle snaps to a cell of that patch, and so to the
+//! patch's one tie node, with no further machinery; a caller that wants the
+//! tie node itself — a deck naming a *contact area* rather than a point —
+//! asks [`GroundPlane::equipotential_node`] for it.
 
 use thiserror::Error;
 
@@ -277,6 +310,55 @@ impl ContactRegion {
     }
 }
 
+/// A rectangular patch of plane tied to a single node: every live cell
+/// centre inside it shares one node, so the patch is an equipotential.
+///
+/// A [`ContactRegion`] grades the mesh under a landing; this ties the metal
+/// together. The two are independent and compose: a pad that is both
+/// resolved finely and shorted is one of each on the same rectangle.
+///
+/// Membership is by cell **centre**, with the rectangle's boundary
+/// **included** — a centre exactly on an edge is tied. (There is no legacy
+/// rectangle behaviour to match here, as there is for [`Hole::Rect`]'s open
+/// test, and a contact names a patch of metal: excluding a centre on the
+/// edge would quietly shrink the patch the deck asked for.) See the [module
+/// documentation](self#equipotential-contacts) for what the tie does to the
+/// mesh, and [`GroundPlane::equipotential_node`] for the node it produces.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Equipotential {
+    /// Lower corner `(x, y)` in plane coordinates, metres.
+    pub lo: [f64; 2],
+    /// Upper corner `(x, y)`, metres.
+    pub hi: [f64; 2],
+}
+
+impl Equipotential {
+    /// The patch spanning `lo … hi`.
+    #[must_use]
+    pub fn new(lo: [f64; 2], hi: [f64; 2]) -> Self {
+        Self { lo, hi }
+    }
+
+    /// The patch of full widths `widths` about `centre` — the centre-and-
+    /// widths spelling a deck's contact clauses use.
+    #[must_use]
+    pub fn centred(centre: [f64; 2], widths: [f64; 2]) -> Self {
+        Self {
+            lo: [centre[0] - widths[0] / 2.0, centre[1] - widths[1] / 2.0],
+            hi: [centre[0] + widths[0] / 2.0, centre[1] + widths[1] / 2.0],
+        }
+    }
+
+    /// Whether this patch ties the cell with the given centre (boundary
+    /// included; see the type's own documentation).
+    fn ties(&self, centre: [f64; 3]) -> bool {
+        self.lo[0] <= centre[0]
+            && centre[0] <= self.hi[0]
+            && self.lo[1] <= centre[1]
+            && centre[1] <= self.hi[1]
+    }
+}
+
 /// A ground plane specification: extent, discretization, holes, contacts.
 #[derive(Clone, Debug, Default)]
 pub struct GroundPlane {
@@ -301,6 +383,10 @@ pub struct GroundPlane {
     pub holes: Vec<Hole>,
     /// Locally refined contact regions (x/y in plane coordinates).
     pub contacts: Vec<ContactRegion>,
+    /// Patches tied to one node each (x/y in plane coordinates); see
+    /// [`Equipotential`] and the [module
+    /// documentation](self#equipotential-contacts).
+    pub equipotentials: Vec<Equipotential>,
 }
 
 /// Why a ground plane could not be built.
@@ -655,6 +741,40 @@ fn axis_edges(
     Ok(edges)
 }
 
+/// The equipotential classes of a meshed plane: which [`Equipotential`]
+/// each live cell belongs to once regions sharing a cell have merged, and
+/// where each class's one tie node sits.
+#[derive(Clone, Debug)]
+struct Ties {
+    /// The representative region of each declared region.
+    root: Vec<usize>,
+    /// The representative region of each cell, `[i][j]`; `None` where the
+    /// cell is holed or no region ties it.
+    cell: Vec<Vec<Option<usize>>>,
+    /// The tie node's position, per region; `Some` only for a
+    /// representative that ties at least one live cell.
+    node_at: Vec<Option<[f64; 3]>>,
+}
+
+impl Ties {
+    /// Whether two cells are tied into the same equipotential.
+    fn joined(&self, a: (usize, usize), b: (usize, usize)) -> bool {
+        match (self.cell[a.0][a.1], self.cell[b.0][b.1]) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
+    }
+}
+
+/// Union-find over region indices, with path halving.
+fn find(parent: &mut [usize], mut index: usize) -> usize {
+    while parent[index] != index {
+        parent[index] = parent[parent[index]];
+        index = parent[index];
+    }
+    index
+}
+
 impl GroundPlane {
     /// The plane's cell layout — uniform `nx × ny`, refined around every
     /// [`ContactRegion`].
@@ -750,9 +870,122 @@ impl GroundPlane {
         self.holes.iter().any(|hole| hole.removes(centre, bounds))
     }
 
+    /// Which [`Equipotential`] ties each live cell of `mesh`, and where each
+    /// class's node sits.
+    ///
+    /// Regions that tie a live cell in common are merged into one class —
+    /// two overlapping perfect conductors are one conductor — so no
+    /// tie-break between overlapping rectangles is needed. A class's node
+    /// sits at the mean of the cell centres it ties.
+    fn ties(&self, mesh: &PlaneMesh) -> Ties {
+        let (nx, ny) = (mesh.nx(), mesh.ny());
+        let mut root: Vec<usize> = (0..self.equipotentials.len()).collect();
+        let mut cell: Vec<Vec<Option<usize>>> = (0..nx).map(|_| vec![None; ny]).collect();
+        if self.equipotentials.is_empty() {
+            return Ties {
+                root,
+                cell,
+                node_at: Vec::new(),
+            };
+        }
+        // Pass 1: every region tying a given live cell joins that cell's
+        // class, so regions overlapping on the mesh merge.
+        for (i, column) in cell.iter_mut().enumerate() {
+            for (j, slot) in column.iter_mut().enumerate() {
+                let centre = mesh.centre(i, j);
+                if self.holed(centre, mesh.cell_bounds(i, j)) {
+                    continue;
+                }
+                for (index, region) in self.equipotentials.iter().enumerate() {
+                    if !region.ties(centre) {
+                        continue;
+                    }
+                    let index = find(&mut root, index);
+                    match *slot {
+                        None => *slot = Some(index),
+                        Some(first) => {
+                            let first = find(&mut root, first);
+                            root[index] = first;
+                            *slot = Some(first);
+                        }
+                    }
+                }
+            }
+        }
+        // Pass 2: resolve every cell to its class's final representative,
+        // accumulating each class's tie position as it goes.
+        let mut sum = vec![[0.0f64; 3]; self.equipotentials.len()];
+        let mut tied = vec![0usize; self.equipotentials.len()];
+        for (i, column) in cell.iter_mut().enumerate() {
+            for (j, slot) in column.iter_mut().enumerate() {
+                let Some(index) = *slot else { continue };
+                let index = find(&mut root, index);
+                *slot = Some(index);
+                let centre = mesh.centre(i, j);
+                for axis in 0..3 {
+                    sum[index][axis] += centre[axis];
+                }
+                tied[index] += 1;
+            }
+        }
+        let node_at = sum
+            .iter()
+            .zip(&tied)
+            .map(|(sum, &tied)| (tied > 0).then(|| sum.map(|total| total / tied as f64)))
+            .collect();
+        Ties {
+            root,
+            cell,
+            node_at,
+        }
+    }
+
+    /// The node every live cell of equipotential region `index` shares, as
+    /// [`GroundPlane::build_into`] built it into `centres` — the node a deck
+    /// naming a *contact area* attaches to. `None` when the rectangle
+    /// catches no live cell centre, and so ties nothing.
+    ///
+    /// Regions merged with `index` (see [`Equipotential`]) report the same
+    /// node, whichever of them is asked.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`GroundPlane::mesh`] reports.
+    ///
+    /// # Panics
+    ///
+    /// If `index >= self.equipotentials.len()`.
+    pub fn equipotential_node(
+        &self,
+        centres: &[Vec<Option<NodeId>>],
+        index: usize,
+    ) -> Result<Option<NodeId>, PlaneError> {
+        assert!(
+            index < self.equipotentials.len(),
+            "equipotential {index} is not one of this plane's {}",
+            self.equipotentials.len()
+        );
+        let mesh = self.mesh()?;
+        let mut ties = self.ties(&mesh);
+        let root = find(&mut ties.root, index);
+        for (i, column) in ties.cell.iter().enumerate() {
+            for (j, class) in column.iter().enumerate() {
+                if *class == Some(root) {
+                    return Ok(centres[i][j]);
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Builds the plane's mesh into `geometry`, returning the node id of
     /// each live cell centre, indexed `[i][j]` (`None` where a hole
     /// removed the cell).
+    ///
+    /// Cells an [`Equipotential`] ties **share** one node id, so the same id
+    /// appears at every `[i][j]` of that patch and the bars that would have
+    /// run inside it are not built; see the [module
+    /// documentation](self#equipotential-contacts).
     ///
     /// # Errors
     ///
@@ -763,6 +996,11 @@ impl GroundPlane {
     ) -> Result<Vec<Vec<Option<NodeId>>>, PlaneError> {
         let mesh = self.mesh()?;
         let (nx, ny) = (mesh.nx(), mesh.ny());
+        let ties = self.ties(&mesh);
+        // One node per equipotential class, created at the first cell it
+        // ties so that a plane without equipotentials numbers its nodes
+        // exactly as it always has.
+        let mut tie_nodes: Vec<Option<NodeId>> = vec![None; self.equipotentials.len()];
 
         let mut centres: Vec<Vec<Option<NodeId>>> = (0..nx).map(|_| vec![None; ny]).collect();
         for (i, column) in centres.iter_mut().enumerate() {
@@ -771,8 +1009,18 @@ impl GroundPlane {
                 if self.holed(position, mesh.cell_bounds(i, j)) {
                     continue;
                 }
-                *slot =
-                    Some(geometry.add_node(Node::new(position[0], position[1], position[2]))?);
+                *slot = Some(match ties.cell[i][j] {
+                    Some(class) => match tie_nodes[class] {
+                        Some(node) => node,
+                        None => {
+                            let at = ties.node_at[class].expect("a tied class ties a live cell");
+                            let node = geometry.add_node(Node::new(at[0], at[1], at[2]))?;
+                            tie_nodes[class] = Some(node);
+                            node
+                        }
+                    },
+                    None => geometry.add_node(Node::new(position[0], position[1], position[2]))?,
+                });
             }
         }
         let mut bars = 0;
@@ -781,9 +1029,11 @@ impl GroundPlane {
                 let Some(here) = *here else { continue };
                 // An x-directed bar is as wide as the cell row's extent
                 // across y; a y-directed bar as wide as the column's
-                // extent across x.
+                // extent across x. A bar whose two cells are tied into one
+                // equipotential is not built at all: its ends are the same
+                // node, and a perfect conductor carries no drop.
                 if i + 1 < nx {
-                    if let Some(right) = centres[i + 1][j] {
+                    if let Some(right) = centres[i + 1][j].filter(|&right| right != here) {
                         geometry.add_segment(SegmentDef::new(
                             here,
                             right,
@@ -795,7 +1045,7 @@ impl GroundPlane {
                     }
                 }
                 if j + 1 < ny {
-                    if let Some(up) = column[j + 1] {
+                    if let Some(up) = column[j + 1].filter(|&up| up != here) {
                         geometry.add_segment(SegmentDef::new(
                             here,
                             up,
@@ -817,16 +1067,21 @@ impl GroundPlane {
     }
 
     /// Independent count of live bars (for the debug assertion above and
-    /// for tests).
+    /// for tests): adjacent live cells that are not tied into the same
+    /// equipotential.
     fn live_bars(&self, mesh: &PlaneMesh) -> usize {
+        let ties = self.ties(mesh);
         let live = |i: usize, j: usize| !self.holed(mesh.centre(i, j), mesh.cell_bounds(i, j));
         let mut bars = 0;
         for i in 0..mesh.nx() {
             for j in 0..mesh.ny() {
-                if live(i, j) && i + 1 < mesh.nx() && live(i + 1, j) {
+                if !live(i, j) {
+                    continue;
+                }
+                if i + 1 < mesh.nx() && live(i + 1, j) && !ties.joined((i, j), (i + 1, j)) {
                     bars += 1;
                 }
-                if live(i, j) && j + 1 < mesh.ny() && live(i, j + 1) {
+                if j + 1 < mesh.ny() && live(i, j + 1) && !ties.joined((i, j), (i, j + 1)) {
                     bars += 1;
                 }
             }
@@ -896,6 +1151,7 @@ mod tests {
             sigma: 5.8e7,
             holes: Vec::new(),
             contacts: Vec::new(),
+            equipotentials: Vec::new(),
         }
     }
 
@@ -1117,6 +1373,183 @@ mod tests {
             }
         }
         assert_eq!(geometry.nodes().len(), nx * ny - expected);
+    }
+
+    /// The tie is a change to the mesh: the cells inside the rectangle
+    /// share one node at the mean of their centres, the bars that ran
+    /// between them are gone, and the bars crossing the boundary now end on
+    /// that node.
+    #[test]
+    fn an_equipotential_ties_its_cells_into_one_node() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // Cell centres sit on a 2 mm grid: x = 1, 3, 5, 7, 9 and
+        // y = 1, 3, 5 mm. This rectangle catches the six centres with
+        // x ∈ {3, 5, 7} and y ∈ {1, 3}.
+        plane
+            .equipotentials
+            .push(Equipotential::new([2e-3, 0.0], [8e-3, 4e-3]));
+        let mesh = plane.mesh().unwrap();
+        let centres = plane.build_into(&mut geometry).unwrap();
+
+        let tie = centres[1][0].unwrap();
+        for (i, j) in [(1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)] {
+            assert_eq!(centres[i][j], Some(tie), "cell ({i}, {j}) joins the tie");
+        }
+        for (i, j) in [(0, 0), (4, 0), (0, 1), (4, 1), (0, 2), (2, 2), (4, 2)] {
+            assert!(
+                centres[i][j].is_some() && centres[i][j] != Some(tie),
+                "cell ({i}, {j}) keeps its own node"
+            );
+        }
+        // Six cells became one node; the tie sits at the mean of the six
+        // centres, at the mesh's own mid-thickness depth.
+        assert_eq!(geometry.nodes().len(), 15 - 6 + 1);
+        let node = geometry.nodes()[tie.0];
+        assert!((node.x - 5e-3).abs() < 1e-12, "{}", node.x);
+        assert!((node.y - 2e-3).abs() < 1e-12, "{}", node.y);
+        assert!((node.z + 17.5e-6).abs() < 1e-12);
+        // The seven bars inside the patch (four across x, three across y)
+        // are not built; every other bar survives, including the ones that
+        // cross the patch's boundary.
+        assert_eq!(geometry.segment_count(), 22 - 7);
+        assert_eq!(geometry.segment_count(), plane.live_bars(&mesh));
+        // No bar joins a node to itself.
+        for index in 0..geometry.segment_count() {
+            let def = geometry.segment_defs()[index];
+            assert_ne!(def.a, def.b, "segment {index} is a self-loop");
+        }
+        // The patch's node is what a deck naming this contact area gets…
+        assert_eq!(plane.equipotential_node(&centres, 0).unwrap(), Some(tie));
+        // …and an endpoint landing anywhere inside the patch snaps to it.
+        assert_eq!(plane.attach(&centres, [6.9e-3, 0.1e-3, 0.0]).unwrap(), tie);
+    }
+
+    /// The rectangle's boundary is closed: a cell centre exactly on an edge
+    /// (or corner) is tied, unlike [`Hole::Rect`]'s strict interior.
+    #[test]
+    fn the_equipotential_boundary_includes_its_edges() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // Corners exactly on the centres (5, 1), (5, 3), (7, 1), (7, 3) mm.
+        plane
+            .equipotentials
+            .push(Equipotential::new([5e-3, 1e-3], [7e-3, 3e-3]));
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let tie = centres[2][0].unwrap();
+        for (i, j) in [(2, 0), (3, 0), (2, 1), (3, 1)] {
+            assert_eq!(centres[i][j], Some(tie), "cell ({i}, {j}) is on the patch");
+        }
+        assert_eq!(geometry.nodes().len(), 15 - 4 + 1);
+    }
+
+    /// A rectangle that catches no live cell centre ties nothing — whether
+    /// it falls between centres or a hole has taken the only cell it
+    /// covers. The mesh is then exactly the untied one.
+    #[test]
+    fn an_equipotential_catching_no_live_cell_ties_nothing() {
+        // Between the centres at x = 1 and x = 3 mm.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane
+            .equipotentials
+            .push(Equipotential::new([1.2e-3, 0.2e-3], [2.8e-3, 1.8e-3]));
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert_eq!(geometry.nodes().len(), 15);
+        assert_eq!(geometry.segment_count(), 22);
+        assert_eq!(plane.equipotential_node(&centres, 0).unwrap(), None);
+
+        // Over cell (2, 1) alone, with a hole that has already taken it.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Point { at: [5e-3, 3.5e-3] });
+        plane
+            .equipotentials
+            .push(Equipotential::centred([5e-3, 3e-3], [1e-3, 1e-3]));
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres[2][1].is_none());
+        assert_eq!(geometry.nodes().len(), 14);
+        assert_eq!(plane.equipotential_node(&centres, 0).unwrap(), None);
+    }
+
+    /// Two rectangles that tie a cell in common are one equipotential —
+    /// two overlapping perfect conductors are one conductor — while
+    /// disjoint ones stay separate nodes.
+    #[test]
+    fn equipotentials_sharing_a_cell_merge() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // The first catches the bottom-row centres x = 1, 3, 5 mm, the
+        // second x = 5, 7, 9 — the centre at x = 5 mm is in both, so all
+        // five merge into one equipotential.
+        plane
+            .equipotentials
+            .push(Equipotential::new([0.5e-3, 0.0], [5.5e-3, 2e-3]));
+        plane
+            .equipotentials
+            .push(Equipotential::new([4.5e-3, 0.0], [9.5e-3, 2e-3]));
+        let mesh = plane.mesh().unwrap();
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let tie = centres[0][0].unwrap();
+        for (i, column) in centres.iter().enumerate() {
+            assert_eq!(column[0], Some(tie), "cell ({i}, 0) joins the tie");
+        }
+        assert_eq!(geometry.nodes().len(), 15 - 5 + 1);
+        assert_eq!(geometry.segment_count(), plane.live_bars(&mesh));
+        // Either region names the merged node.
+        assert_eq!(plane.equipotential_node(&centres, 0).unwrap(), Some(tie));
+        assert_eq!(plane.equipotential_node(&centres, 1).unwrap(), Some(tie));
+        // The merged tie sits at the mean of the whole row it ties.
+        let node = geometry.nodes()[tie.0];
+        assert!((node.x - 5e-3).abs() < 1e-12, "{}", node.x);
+
+        // Regions that share no cell stay two nodes.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane
+            .equipotentials
+            .push(Equipotential::centred([1e-3, 1e-3], [1e-3, 1e-3]));
+        plane
+            .equipotentials
+            .push(Equipotential::centred([9e-3, 5e-3], [1e-3, 1e-3]));
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let first = plane.equipotential_node(&centres, 0).unwrap().unwrap();
+        let second = plane.equipotential_node(&centres, 1).unwrap().unwrap();
+        assert_ne!(first, second);
+        // Each covers one cell, so the mesh is untouched but for the ties.
+        assert_eq!(geometry.nodes().len(), 15);
+    }
+
+    /// A tie composes with a contact region on the same rectangle — the
+    /// pair a deck's `contact connection` writes: the region's fine cells
+    /// are all tied, and the graded mesh is otherwise the region's own.
+    #[test]
+    fn an_equipotential_composes_with_a_contact_region() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane
+            .contacts
+            .push(ContactRegion::centred([5e-3, 3e-3], 1e-3, 4, 2.0));
+        plane
+            .equipotentials
+            .push(Equipotential::centred([5e-3, 3e-3], [1e-3, 1e-3]));
+        let mesh = plane.mesh().unwrap();
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let tie = plane.equipotential_node(&centres, 0).unwrap().unwrap();
+
+        let mut tied = 0;
+        for (i, column) in centres.iter().enumerate() {
+            for (j, slot) in column.iter().enumerate() {
+                let centre = mesh.centre(i, j);
+                let inside = (4.5e-3..=5.5e-3).contains(&centre[0])
+                    && (2.5e-3..=3.5e-3).contains(&centre[1]);
+                assert_eq!(*slot == Some(tie), inside, "cell ({i}, {j}) at {centre:?}");
+                tied += usize::from(inside);
+            }
+        }
+        assert_eq!(tied, 16, "the region's 4 × 4 fine cells are all tied");
+        assert_eq!(geometry.nodes().len(), mesh.nx() * mesh.ny() - tied + 1);
+        assert_eq!(geometry.segment_count(), plane.live_bars(&mesh));
     }
 
     #[test]
