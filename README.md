@@ -138,14 +138,34 @@ MIT — see `LICENSE`.
 Dependencies are restricted to permissive licenses (MIT, Apache-2.0, Zlib,
 Unlicense, Unicode-3.0) — nothing copyleft, and nothing that imposes a
 source-disclosure obligation on the distributed `fasterhenry` binary, which
-links every transitive dependency. The Apache-2.0-only dependencies
-(`nalgebra`, `simba`, `approx`, `nalgebra-macros`) do add an attribution term
-the MIT notice above does not discharge: Apache-2.0 §4(a) requires that a
-binary distribution ship a copy of the Apache-2.0 license text alongside that
-notice. None of the four carries a `NOTICE` file, so §4(d) is not engaged. The
-policy is enforced in CI by `cargo deny check licenses`; the allowlist and the
-reason each license is on it are in `deny.toml`. Run it locally the same way:
+links every transitive dependency. The policy is enforced in CI by `cargo deny
+check licenses`; the allowlist and the reason each license is on it are in
+`deny.toml`. Run it locally the same way:
 
 ```bash
 cargo deny check licenses
 ```
+
+The Apache-2.0-only dependencies (`nalgebra`, `simba`, `approx`,
+`nalgebra-macros`) add an attribution term the MIT notice above does not
+discharge: Apache-2.0 §4(a) requires that a recipient of a distributed binary
+receive a copy of the Apache-2.0 license text. That is discharged by
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) — a generated bundle
+carrying the full text of every license in the `normal` + `build` dependency
+closure, which is what a binary actually links. It is committed, not
+hand-maintained: CI regenerates it and fails the PR if the committed copy is
+stale, if the two allowlists (`deny.toml`, `about.toml`) have drifted apart, or
+if a workflow ships a built artifact without shipping the bundle with it. Any
+binary distribution of `fasterhenry` — a release asset, a container image, a
+distro package — must include that file. Regenerate it with:
+
+```bash
+./tools/third-party-licenses.sh          # rewrite the bundle
+./tools/third-party-licenses.sh --check  # what CI runs
+```
+
+None of the four Apache-2.0-only crates carries a `NOTICE` file, so §4(d) is not
+engaged. Installing from source (`cargo install fasterhenry-cli`, the only thing
+`release.yml` publishes today) is not a binary distribution by this project —
+cargo fetches each dependency, with its own license file, from crates.io — so
+§4(a) attaches to the bundle above only once a prebuilt artifact is shipped.

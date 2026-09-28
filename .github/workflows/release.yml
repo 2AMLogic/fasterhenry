@@ -13,6 +13,16 @@ name: Release
 # Release flow: bump `[workspace.package].version` and the `fasterhenry`
 # entry in `[workspace.dependencies]` together, cut the CHANGELOG section,
 # merge, then tag the merge commit `vX.Y.Z` and push the tag.
+#
+# This workflow publishes *source* crates and nothing else: whoever runs
+# `cargo install fasterhenry-cli` builds the binary and fetches every
+# dependency (with its own license file) themselves, so no artifact published
+# here carries someone else's code. Adding a prebuilt artifact — a release
+# asset, a container image — changes that, and the four Apache-2.0-only crates
+# in the graph then require their license text to travel with it (§4(a)). The
+# generated bundle that satisfies this, and the CI guard that fails any
+# workflow shipping an artifact without it, are described at the top of
+# `tools/third-party-licenses.sh`. Read it before adding an upload step here.
 on:
   push:
     tags: ["v*"]
