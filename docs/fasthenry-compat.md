@@ -106,8 +106,9 @@ records how each documented field maps.
 | `rho=` | Supported | Issue #88. Per deck unit, the exact reciprocal of `sigma=` and accepted on the corner-point statement itself (continuation lines included); naming both `sigma=` and `rho=` on one statement is a line-numbered error, as it is elsewhere. |
 | `rh=`, `segwid1=`/`segwid2=`, `relx=`/`rely=`/`relz=`, `file=` | Not supported | Each rejected by name with the reason and the alternative (plane filaments are uniform; bar widths follow the cells; name in-plane nodes instead; no output-file option). Nothing on a `G` statement is silently ignored. |
 | In-plane node `N<name> (x, y, z)` | Supported | An ordinary deck node belonging to the plane; a reference to it lands on the nearest live cell-centre node of that plane. |
-| `hole rect (…)`, `contact rect (…)` | Supported | Map onto the plane model's rectangular hole and contact region; the redundant `z` coordinates are checked against the plane's slab. An inline `contact rect` uses 2 × 2 fine cells at ratio 2 — use `.contact` to choose other values. |
-| Other hole/contact shapes (`point`, `circle`, `decay_rect`, `trace`, `initial_*`, `equiv_*`, `user1…user7`) | Deferred | Issue #80; rejected by name rather than approximated by a rectangle. |
+| `hole rect (…)`, `contact rect (…)` | Supported, differs | Map onto the plane model's rectangular hole and contact region; the redundant `z` coordinates are checked against the plane's slab. An inline `contact rect` uses 2 × 2 fine cells at ratio 2 — use `.contact` to choose other values. Both take **two opposite corners** here. That is right for `hole rect` and a divergence for `contact rect`, whose documented form is a centre, full widths and cell sizes like the other `contact` shapes'; issue #95 tracks reconciling it. |
+| `contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` | Supported, differs | Issue #80. Maps onto `fasterhenry::plane::ContactRegion`: centre and full widths give the rectangle, `ceil(width/cell)` per axis gives the fine cells, and the documented decay law `1/(1 − cell/width)` gives that axis's growth ratio. `cell` must be smaller than `width` (the documentation's own `r0 < 1`). The differences are both in the outward limit: this engine's grading levels off at the plane's **background cell** rather than at `maxcell`, so a positive `maxcell` **finer** than the background cell is rejected by name (raise `seg1`/`seg2` instead of shipping a quietly coarser mesh), while one at or above it never binds; a negative `maxcell` — the sentinel the documented `contact connection` shorthand expands to — asks for no limit. The resulting mesh is this engine's own graded cell-centre mesh, not FastHenry's cell subdivision, so equal cell sizes mean equal resolution, not an identical node set. |
+| Other hole/contact shapes (`hole point`, `hole circle`, `hole user1…user7`, `contact point`, `contact line`, `contact circle`, `contact trace`, `contact equiv_rect`, `contact connection`, `contact initial_grid`, `contact initial_mesh_grid`) | Deferred | Issue #80 took `decay_rect` only; the rest stay rejected by name, on the statement's own line, rather than approximated by a rectangle. Tracked as issues #98 (`hole point`/`circle`), #99 (`hole user1…user7`), #100 (the `contact` refinement primitives) and #101 (the named-equipotential and initial-grid forms). |
 | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=] [sigma=\|rho=]`, `.hole`, `.contact` | Supported, extended | This project's own shorthand plane form and its separate refinement directives — not documented FastHenry syntax. Told apart from the corner-point form by the first token after the plane name, so a deck may mix the two; both build the same plane. |
 
 ## `.couples`
@@ -131,3 +132,10 @@ as a result of this table beyond what is listed below.
 - Issue #83: reading genuine third-party decks whose first line is prose
   (not `.title`) — resolved by the opt-in `--fasthenry-compat` mode; see
   "Deck framing" above.
+- Issue #95: `contact rect`'s argument list, which this reader spells as two
+  opposite corners where the documented form is a centre, full widths and
+  cell sizes (found while implementing `contact decay_rect` for #80).
+- Issues #98, #99, #100, #101: the hole and contact shapes #80 left
+  rejected, split by the model change each needs — non-rectangular holes,
+  user-defined holes, the `contact` refinement primitives, and the
+  named-equipotential / initial-grid contact forms.
