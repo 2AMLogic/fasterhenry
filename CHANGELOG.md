@@ -14,6 +14,26 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- Deck reader: the **initial-grid** clauses on a corner-point `G`
+  ground-plane statement — `contact initial_grid (n1, n2)` and
+  `contact initial_mesh_grid (n1, n2)` (issue #113, follow-up to #101, which
+  left both rejected rather than guess their row/column convention). The
+  convention is now read out of the public description rather than guessed:
+  `n1` counts cells along `p1 → p2` and `n2` along `p2 → p3`, which is the
+  same pair `seg1`/`seg2` set — the equivalence that description states
+  outright, and the only reading under which its own worked example comes
+  out square-celled (8500/34 = 13500/54 = 250). The one sentence of it that
+  reads the other way, and why it does not overturn those two, is written
+  out in `docs/fasthenry-compat.md` § *Decision: `(n1, n2)` counts
+  `p1 → p2` then `p2 → p3`*. `initial_mesh_grid` additionally punches the
+  documented checkerboard — every cell whose two indices, numbered from 1 at
+  the plane's own origin (its `p1` corner), are both even — as one
+  `fasterhenry::plane::Hole::Rect` per holed cell, the whole square rather
+  than a point at its centre, so a later `contact` clause refining that
+  region cannot shrink the hole. Because the initial grid and `seg1`/`seg2`
+  are one statement, a plane giving both (in either order), or two initial
+  grids, is a line-numbered error rather than a race between them; no deck
+  that parsed before changes meaning.
 - Deck reader / library: named **contact areas** on a corner-point `G`
   ground-plane statement — `contact equiv_rect N<name> (x, y, z, xwidth,
   ywidth)` and its documented shorthand `contact connection N<name> (x, y,
@@ -98,9 +118,10 @@ breaking changes to the API or the command-line interface; patch releases
   forms and the user-defined `user1…user7`) — nothing on a `G` statement is
   silently ignored, and representing those shapes is tracked in #80.
   (`contact decay_rect`, `hole point`/`hole circle`, `contact
-  point`/`contact line` and `contact equiv_rect`/`contact connection` have
-  since been implemented — see their own entries below; the rest are still
-  rejected, tracked in #99, #109, #110 and #113.)
+  point`/`contact line`, `contact equiv_rect`/`contact connection` and the
+  `contact initial_grid`/`initial_mesh_grid` pair have since been
+  implemented — see their own entries below; the rest are still rejected,
+  tracked in #99, #109 and #110.)
   `fasterhenry-cli/tests/data/plane_fasthenry.inp` and
   `plane_extension.inp` are the same self-authored plane problem in the two
   syntaxes, and a new test requires them to produce the same geometry and
@@ -147,7 +168,7 @@ breaking changes to the API or the command-line interface; patch releases
   and #101 (`contact equiv_rect`, `connection`, `initial_grid`,
   `initial_mesh_grid`; `equiv_rect` and `connection` have since been
   implemented — see #101's own entry above — with the two `initial_*` forms
-  left rejected and moved to #113).
+  left rejected and moved to #113, which has since implemented them too).
 - Library: `fasterhenry::plane::Hole` is now an enum (`Rect`, `Point`,
   `Circle`) instead of a rectangle-only struct, and the deck reader accepts
   the corner-point `G` statement's `hole point (x, y, z)` and
@@ -261,21 +282,6 @@ breaking changes to the API or the command-line interface; patch releases
   cell"; a band that divides exactly is unchanged, as is the graded
   validation fixture (580 bars). A graded plane whose region straddled
   that rounding now gains a cell or two on that axis.
-- Deck reader: `contact initial_grid (rows, cols)` and
-  `contact initial_mesh_grid (rows, cols)` stay rejected on the statement's
-  own line, but the error now names the alternative instead of the generic
-  contact-shape list (issue #101, which took the two clauses it covered
-  alongside these; issue #113 tracks the rest). Neither needs a plane-model
-  change — `seg1`/`seg2` already say what `initial_grid` says, and a
-  checkerboard of `hole point` clauses at the centres `GroundPlane::mesh`
-  reports says what `initial_mesh_grid` adds — but the value list turns on
-  one fact the public description this reader is written from did not
-  settle: which of `(rows, cols)` counts the `p1 → p2` edge. A transposed
-  guess would silently mesh every non-square plane the wrong way round, and
-  the clean-room rule in `CONTRIBUTING.md` forbids guessing an undocumented
-  argument order, so the error says `seg1` (cells along `p1 → p2`) and
-  `seg2` (cells along `p2 → p3`) instead; `initial_mesh_grid`'s also names
-  the hole clauses and the library composition for the checkerboard.
 - Deck reader / library (decision, no new API): `hole user1 (…)` …
   `hole user7 (…)` are rejected **permanently**, and no predicate or
   callback variant is added to `fasterhenry::plane::Hole` (issue #99,
