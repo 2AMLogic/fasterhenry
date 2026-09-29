@@ -122,3 +122,7 @@ tools/pypeec_plane_solid_reference.json
 # EPHEMERAL_PATTERNS (see loom's .gitignore: consumer repos have no reason to
 # inherit a rule for a tool they may not use), so it is declared here instead.
 .squad/
+
+# The CLI's documented default output (`./Zc.mat`, written to the current
+# directory when no --zc-mat path is given). Never a tracked file.
+Zc.mat
