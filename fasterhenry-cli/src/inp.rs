@@ -62,6 +62,7 @@
 //! +       hole rect (x1, y1, z1, x2, y2, z2) …
 //! +       hole point (x, y, z) …
 //! +       hole circle (x, y, z, r) …
+//! +       contact rect (x, y, z, xwidth, ywidth, xcell, ycell) …
 //! +       contact rect (x1, y1, z1, x2, y2, z2) …
 //! +       contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell) …
 //! +       contact point (x, y, z, xcell, ycell) …
@@ -99,15 +100,40 @@
 //!   connection lands on the nearest live cell-centre node of *that* plane
 //!   — whichever side `.equiv` named first. Joining in-plane nodes of two
 //!   *different* planes is rejected (connect the planes with a segment).
-//! * **`hole rect`** maps onto [`fasterhenry::plane::Hole::Rect`] and
-//!   **`contact rect`** onto [`fasterhenry::plane::ContactRegion`] (2 × 2 fine cells
-//!   at ratio 2 — use `.contact` to choose other values). The `z`
+//! * **`hole rect (x1, y1, z1, x2, y2, z2)`** takes **two opposite
+//!   corners** and maps onto [`fasterhenry::plane::Hole::Rect`]. The `z`
 //!   coordinates are redundant for a plane parallel to xy, but are checked
 //!   against the plane's own slab so a rectangle meant for another plane
-//!   cannot land here silently.
+//!   cannot land here silently — as they are for every `hole` / `contact`
+//!   clause below.
+//! * **`contact rect`** maps onto [`fasterhenry::plane::ContactRegion`],
+//!   and is read in **either of two spellings, told apart by value count**
+//!   (issue #95; the decision and its reasoning are in
+//!   `docs/fasthenry-compat.md`):
+//!     * **seven values**, `(x, y, z, xwidth, ywidth, xcell, ycell)` — the
+//!       documented form, and the same centre-and-widths shape of argument
+//!       list `contact point`, `contact line`, `contact decay_rect` and
+//!       `contact equiv_rect` use: the rectangle's **centre**, its **full
+//!       widths** about that centre, and the largest cell wanted
+//!       **inside** it. It is exactly `contact decay_rect` without the
+//!       outward limits, so it is read as one with both `maxcell`s at the
+//!       "no limit" sentinel — every rule in the `decay_rect` bullet below
+//!       (the per-axis cell count, the documented decay law, `cell` smaller
+//!       than `width`) holds here too;
+//!     * **six values**, `(x1, y1, z1, x2, y2, z2)` — two opposite corners
+//!       as `hole rect` spells them, this reader's own extension, refined
+//!       to 2 × 2 fine cells at ratio 2 (use the seven-value form, or
+//!       `.contact`, to choose other values).
+//!
+//!   The two are one clause, not two: the seven-value form at `xcell =
+//!   xwidth/2`, `ycell = ywidth/2` is ratio 2 over 2 × 2 cells, so
+//!   `contact rect (5, 3, 0, 2, 2, 1, 1)` and `contact rect (4, 2, 0, 6,
+//!   4, 0)` are the same region. Any other value count is a line-numbered
+//!   error naming both spellings.
 //! * **`contact decay_rect`** maps onto a
-//!   [`fasterhenry::plane::ContactRegion`] too — the shape that states its
-//!   own refinement rather than taking `contact rect`'s default. Its nine
+//!   [`fasterhenry::plane::ContactRegion`] too — the shape that bounds how
+//!   coarse its outward decay may grow, which no other contact shape
+//!   states. Its nine
 //!   values are the rectangle's **centre** `(x, y, z)`, its **full
 //!   widths** `xwidth`/`ywidth` about that centre, the largest cell wanted
 //!   **inside** it (`xcell`/`ycell`) and the largest cell its outward
@@ -128,13 +154,14 @@
 //!       A limit at or above the background cell never binds, and a
 //!       negative one asks for none.
 //!
-//!   Note that `decay_rect` names its rectangle by **centre and widths**
-//!   while this reader's `hole rect` / `contact rect` name **two opposite
-//!   corners** — the same rectangle written two ways, so `contact
-//!   decay_rect (5, 3, 0, 2, 2, 1, 1, -1, -1)` and `contact rect (4, 2, 0,
-//!   6, 4, 0)` are one region. (That `contact rect` takes corners at all
-//!   is this reader's own choice, mirroring `hole rect`; issue #95 tracks
-//!   reconciling it with the documented centre-and-widths form.)
+//!   `decay_rect` differs from the seven-value `contact rect` above in
+//!   exactly its last two values, the outward limits: `contact decay_rect
+//!   (x, y, z, xwidth, ywidth, xcell, ycell, -1, -1)` *is* `contact rect
+//!   (x, y, z, xwidth, ywidth, xcell, ycell)`. Only `hole rect` (and
+//!   `contact rect`'s six-value extension) names a rectangle by **two
+//!   opposite corners** — the same rectangle written the other way, so
+//!   `contact decay_rect (5, 3, 0, 2, 2, 1, 1, -1, -1)` and `contact rect
+//!   (4, 2, 0, 6, 4, 0)` are one region.
 //! * **`hole point (x, y, z)`** and **`hole circle (x, y, z, r)`** map onto
 //!   [`fasterhenry::plane::Hole::Point`] and
 //!   [`fasterhenry::plane::Hole::Circle`] (issue #98). A point removes
@@ -172,9 +199,9 @@
 //!       along x is a one-cell-high strip reaching half a cell past each
 //!       end, and a zero-length line is the point at its ends;
 //!     * outside, the cells grade back to the background at ratio 2, the
-//!       same default `contact rect` and `.contact` use: neither shape
-//!       documents a decay of its own, and a tensor-product mesh has to
-//!       return to the background cell somehow;
+//!       same default the six-value `contact rect` and `.contact` use:
+//!       neither shape documents a decay of its own, and a tensor-product
+//!       mesh has to return to the background cell somehow;
 //!     * a requested cell at or above the plane's background cell is
 //!       already met there (grading never grows a cell past the
 //!       background cell), so that axis is clamped to the background cell
@@ -1021,30 +1048,26 @@ struct DecayRect {
     limit: [Option<f64>; 2],
 }
 
-/// The nine values of a `contact decay_rect` clause:
-/// `(x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` — the
-/// rectangle's centre, its full widths, the largest cell wanted inside it,
-/// and the largest cell the outward decay may grow to (negative for no
-/// limit). See the [module documentation](self).
-fn decay_rect_values(
+/// The seven values of the **documented** `contact rect` form:
+/// `(x, y, z, xwidth, ywidth, xcell, ycell)` — the rectangle's centre, its
+/// full widths about that centre, and the largest cell wanted inside it.
+/// That is exactly `contact decay_rect` without the outward limits, so it
+/// *is* a [`DecayRect`] with both `maxcell`s at the "no limit" sentinel:
+/// the cells outside grade by the documented law all the way back to the
+/// plane's background cell. Issue #95; see the [module documentation](self).
+///
+/// `values` may be longer — [`decay_rect_values`] reads its own two
+/// trailing limits over the top of this — so the caller checks its own
+/// arity first.
+fn contact_rect_values(
     values: &[String],
     what: &str,
     unit: f64,
     line: usize,
 ) -> Result<DecayRect, ParseError> {
-    if values.len() != 9 {
-        return Err(err(
-            line,
-            format!(
-                "{what} takes 9 values (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell), got {}",
-                values.len()
-            ),
-        ));
-    }
     let centre = triple(&values[..3], what, unit, line)?;
     let mut widths = [0.0f64; 2];
     let mut cell = [0.0f64; 2];
-    let mut limit = [None; 2];
     for axis in 0..2 {
         let name = ['x', 'y'][axis];
         widths[axis] = parse_number(&values[3 + axis], line)? * unit;
@@ -1069,8 +1092,40 @@ fn decay_rect_values(
                 ),
             ));
         }
+    }
+    Ok(DecayRect {
+        centre,
+        widths,
+        cell,
+        limit: [None, None],
+    })
+}
+
+/// The nine values of a `contact decay_rect` clause:
+/// `(x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` — the
+/// seven of the documented `contact rect` above, plus the largest cell the
+/// outward decay may grow to (negative for no limit). See the
+/// [module documentation](self).
+fn decay_rect_values(
+    values: &[String],
+    what: &str,
+    unit: f64,
+    line: usize,
+) -> Result<DecayRect, ParseError> {
+    if values.len() != 9 {
+        return Err(err(
+            line,
+            format!(
+                "{what} takes 9 values (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell), got {}",
+                values.len()
+            ),
+        ));
+    }
+    let mut rect = contact_rect_values(values, what, unit, line)?;
+    for axis in 0..2 {
+        let name = ['x', 'y'][axis];
         let raw = parse_number(&values[7 + axis], line)?;
-        limit[axis] = if raw < 0.0 {
+        rect.limit[axis] = if raw < 0.0 {
             None
         } else if raw > 0.0 {
             Some(raw * unit)
@@ -1083,12 +1138,7 @@ fn decay_rect_values(
             ));
         };
     }
-    Ok(DecayRect {
-        centre,
-        widths,
-        cell,
-        limit,
-    })
+    Ok(rect)
 }
 
 /// A `contact point` or `contact line` clause, kept raw until the plane's
@@ -1344,11 +1394,15 @@ struct PlaneStatement<'a> {
     hole_points: Vec<[f64; 3]>,
     /// `hole circle (x, y, z, r)`: the centre and radius.
     hole_circles: Vec<([f64; 3], f64)>,
-    /// `contact rect (x1, y1, z1, x2, y2, z2)` corners.
+    /// The six-value `contact rect (x1, y1, z1, x2, y2, z2)` corners. Its
+    /// documented seven-value spelling is a `contact_decays` entry instead
+    /// (issue #95).
     contact_rects: Vec<[[f64; 3]; 2]>,
-    /// `contact decay_rect` clauses, plus the decay half of each
-    /// `contact connection`.
-    contact_decays: Vec<DecayRect>,
+    /// `contact decay_rect` and the documented seven-value `contact rect`,
+    /// plus the decay half of each `contact connection` — each with the
+    /// clause's own name, for errors raised once the plane's geometry is
+    /// known.
+    contact_decays: Vec<(&'static str, DecayRect)>,
     /// `contact point` / `contact line`, with the clause's own name.
     contact_lines: Vec<(&'static str, RefineLine)>,
     /// `contact trace` parallel to x or y: five `contact line`s once its
@@ -1546,14 +1600,32 @@ impl<'a> PlaneStatement<'a> {
                 self.hole_points.push(triple(values, &what, unit, line)?);
             }
             ("hole", "circle") => self.apply_hole_circle(&what, values)?,
-            ("contact", "rect") => {
-                self.contact_rects
-                    .push(rect_corners(values, &what, unit, line)?);
-            }
-            ("contact", "decay_rect") => {
-                self.contact_decays
-                    .push(decay_rect_values(values, &what, unit, line)?);
-            }
+            // Two spellings of one clause, told apart by value count
+            // (issue #95): the documented seven — centre, full widths and
+            // the largest cell wanted inside — or this reader's own six,
+            // two opposite corners as `hole rect` spells them, taking the
+            // default 2 × 2 cells at ratio 2.
+            ("contact", "rect") => match values.len() {
+                7 => self.contact_decays.push((
+                    "'contact rect'",
+                    contact_rect_values(values, &what, unit, line)?,
+                )),
+                6 => self
+                    .contact_rects
+                    .push(rect_corners(values, &what, unit, line)?),
+                got => {
+                    return Err(err(
+                        line,
+                        format!(
+                            "{what} takes 7 values (x, y, z, xwidth, ywidth, xcell, ycell) — the rectangle's centre, its full widths about that centre, and the largest cell wanted inside it — or 6 (x1, y1, z1, x2, y2, z2), two opposite corners at this reader's default 2 × 2 cells; got {got}"
+                        ),
+                    ))
+                }
+            },
+            ("contact", "decay_rect") => self.contact_decays.push((
+                "'contact decay_rect'",
+                decay_rect_values(values, &what, unit, line)?,
+            )),
             ("contact", "point") => {
                 self.contact_lines.push((
                     "'contact point'",
@@ -1663,12 +1735,15 @@ impl<'a> PlaneStatement<'a> {
             centre,
             widths,
         });
-        self.contact_decays.push(DecayRect {
-            centre,
-            widths,
-            cell: [widths[0] / ratio, widths[1] / ratio],
-            limit: [None, None],
-        });
+        self.contact_decays.push((
+            "'contact connection'",
+            DecayRect {
+                centre,
+                widths,
+                cell: [widths[0] / ratio, widths[1] / ratio],
+                limit: [None, None],
+            },
+        ));
         Ok(())
     }
 
@@ -1772,7 +1847,7 @@ impl<'a> PlaneStatement<'a> {
             (_, other) => err(
                 line,
                 format!(
-                    "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)', 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' or 'contact trace (x0, y0, z0, x1, y1, z1, trace_width, scale_factor)' along x or y (and '.contact' to set a rectangle's refinement directly, or 'contact equiv_rect N<name> (x, y, z, xwidth, ywidth)' / 'contact connection N<name> (x, y, z, xwidth, ywidth, ratio)' to tie a rectangle of cells to one node)"
+                    "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x, y, z, xwidth, ywidth, xcell, ycell)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)', 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' or 'contact trace (x0, y0, z0, x1, y1, z1, trace_width, scale_factor)' along x or y (and '.contact' to set a rectangle's refinement directly, or 'contact equiv_rect N<name> (x, y, z, xwidth, ywidth)' / 'contact connection N<name> (x, y, z, xwidth, ywidth, ratio)' to tie a rectangle of cells to one node)"
                 ),
             ),
         }
@@ -1948,8 +2023,8 @@ impl<'a> PlaneStatement<'a> {
             let (lo, hi) = frame.footprint("'contact rect'", rect)?;
             contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
         }
-        for decay in contact_decays {
-            contacts.push(frame.decay_contact(&decay)?);
+        for (what, decay) in contact_decays {
+            contacts.push(frame.decay_contact(what, &decay)?);
         }
         for (what, refine) in contact_lines {
             if let Some(region) = frame.refine_contact(what, &refine)? {
@@ -2133,10 +2208,10 @@ impl PlaneFrame<'_> {
         (self.hi[axis] - self.lo[axis]) / self.cells[axis] as f64
     }
 
-    /// The graded region a `contact decay_rect` (or the decay half of a
-    /// `contact connection`) refines.
-    fn decay_contact(&self, decay: &DecayRect) -> Result<ContactRegion, ParseError> {
-        let what = "'contact decay_rect'";
+    /// The graded region a `contact decay_rect`, a documented seven-value
+    /// `contact rect`, or the decay half of a `contact connection` refines.
+    /// `what` is the clause quoted for errors.
+    fn decay_contact(&self, what: &str, decay: &DecayRect) -> Result<ContactRegion, ParseError> {
         self.in_slab(what, decay.centre)?;
         let mut region = ([0.0f64; 2], [0.0f64; 2]);
         let mut region_cells = [0usize; 2];
@@ -4390,6 +4465,163 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
 + contact decay_rect (5, 3, 0, 2, 2, 1, 1, 2, 2)",
             "",
         ));
+    }
+
+    /// The **documented** seven-value `contact rect (x, y, z, xwidth,
+    /// ywidth, xcell, ycell)` is exactly `contact decay_rect` without its
+    /// two outward limits — that is, with both `maxcell`s at the negative
+    /// "no limit" sentinel. Issue #95; the decision is in
+    /// `docs/fasthenry-compat.md`.
+    #[test]
+    fn contact_rect_is_a_decay_rect_without_the_limits() {
+        // Deliberately anisotropic and not the corner form's default, so
+        // the identity is not a coincidence of round numbers: 4 × 2 mm
+        // about (5, 3), cells 2 mm across x and 0.5 mm across y.
+        let rect = parse_ok(&refine_deck("contact rect (5, 3, 0, 4, 2, 2, 0.5)"));
+        let decay = parse_ok(&refine_deck(
+            "contact decay_rect (5, 3, 0, 4, 2, 2, 0.5, -1, -1)",
+        ));
+        assert_eq!(rect.geometry, decay.geometry);
+        assert_eq!(rect.ports, decay.ports);
+    }
+
+    /// The two spellings are one clause: the six-value corner form's
+    /// default 2 × 2 cells at ratio 2 *is* the seven-value form at
+    /// `xcell = xwidth/2`, `ycell = ywidth/2`, so `contact rect (4, 2, 0,
+    /// 6, 4, 0)` and `contact rect (5, 3, 0, 2, 2, 1, 1)` name the same
+    /// region. Issue #95.
+    #[test]
+    fn contact_rect_two_spellings_are_one_region() {
+        let centred = parse_ok(&refine_deck("contact rect (5, 3, 0, 2, 2, 1, 1)"));
+        let corners = parse_ok(&refine_deck("contact rect (4, 2, 0, 6, 4, 0)"));
+        assert_eq!(centred.geometry, corners.geometry);
+        assert_eq!(centred.ports, corners.ports);
+    }
+
+    /// What the documented form buys over the corner form: the cell size
+    /// itself. A 2 × 2 mm rectangle asking for 1 mm cells across x and 0.1
+    /// mm across y is 2 × 20 fine cells decaying at 1/(1 − 1/2) = 2 across
+    /// x and 1/(1 − 0.1/2) = 20/19 across y — a mesh the corner form,
+    /// fixed at 2 × 2 cells at ratio 2, cannot ask for at all. Issue #95.
+    #[test]
+    fn contact_rect_seven_values_choose_the_cell_per_axis() {
+        let deck = parse_ok(&refine_deck("contact rect (5, 3, 0, 2, 2, 1, 0.1)"));
+        let plane = refine_test_plane(vec![ContactRegion::graded_per_axis(
+            [4e-3, 2e-3],
+            [6e-3, 4e-3],
+            [2, 20],
+            [1.0 / (1.0 - 1e-3 / 2e-3), 1.0 / (1.0 - 0.1e-3 / 2e-3)],
+        )]);
+        let mesh = plane.mesh().unwrap();
+        assert_eq!(deck.geometry.nodes().len(), mesh.nx() * mesh.ny() + 1);
+        assert_eq!(deck.geometry.segment_count(), mesh.bars() + 1);
+        // The corner form over the same rectangle is coarser across y,
+        // which is the whole point of reading the documented spelling.
+        let corners = parse_ok(&refine_deck("contact rect (4, 2, 0, 6, 4, 0)"));
+        assert!(
+            deck.geometry.nodes().len() > corners.geometry.nodes().len(),
+            "the chosen 0.1 mm y cell must refine further than the corner form's default: {} vs {}",
+            deck.geometry.nodes().len(),
+            corners.geometry.nodes().len()
+        );
+    }
+
+    /// A `contact rect` value list that is neither six nor seven long is a
+    /// line-numbered error naming **both** spellings — the cost of telling
+    /// them apart by arity is paid here rather than by nudging the deck
+    /// toward one of them. The seven-value form's own parameter errors name
+    /// `'contact rect'`, not the `decay_rect` it is read as. Issue #95.
+    #[test]
+    fn contact_rect_arity_and_parameter_errors() {
+        for (clause, expected) in [
+            // Neither arity: the error names both.
+            ("contact rect (5, 3, 0, 2, 2)", "takes 7 values"),
+            (
+                "contact rect (5, 3, 0, 2, 2)",
+                "or 6 (x1, y1, z1, x2, y2, z2)",
+            ),
+            // Eight values is `decay_rect`'s list one short, not a `rect`.
+            ("contact rect (5, 3, 0, 2, 2, 1, 1, -1)", "takes 7 values"),
+            ("contact rect (5, 3, 0, 2, 2, 1, 1, -1)", "got 8"),
+            // The seven-value form's widths are widths, not a corner…
+            (
+                "contact rect (5, 3, 0, 0, 2, 1, 1)",
+                "'contact rect': xwidth=0 must be > 0",
+            ),
+            (
+                "contact rect (5, 3, 0, 2, -1, 1, 1)",
+                "'contact rect': ywidth=-0.001 must be > 0",
+            ),
+            // …and its cell must be smaller than its width, as
+            // `decay_rect`'s is: the decay ratio is 1/(1 − cell/width).
+            (
+                "contact rect (5, 3, 0, 2, 2, 2, 1)",
+                "'contact rect': xcell=0.002",
+            ),
+            (
+                "contact rect (5, 3, 0, 2, 2, 1, 0)",
+                "'contact rect': ycell=0",
+            ),
+            // The z is checked against the plane's slab, as the corner
+            // form's is, and the error names this clause.
+            (
+                "contact rect (5, 3, 3, 2, 2, 1, 1)",
+                "'contact rect': z=0.003",
+            ),
+            (
+                "contact rect (5, 3, 3, 2, 2, 1, 1)",
+                "is not in ground plane 'Gp'",
+            ),
+            // The six-value form still reports its own six-value list.
+            ("contact rect (4, 2, 0, 6, 4)", "takes 7 values"),
+            // Neither spelling names a node — the seven-value one no more
+            // than the corner form the existing rejection test covers.
+            (
+                "contact rect Npad (5, 3, 0, 2, 2, 1, 1)",
+                "'contact rect' takes no node name",
+            ),
+        ] {
+            let error = parse(&refine_deck(clause)).unwrap_err();
+            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
+            assert!(
+                error.message.contains(expected),
+                "'{clause}' must name {expected}, got: {}",
+                error.message
+            );
+        }
+    }
+
+    /// The unsupported-contact-shape message is user-facing documentation of
+    /// the grammars this reader accepts, so the `contact rect` spelling it
+    /// advertises has to be one the reader actually reads. Asserted by
+    /// lifting the advertised clause straight out of the message and parsing
+    /// it, which is what keeps the string from drifting away from
+    /// `apply_clause` again (issue #95).
+    #[test]
+    fn the_unsupported_shape_message_advertises_a_readable_contact_rect() {
+        let error = parse(&refine_deck("contact wibble (5, 3, 0)")).unwrap_err();
+        assert!(
+            error.message.contains("'contact wibble' is not supported"),
+            "an unsupported shape names itself, got: {}",
+            error.message
+        );
+        let advertised = "contact rect (x, y, z, xwidth, ywidth, xcell, ycell)";
+        assert!(
+            error.message.contains(advertised),
+            "the message must advertise the documented seven-value spelling, got: {}",
+            error.message
+        );
+        // The advertised parameter names, filled in, must parse — and mean
+        // the documented centre-and-widths rectangle, not the corners.
+        let filled = advertised
+            .replace("x, y, z", "5, 3, 0")
+            .replace("xwidth, ywidth", "2, 2")
+            .replace("xcell, ycell", "1, 1");
+        assert_eq!(filled, "contact rect (5, 3, 0, 2, 2, 1, 1)");
+        assert_eq!(
+            parse_ok(&refine_deck(&filled)).geometry,
+            parse_ok(&refine_deck("contact rect (4, 2, 0, 6, 4, 0)")).geometry,
+        );
     }
 
     /// The corner-point plane every `contact point` / `contact line` test

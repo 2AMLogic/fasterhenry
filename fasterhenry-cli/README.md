@@ -167,7 +167,7 @@ it.
 Gplane x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
 + thick=0.035 seg1=5 seg2=3 sigma=5.8e4
 + hole rect (0.5, 4.5, 0, 1.5, 5.5, 0)
-+ contact rect (4, 2, 0, 6, 4, 0)
++ contact rect (5, 3, 0, 2, 2, 1, 1)
 + Nland1 (1, 1, 0)
 
 * The same plane in this crate's shorthand — which names the plane's TOP
@@ -176,6 +176,15 @@ Gplane 0 0 0.0175 10 6 0.0175 0.035 nx=5 ny=3
 .hole Gplane 0.5 4.5 1.5 5.5
 .contact Gplane 4 2 6 4
 ```
+
+`contact rect` is the one clause with two spellings, told apart by value
+count: the documented seven values above — the rectangle's centre, its full
+widths about that centre, and the largest cell wanted inside it, the shape
+of argument list every other `contact` shape uses — or six, `(x1, y1, z1,
+x2, y2, z2)`, two opposite corners as `hole rect` spells them, refined to
+2 × 2 cells. The example's `contact rect (5, 3, 0, 2, 2, 1, 1)` and
+`contact rect (4, 2, 0, 6, 4, 0)` are the same region (see
+`docs/fasthenry-compat.md`).
 
 In-plane nodes (`N<name> (x, y, z)`) are ordinary deck nodes that belong to
 their plane: reference one from a segment or `.external`, or join it to a

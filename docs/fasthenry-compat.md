@@ -109,7 +109,9 @@ records how each documented field maps.
 | `rho=` | Supported | Issue #88. Per deck unit, the exact reciprocal of `sigma=` and accepted on the corner-point statement itself (continuation lines included); naming both `sigma=` and `rho=` on one statement is a line-numbered error, as it is elsewhere. |
 | `rh=`, `segwid1=`/`segwid2=`, `relx=`/`rely=`/`relz=`, `file=` | Not supported | Each rejected by name with the reason and the alternative (plane filaments are uniform; bar widths follow the cells; name in-plane nodes instead; no output-file option). Nothing on a `G` statement is silently ignored. Issue #122 revisits `file=`: the nonuniform-plane description defines it as an *input* (the discretization hierarchy file, `file=NONE` for none), which the current message does not say, and `file=NONE` is the form the public `contact initial_grid` example uses. |
 | In-plane node `N<name> (x, y, z)` | Supported | An ordinary deck node belonging to the plane; a reference to it lands on the nearest live cell-centre node of that plane. |
-| `hole rect (…)`, `contact rect (…)` | Supported, differs | Map onto the plane model's rectangular hole and contact region; the redundant `z` coordinates are checked against the plane's slab. An inline `contact rect` uses 2 × 2 fine cells at ratio 2 — use `.contact` to choose other values. Both take **two opposite corners** here. That is right for `hole rect` and a divergence for `contact rect`, whose documented form is a centre, full widths and cell sizes like the other `contact` shapes'; issue #95 tracks reconciling it. |
+| `hole rect (x1, y1, z1, x2, y2, z2)` | Supported | Two opposite corners, as documented, onto the plane model's rectangular hole. The redundant `z` coordinates are checked against the plane's slab, so a rectangle meant for another plane cannot land here silently. |
+| `contact rect (x, y, z, xwidth, ywidth, xcell, ycell)` | Supported | Issue #95. The **documented** spelling — the rectangle's centre, its full widths about that centre, and the largest cell wanted inside it, the same shape of argument list every other `contact` shape uses. It is exactly `contact decay_rect` without the outward limits, and is read as one with both `maxcell`s at the negative "no limit" sentinel, so the row below describes it in full: `ceil(width/cell)` fine cells per axis, the documented decay law `1/(1 − cell/width)` outside, `cell` smaller than `width`. |
+| `contact rect (x1, y1, z1, x2, y2, z2)` | Supported, extended | Issue #95. Two opposite corners, as `hole rect` spells them — **not** documented FastHenry syntax but this reader's own extension, kept because decks written against earlier releases use it. Refined to 2 × 2 fine cells at ratio 2, which is the seven-value form at `xcell = xwidth/2`, `ycell = ywidth/2`: `contact rect (4, 2, 0, 6, 4, 0)` and `contact rect (5, 3, 0, 2, 2, 1, 1)` are the same region. The two spellings are told apart by **value count alone**, and any other count is a line-numbered error naming both — see the decision below. |
 | `contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` | Supported, differs | Issue #80. Maps onto `fasterhenry::plane::ContactRegion`: centre and full widths give the rectangle, `ceil(width/cell)` per axis gives the fine cells, and the documented decay law `1/(1 − cell/width)` gives that axis's growth ratio. `cell` must be smaller than `width` (the documentation's own `r0 < 1`). The differences are both in the outward limit: this engine's grading levels off at the plane's **background cell** rather than at `maxcell`, so a positive `maxcell` **finer** than the background cell is rejected by name (raise `seg1`/`seg2` instead of shipping a quietly coarser mesh), while one at or above it never binds; a negative `maxcell` — the sentinel the documented `contact connection` shorthand expands to — asks for no limit. The resulting mesh is this engine's own graded cell-centre mesh, not FastHenry's cell subdivision, so equal cell sizes mean equal resolution, not an identical node set. |
 | `hole point (x, y, z)`, `hole circle (x, y, z, r)` | Supported | Issue #98. Map onto `fasterhenry::plane::Hole::Point` and `Hole::Circle`, widening the plane's hole model beyond the axis-aligned rectangle. A point removes exactly the one cell whose own extent (edges included) contains it; a point landing exactly on a shared cell edge or corner is the documented tie and removes every cell touching it, rather than guessing a single winner. A circle removes every cell whose centre lies at or inside its radius `r` — a centre exactly on the circle counts (a closed boundary, unlike `hole rect`'s open one, since there is no prior rectangle behaviour to match). Both check their own `z` against the plane's slab like every other hole/contact clause. |
 | `contact equiv_rect N<name> (x, y, z, xwidth, ywidth)` | Supported, differs | Issue #101. The named **contact area**: the rectangle (centre and full widths, as `decay_rect` spells it) is tied to the one node the clause names, so a deck can `.equiv` an external node onto a landing *pad* rather than a point. It maps onto the new `fasterhenry::plane::Equipotential`: every live cell centre inside the rectangle — boundary included — shares one node, the bars between those cells are not built, and the bars crossing the patch's boundary end on that node, which sits at the mean of the cell centres it ties. That last part is the difference worth stating: the model is exact for a patch covering one cell, and for a larger patch each entering bar reaches the tie through metal the mesh still treats as ordinary plane rather than as the perfect conductor the patch is — an over-, never under-, estimate of the contact's own resistance, and one that (unlike landing on a single cell centre) does not grow as the mesh is refined. Two rectangles that tie a cell in common merge into one equipotential. The node name follows the in-plane-node rule (`N`-prefixed); a rectangle catching no live cell centre is a line-numbered error naming the plane rather than a silent landing on a neighbouring cell. |
@@ -122,6 +124,78 @@ records how each documented field maps.
 | `contact initial_grid (n1, n2)` | Supported | Issue #113, which pinned the convention #101 left open: `n1` cells along `p1 → p2` and `n2` along `p2 → p3` — the same pair `seg1`/`seg2` set, as the clause's own public description states ("`seg1=10 seg2=12` could be replaced with `file=NONE contact initial_grid (10,12)`"). See the decision below for the evidence, including why the description's word *rows* does not overturn it. The counts are cells, not grid lines. Because the two clauses are one statement, a plane giving both `contact initial_grid` and `seg1`/`seg2` (in either order), or two initial grids, is a line-numbered error rather than a race between them. `file=NONE`, which the public example pairs with the clause, is still rejected by name (see the `file=` row above and issue #122); this reader needs no such marker, since the initial grid is the only discretization it reads. |
 | `contact initial_mesh_grid (n1, n2)` | Supported, differs | Issue #113. That same initial grid, plus the documented checkerboard: "every cell that has an even value for both of its indices where the numbering is from the top left" — so, with the cells numbered from 1 at the plane's own origin (its `p1` corner) along each axis, every cell whose two indices are **both even**. An axis of one cell has no even index and so no hole. The difference is what each hole *is*: a `Hole::Rect` over the holed cell's own rectangle rather than a `Hole::Point` at its centre. On the initial grid alone the two are the same cut; the grid is *initial*, though, and a later `contact` clause may refine that region — the documented hole is the square ("no conductor will be defined in that square region"), not whichever smaller cell a refinement leaves under the centre. Numbering from `p1` is what fixes the checkerboard's phase: for an odd count either end selects the same cells, but for an even count the two differ by one cell, and `p1` is the origin of the plane coordinate system the same description defines (and the corner its own uniform-plane figure draws at the top left). |
 | `G<name> x1 y1 z1 x2 y2 z2 t [nx=] [ny=] [nhinc=] [sigma=\|rho=]`, `.hole`, `.contact` | Supported, extended | This project's own shorthand plane form and its separate refinement directives — not documented FastHenry syntax. Told apart from the corner-point form by the first token after the plane name, so a deck may mix the two; both build the same plane. |
+
+### Decision: `contact rect` reads both spellings, told apart by value count (issue #95)
+
+Until issue #95 this reader spelled `contact rect` as **two opposite
+corners**, `(x1, y1, z1, x2, y2, z2)`, mirroring `hole rect`. The documented
+clause is not that: like `contact point`, `contact line`, `contact
+decay_rect` and `contact equiv_rect`, it takes a **centre**, the
+rectangle's **full widths** about that centre and the largest **cell**
+wanted inside it — `(x, y, z, xwidth, ywidth, xcell, ycell)`, seven values.
+`hole rect` really is two corners, but it belongs to the *uniform* plane
+syntax; the `contact` shapes belong to the non-uniform one, and the two
+conventions do not match. So a genuine third-party deck was rejected for
+its value count, and a six-value clause this reader accepted meant
+something other than what that spelling means in the documentation.
+
+**The decision: accept both, disambiguated by arity.** Seven values are the
+documented centre/widths/cell form; six keep the corner meaning. Three
+reasons:
+
+1. **The counts cannot collide.** Six and seven are distinct, so no deck is
+   ambiguous and no clause changes meaning silently. The corner form is
+   unreachable from the documented one and vice versa, which is what makes
+   one clause name with two grammars safe here rather than a guess.
+2. **Nothing that parsed before changes meaning.** The 0.2.0 goal is to
+   *read* existing decks; a reader that silently re-interpreted the
+   six-value form, or rejected it (option 2 in #95), would break decks
+   written against earlier releases of this tool for no compatibility gain
+   — the documented form is added either way.
+3. **Documenting the divergence permanently (option 3 in #95) leaves the
+   gap open.** A deck writing the documented seven values would still be
+   rejected, which is precisely the drop-in-reading failure the epic
+   exists to close.
+
+The cost is one clause name with two grammars. It is paid down in the
+error: a value list that is neither six nor seven long is a line-numbered
+error naming **both** spellings, so a deck that miscounts is told what both
+are rather than nudged toward one.
+
+On the status key above, the six-value row is *Supported, extended* rather
+than *differs*: the extension shares the documented clause's **name** but
+not its **arity**, so it shadows nothing the format documents — a deck
+writing the documented seven values always gets the documented reading.
+That is the narrow sense in which this is additive, and it is the whole
+reason arity is a safe discriminator here rather than a guess.
+
+**What the seven-value form means, exactly.** It is `contact decay_rect`
+without the two outward limits, so it is read as one with both `maxcell`s
+at the negative "no limit" sentinel: `contact rect (x, y, z, xwidth,
+ywidth, xcell, ycell)` *is* `contact decay_rect (x, y, z, xwidth, ywidth,
+xcell, ycell, -1, -1)`. That follows from the shapes' own relationship —
+`decay_rect` is the `rect` that states its outward decay limits — and it
+means the `contact decay_rect` row above describes both: `ceil(width/cell)`
+fine cells per axis, the documented decay law `1/(1 − cell/width)` outside,
+and `cell` required to be smaller than `width`. `contact_rect_is_a_decay_rect_without_the_limits`
+in `fasterhenry-cli/src/inp.rs` asserts the identity, and
+`contact_rect_two_spellings_are_one_region` asserts that the six-value
+corner form is the seven-value form at `cell = width/2` (2 × 2 cells at
+ratio 2), so the two spellings genuinely name one clause.
+
+**The axes.** `xwidth`/`ywidth`/`xcell`/`ycell` are read along **global x
+and y**, as every other `contact` clause's are in this reader. Issue #118
+asks fleet-wide whether the `contact` family's per-axis values should
+instead be read in the plane's own `p1 → p2` / `p2 → p3` coordinate system;
+that question is the same for `contact point`, `line`, `decay_rect`,
+`equiv_rect` and `connection`, so it is settled there for all of them at
+once rather than locally here. The grammar question #95 settles — corner
+pair versus centre and widths — is independent of it.
+
+**What would reopen this.** Public documentation of a `contact rect` taking
+six values (which would collide with the extension and force it out), or a
+decision to drop this reader's non-documented extensions wholesale at a
+breaking release.
 
 ### Decision: `hole user1`…`user7` are rejected permanently (issue #99)
 
@@ -393,9 +467,16 @@ as a result of this table beyond what is listed below.
 - Issue #83: reading genuine third-party decks whose first line is prose
   (not `.title`) — resolved by the opt-in `--fasthenry-compat` mode; see
   "Deck framing" above.
-- Issue #95: `contact rect`'s argument list, which this reader spells as two
-  opposite corners where the documented form is a centre, full widths and
-  cell sizes (found while implementing `contact decay_rect` for #80).
+- Issue #95: `contact rect`'s argument list, which this reader spelled as
+  two opposite corners where the documented form is a centre, full widths
+  and cell sizes (found while implementing `contact decay_rect` for #80).
+  Since **implemented**: the reader now takes both, told apart by value
+  count — seven values are the documented centre/widths/cell form (exactly
+  `contact decay_rect` with no outward limits), six keep the corner meaning
+  as an extension, and any other count is a line-numbered error naming
+  both. See "Decision: `contact rect` reads both spellings, told apart by
+  value count" above for why accepting both beat migrating to the
+  documented form alone or documenting the divergence permanently.
 - Issues #99, #100, #101: the hole and contact shapes #80 and #98 left
   rejected, split by the model change each needs — user-defined holes, the
   `contact` refinement primitives, and the named-equipotential /

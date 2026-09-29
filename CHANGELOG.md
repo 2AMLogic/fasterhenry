@@ -14,6 +14,35 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- Deck reader: the **documented** `contact rect (x, y, z, xwidth, ywidth,
+  xcell, ycell)` spelling on a corner-point `G` ground-plane statement
+  (issue #95, found while implementing `contact decay_rect` for #80). Until
+  now this reader spelled `contact rect` only as two opposite corners,
+  mirroring `hole rect`; the public format documents it the way every other
+  `contact` shape is documented — the rectangle's **centre**, its **full
+  widths** about that centre, and the largest **cell** wanted inside it — so
+  a genuine third-party deck was rejected for its value count, and a
+  six-value clause this reader did accept meant something other than what
+  that spelling means. **Both are now read, told apart by value count
+  alone**: seven values are the documented form, six keep the corner
+  meaning as this reader's own extension, and any other count is a
+  line-numbered error naming both. No deck that parsed before changes
+  meaning. The seven-value form is exactly `contact decay_rect` without its
+  two outward limits — `contact rect (x, y, z, xw, yw, xc, yc)` is
+  `contact decay_rect (x, y, z, xw, yw, xc, yc, -1, -1)` — so it inherits
+  that clause's per-axis cell count, its documented decay law
+  `1/(1 − cell/width)` back to the plane's background cell, and its
+  requirement that `cell` be smaller than `width`; and because the corner
+  form's default 2 × 2 cells at ratio 2 is the seven-value form at
+  `cell = width/2`, `contact rect (4, 2, 0, 6, 4, 0)` and `contact rect (5,
+  3, 0, 2, 2, 1, 1)` are the same region. What the documented form buys is
+  the cell size itself, per axis, which the corner form cannot state. The
+  widths and cells are read along global x and y, as every other `contact`
+  clause's are (issue #118 asks that question fleet-wide). Why accepting
+  both beat migrating to the documented form alone, or documenting the
+  divergence permanently, is written out in `docs/fasthenry-compat.md`
+  § *Decision: `contact rect` reads both spellings, told apart by value
+  count*.
 - Deck reader: the **initial-grid** clauses on a corner-point `G`
   ground-plane statement — `contact initial_grid (n1, n2)` and
   `contact initial_mesh_grid (n1, n2)` (issue #113, follow-up to #101, which
