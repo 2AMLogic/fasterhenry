@@ -101,7 +101,7 @@ records how each documented field maps.
 
 | Field | Status | Notes |
 |---|---|---|
-| `G<name> x1= y1= z1= x2= y2= z2= x3= y3= z3=` (three corner points) | Supported, differs | The plane must be axis-aligned and parallel to the xy plane (`z1 = z2 = z3`, each edge along x or y): this engine's plane model is an axis-aligned rectangle. A tilted or rotated plane is rejected by name rather than squared off. The corner points give the plane's mid-thickness surface, as a segment's nodes give its axis. |
+| `G<name> x1= y1= z1= x2= y2= z2= x3= y3= z3=` (three corner points) | Supported, differs | The plane must be axis-aligned and parallel to the xy plane (`z1 = z2 = z3`, each edge along x or y): this engine's plane model is an axis-aligned rectangle. A tilted or rotated plane is rejected by name rather than squared off. The corner points give the plane's mid-thickness surface, as a segment's nodes give its axis. The three points also fix the **plane's own coordinate system** — `p1` the origin, `p1 → p2` its x-direction, `p2 → p3` its y-direction — which is the frame every `x…`/`y…` pair of *lengths* in the clauses below is stated in; see "Decision: a `contact` clause's `x…`/`y…` pair is in plane coordinates" below (issue #118). |
 | `thick=` | Supported | Plane thickness. |
 | `seg1=`, `seg2=` | Supported, differs | Become the background cell counts of this engine's own cell-centre PEEC mesh, not FastHenry's panel mesh: equal counts mean equal resolution, not an identical node set. |
 | `sigma=` | Supported | Per deck unit, falling back to the `.default` conductivity (`.default sigma=` or `.default rho=`). |
@@ -112,13 +112,13 @@ records how each documented field maps.
 | `hole rect (x1, y1, z1, x2, y2, z2)` | Supported | Two opposite corners, as documented, onto the plane model's rectangular hole. The redundant `z` coordinates are checked against the plane's slab, so a rectangle meant for another plane cannot land here silently. |
 | `contact rect (x, y, z, xwidth, ywidth, xcell, ycell)` | Supported | Issue #95. The **documented** spelling — the rectangle's centre, its full widths about that centre, and the largest cell wanted inside it, the same shape of argument list every other `contact` shape uses. It is exactly `contact decay_rect` without the outward limits, and is read as one with both `maxcell`s at the negative "no limit" sentinel, so the row below describes it in full: `ceil(width/cell)` fine cells per axis, the documented decay law `1/(1 − cell/width)` outside, `cell` smaller than `width`. |
 | `contact rect (x1, y1, z1, x2, y2, z2)` | Supported, extended | Issue #95. Two opposite corners, as `hole rect` spells them — **not** documented FastHenry syntax but this reader's own extension, kept because decks written against earlier releases use it. Refined to 2 × 2 fine cells at ratio 2, which is the seven-value form at `xcell = xwidth/2`, `ycell = ywidth/2`: `contact rect (4, 2, 0, 6, 4, 0)` and `contact rect (5, 3, 0, 2, 2, 1, 1)` are the same region. The two spellings are told apart by **value count alone**, and any other count is a line-numbered error naming both — see the decision below. |
-| `contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` | Supported, differs | Issue #80. Maps onto `fasterhenry::plane::ContactRegion`: centre and full widths give the rectangle, `ceil(width/cell)` per axis gives the fine cells, and the documented decay law `1/(1 − cell/width)` gives that axis's growth ratio. `cell` must be smaller than `width` (the documentation's own `r0 < 1`). The differences are both in the outward limit: this engine's grading levels off at the plane's **background cell** rather than at `maxcell`, so a positive `maxcell` **finer** than the background cell is rejected by name (raise `seg1`/`seg2` instead of shipping a quietly coarser mesh), while one at or above it never binds; a negative `maxcell` — the sentinel the documented `contact connection` shorthand expands to — asks for no limit. The resulting mesh is this engine's own graded cell-centre mesh, not FastHenry's cell subdivision, so equal cell sizes mean equal resolution, not an identical node set. |
+| `contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` | Supported, differs | Issue #80. Maps onto `fasterhenry::plane::ContactRegion`: centre and full widths give the rectangle, `ceil(width/cell)` per axis gives the fine cells, and the documented decay law `1/(1 − cell/width)` gives that axis's growth ratio. All three `x…`/`y…` pairs are in the plane's own coordinate system (`x…` along `p1 → p2`), per the decision below; the centre is a global coordinate. `cell` must be smaller than `width` (the documentation's own `r0 < 1`). The differences are both in the outward limit: this engine's grading levels off at the plane's **background cell** rather than at `maxcell`, so a positive `maxcell` **finer** than the background cell is rejected by name (raise `seg1`/`seg2` instead of shipping a quietly coarser mesh), while one at or above it never binds; a negative `maxcell` — the sentinel the documented `contact connection` shorthand expands to — asks for no limit. The resulting mesh is this engine's own graded cell-centre mesh, not FastHenry's cell subdivision, so equal cell sizes mean equal resolution, not an identical node set. |
 | `hole point (x, y, z)`, `hole circle (x, y, z, r)` | Supported | Issue #98. Map onto `fasterhenry::plane::Hole::Point` and `Hole::Circle`, widening the plane's hole model beyond the axis-aligned rectangle. A point removes exactly the one cell whose own extent (edges included) contains it; a point landing exactly on a shared cell edge or corner is the documented tie and removes every cell touching it, rather than guessing a single winner. A circle removes every cell whose centre lies at or inside its radius `r` — a centre exactly on the circle counts (a closed boundary, unlike `hole rect`'s open one, since there is no prior rectangle behaviour to match). Both check their own `z` against the plane's slab like every other hole/contact clause. |
-| `contact equiv_rect N<name> (x, y, z, xwidth, ywidth)` | Supported, differs | Issue #101. The named **contact area**: the rectangle (centre and full widths, as `decay_rect` spells it) is tied to the one node the clause names, so a deck can `.equiv` an external node onto a landing *pad* rather than a point. It maps onto the new `fasterhenry::plane::Equipotential`: every live cell centre inside the rectangle — boundary included — shares one node, the bars between those cells are not built, and the bars crossing the patch's boundary end on that node, which sits at the mean of the cell centres it ties. That last part is the difference worth stating: the model is exact for a patch covering one cell, and for a larger patch each entering bar reaches the tie through metal the mesh still treats as ordinary plane rather than as the perfect conductor the patch is — an over-, never under-, estimate of the contact's own resistance, and one that (unlike landing on a single cell centre) does not grow as the mesh is refined. Two rectangles that tie a cell in common merge into one equipotential. The node name follows the in-plane-node rule (`N`-prefixed); a rectangle catching no live cell centre is a line-numbered error naming the plane rather than a silent landing on a neighbouring cell. |
-| `contact connection N<name> (x, y, z, xwidth, ywidth, ratio)` | Supported | Issue #101. The documented shorthand: exactly a `contact equiv_rect` over the rectangle plus a `contact decay_rect` over the same rectangle with cells `xwidth/ratio`, `ywidth/ratio` and no decay limit (the negative-`maxcell` sentinel in the row above). Writing the two clauses out by hand produces an identical deck, which is what `connection_is_an_equiv_rect_plus_a_decay_rect` in `inp.rs` asserts. `ratio` must be > 1 — it divides the widths into the contact's own cells — and a ratio of 1 or less is a line-numbered error rather than a rectangle that grades nothing. |
+| `contact equiv_rect N<name> (x, y, z, xwidth, ywidth)` | Supported, differs | Issue #101. The named **contact area**: the rectangle (centre and full widths, as `decay_rect` spells it — and, like `decay_rect`'s, the widths are in the plane's own coordinate system, per the decision below) is tied to the one node the clause names, so a deck can `.equiv` an external node onto a landing *pad* rather than a point. It maps onto the new `fasterhenry::plane::Equipotential`: every live cell centre inside the rectangle — boundary included — shares one node, the bars between those cells are not built, and the bars crossing the patch's boundary end on that node, which sits at the mean of the cell centres it ties. That last part is the difference worth stating: the model is exact for a patch covering one cell, and for a larger patch each entering bar reaches the tie through metal the mesh still treats as ordinary plane rather than as the perfect conductor the patch is — an over-, never under-, estimate of the contact's own resistance, and one that (unlike landing on a single cell centre) does not grow as the mesh is refined. Two rectangles that tie a cell in common merge into one equipotential. The node name follows the in-plane-node rule (`N`-prefixed); a rectangle catching no live cell centre is a line-numbered error naming the plane rather than a silent landing on a neighbouring cell. |
+| `contact connection N<name> (x, y, z, xwidth, ywidth, ratio)` | Supported | Issue #101. The documented shorthand: exactly a `contact equiv_rect` over the rectangle plus a `contact decay_rect` over the same rectangle with cells `xwidth/ratio`, `ywidth/ratio` and no decay limit (the negative-`maxcell` sentinel in the row above). Writing the two clauses out by hand produces an identical deck, which is what `connection_is_an_equiv_rect_plus_a_decay_rect` in `inp.rs` asserts. `ratio` must be > 1 — it divides the widths into the contact's own cells — and a ratio of 1 or less is a line-numbered error rather than a rectangle that grades nothing. The widths are in the plane's own coordinate system, as in both halves it expands to (decision below). |
 | `hole user1 (…)` … `hole user7 (…)` | Not supported, permanent | Issue #99. Rejected by name on the statement's own line, and the rejection is final rather than deferred — see the decision below. The error names the alternatives: the declarative shapes above, and `fasterhenry::plane::GroundPlane::mesh` + `fasterhenry::plane::Hole::Point` for a shape none of them describe. |
-| `contact point (x, y, z, xcell, ycell)`, `contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)` | Supported, differs | Issue #100. Every cell holding the point, or crossed by the line, is no larger than `xcell` × `ycell`. Both map onto one `fasterhenry::plane::ContactRegion`: the locus's bounding box padded by half a requested cell on every side, cut into the fewest cells no larger than that cell — so a point is exactly one `xcell × ycell` cell centred on it, and a zero-length line is that point. Outside it the mesh grades back at ratio 2, the reader's `contact rect` default (neither shape documents a decay). A requested cell at or above the plane's background cell is already met and is clamped there rather than coarsening the mesh; a point or line met on both axes adds nothing. Both ends are checked against the plane's slab and footprint. **The difference**: a diagonal line refines its whole padded bounding box, because this engine's mesh is a tensor product — a refined band on one axis spans the plane on the other, so any refinement covering the line (a chain of rectangles included) has the same bands. That costs about `(Lx/xcell)·(Ly/ycell)` fine cells where a mesh following the diagonal would need about `Lx/xcell + Ly/ycell`; an axis-aligned line costs nothing extra. |
-| `contact trace (x0, y0, z0, x1, y1, z1, trace_width, scale_factor)` along x or y | Supported | Issue #110. Refines the plane finely across the trace's projection, not along it. Source: the public memo *Nonuniformly Discretized Reference Planes in FastHenry 3.0* (M. Kamon, 10 October 1996, section "Grouped contact utilities"), whose worked example expands an x-directed trace of width `w` and length `L` into five `contact line`s — at the trace and at `±w/2` with cells `(L, w/2)`, and at `±3w/2` with cells `(L, w)` — and which states that `scale_factor` has no effect on a trace parallel to x or y. This reader performs exactly that expansion (axes swapped for a trace along y), each line mapping as in the `contact line` row above; writing the five lines out by hand gives the same mesh, which `contact_trace_along_x_is_the_documented_five_lines` in `inp.rs` asserts. `scale_factor` is checked to be positive and otherwise unused. The trace's own ends are checked against the plane's slab and footprint on the statement's line; the side lines are clipped to the plane (and dropped where they miss it), so a trace along the plane's edge is accepted. A zero-length trace has no direction and is a line-numbered error naming `contact point`. |
+| `contact point (x, y, z, xcell, ycell)`, `contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)` | Supported, differs | Issue #100. Every cell holding the point, or crossed by the line, is no larger than `xcell` × `ycell` — the pair measured in the plane's own coordinate system, `xcell` along `p1 → p2` (the decision below; this is the clause the public memo states that convention for outright), while the point's or line's own coordinates are global. Both map onto one `fasterhenry::plane::ContactRegion`: the locus's bounding box padded by half a requested cell on every side, cut into the fewest cells no larger than that cell — so a point is exactly one `xcell × ycell` cell centred on it, and a zero-length line is that point. Outside it the mesh grades back at ratio 2, the reader's `contact rect` default (neither shape documents a decay). A requested cell at or above the plane's background cell is already met and is clamped there rather than coarsening the mesh; a point or line met on both axes adds nothing. Both ends are checked against the plane's slab and footprint. **The difference**: a diagonal line refines its whole padded bounding box, because this engine's mesh is a tensor product — a refined band on one axis spans the plane on the other, so any refinement covering the line (a chain of rectangles included) has the same bands. That costs about `(Lx/xcell)·(Ly/ycell)` fine cells where a mesh following the diagonal would need about `Lx/xcell + Ly/ycell`; an axis-aligned line costs nothing extra. |
+| `contact trace (x0, y0, z0, x1, y1, z1, trace_width, scale_factor)` along x or y | Supported | Issue #110. Refines the plane finely across the trace's projection, not along it. Source: the public memo *Nonuniformly Discretized Reference Planes in FastHenry 3.0* (M. Kamon, 10 October 1996, section "Grouped contact utilities"), whose worked example expands an x-directed trace of width `w` and length `L` into five `contact line`s — at the trace and at `±w/2` with cells `(L, w/2)`, and at `±3w/2` with cells `(L, w)` — and which states that `scale_factor` has no effect on a trace parallel to x or y. This reader performs exactly that expansion (axes swapped for a trace along y), each line mapping as in the `contact line` row above; writing the five lines out by hand gives the same mesh, which `contact_trace_along_x_is_the_documented_five_lines` in `inp.rs` asserts. `scale_factor` is checked to be positive and otherwise unused. The trace's own ends are checked against the plane's slab and footprint on the statement's line; the side lines are clipped to the plane (and dropped where they miss it), so a trace along the plane's edge is accepted. A zero-length trace has no direction and is a line-numbered error naming `contact point`. The clause carries no `x…`/`y…` pair of its own — one `trace_width`, and a direction read from its own global ends — and its expansion is symmetric in the two axes, so the plane-coordinate decision below does not touch it: rotating the plane rotates the trace with it (issue #118). |
 | `contact trace (…)` not parallel to x or y | Not supported, permanent | Issue #110. Rejected by name on the statement's own line, as a decision rather than deferred work — see "Decision: a diagonal `contact trace` is rejected" below. The error names `contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)`, which states the cell size outright. |
 | `contact circle (…)` | Not supported, permanent | Issue #109. Rejected by name on the statement's own line — and, like the diagonal `contact trace` row above, this is not deferred work: the public description of the `contact` family names the simple refinement utilities `point`, `line`, `rect` and `decay_rect`, the contact-*area* utility `equiv_rect`, the grouped `connection` and `trace` built on them, and the `initial_grid`/`initial_mesh_grid` pair — no disc among them. `circle` is a **hole** shape (`hole circle (x, y, z, r)`), so there is no argument list to pin and nothing in a deck to read — see the decision below. The geometry is not what is missing: on this tensor-product mesh the whole of what a disc could mean is `contact decay_rect` over its bounding square, and the error names that. |
 | `contact initial_grid (n1, n2)` | Supported | Issue #113, which pinned the convention #101 left open: `n1` cells along `p1 → p2` and `n2` along `p2 → p3` — the same pair `seg1`/`seg2` set, as the clause's own public description states ("`seg1=10 seg2=12` could be replaced with `file=NONE contact initial_grid (10,12)`"). See the decision below for the evidence, including why the description's word *rows* does not overturn it. The counts are cells, not grid lines. Because the two clauses are one statement, a plane giving both `contact initial_grid` and `seg1`/`seg2` (in either order), or two initial grids, is a line-numbered error rather than a race between them. `file=NONE`, which the public example pairs with the clause, is still rejected by name (see the `file=` row above and issue #122); this reader needs no such marker, since the initial grid is the only discretization it reads. |
@@ -183,14 +183,18 @@ in `fasterhenry-cli/src/inp.rs` asserts the identity, and
 corner form is the seven-value form at `cell = width/2` (2 × 2 cells at
 ratio 2), so the two spellings genuinely name one clause.
 
-**The axes.** `xwidth`/`ywidth`/`xcell`/`ycell` are read along **global x
-and y**, as every other `contact` clause's are in this reader. Issue #118
-asks fleet-wide whether the `contact` family's per-axis values should
-instead be read in the plane's own `p1 → p2` / `p2 → p3` coordinate system;
-that question is the same for `contact point`, `line`, `decay_rect`,
-`equiv_rect` and `connection`, so it is settled there for all of them at
-once rather than locally here. The grammar question #95 settles — corner
-pair versus centre and widths — is independent of it.
+**The axes.** `xwidth`/`ywidth`/`xcell`/`ycell` are read in the **plane's
+own** `p1 → p2` / `p2 → p3` coordinate system, exactly as `contact
+decay_rect`'s are — because the documented seven-value form *is* a
+`decay_rect` without the outward limits (above), the two cannot disagree on
+what frame their shared `xwidth`/`ywidth`/`xcell`/`ycell` are stated in.
+Issue #118 settled that question fleet-wide, for `contact point`, `line`,
+`decay_rect`, `equiv_rect` and `connection` at once; this clause inherits
+the answer rather than needing its own, since it is one of them under a
+second name. The six-value corner form's two corners are not lengths and
+stay ordinary global coordinates, untouched by that decision. The grammar
+question #95 settles — corner pair versus centre and widths — is
+independent of it.
 
 **What would reopen this.** Public documentation of a `contact rect` taking
 six values (which would collide with the extension and force it out), or a
@@ -445,6 +449,87 @@ so either end selects the same cells. `the_meshed_initial_grid_*` tests in
 gloss the other way *and* explains away the `seg1`/`seg2` equivalence and
 the example's cell arithmetic — all three, since each is independently
 sufficient here. Short of that, the mapping stands as implemented.
+
+### Decision: a `contact` clause's `x…`/`y…` pair is in plane coordinates (issue #118)
+
+Until issue #118, this reader applied the `contact` clauses' per-axis
+lengths along **global** x and y. That is right for the plane every public
+example writes — one whose `p1 → p2` edge runs along global x — and wrong for
+a plane whose first edge runs along global y, which this reader has always
+accepted (`seg1_and_seg2_follow_the_edges_not_the_axes`). On such a plane an
+anisotropic request was silently transposed: a deck that still solves, at the
+wrong resolution on each axis. **The reader now maps the pair through the
+plane's own axes**, so the five clauses that carry one agree with the rest of
+the plane model.
+
+**What the memo says.** The same supplement every other `contact` clause here
+is read from ("Nonuniformly Discretized Reference Planes in FastHenry 3.0",
+M. Kamon, 10 October 1996) settles it in the clause where it matters most:
+
+1. **It defines the frame.** `p1` "specifies the origin of the plane
+   coordinate system"; "the vector from p1 to p2 specifies the x-direction in
+   the plane coordinate system. And similarly, the vector from p2 to p3
+   specifies the y-direction."
+2. **It states `contact point`'s cell sizes in that frame, by name.** Of
+   `contact point (1,0,0,0.1,0.2)` it says the point "will be contained in a
+   cell of dimensions no bigger than (0.1,0.2) where 0.1 is the width of the
+   cell **in the plane coordinate system's x-direction**, and 0.2 is the
+   width in the y-direction". This is explicit, not inferred.
+3. **The other four clauses are defined as `point`.** The memo builds `line`
+   from `point` ("walks along the line, calling the point utility for every
+   cell it crosses"), `rect` from `line` ("calls the line utility for a set
+   of parallel lines in the x-direction and another set in the y-direction"),
+   `decay_rect` from `rect` ("calling the rect utility for gradually larger
+   rectangles with gradually larger cell sizes"), and `connection` as exactly
+   `decay_rect (x,y,z,xwidth,ywidth,xwidth/ratio,ywidth/ratio,-1,-1)` plus
+   `equiv_rect (x,y,z,xwidth,ywidth)` over the same widths. A pair cannot
+   change frames as it is passed down that chain, and `connection`'s two
+   halves would disagree with each other if `equiv_rect`'s widths were
+   global while `decay_rect`'s were not.
+4. **It is the convention the plane already uses elsewhere.** `seg1`/`seg2`
+   count along `p1 → p2` and `p2 → p3` (the user's guide), and `contact
+   initial_grid`/`initial_mesh_grid` likewise (the decision above, issue
+   #113). Reading the `contact` pairs globally would have made this one plane
+   model use two different frames for its two kinds of per-axis value.
+
+**Coordinates are not relative.** The other half of the question #118 asked:
+`p1` being the frame's origin does not make the clauses' points, line ends or
+rectangle centres offsets from `p1`. The memo's own `decay_rect` example
+places contacts at `(1,0,0)` and `(9,0,0)` on a plane spanning `y = -2 … 2` —
+`y = 0` there is the plane's mid-height, the natural place for a two-port
+ground plane's contacts, and is *not* a plane-relative coordinate (relative
+to `p1 = (0,-2,0)` those contacts would sit on the plane's edge). Its
+`equiv_rect` example reads the same way. So every coordinate in a `G`
+statement's body stays an ordinary global deck coordinate, checked against
+the plane's footprint and slab; only the `x…`/`y…` *lengths* turn with the
+plane. `p1` is used as an origin exactly where the memo needs one: for those
+two directions, and for the `initial_mesh_grid` cell numbering (above).
+
+**What this changes in practice.** Nothing for a plane whose `p1 → p2` edge
+runs along global x — the mapping is the identity there, which is why no
+existing test moved. For a plane whose first edge runs along global y, a
+clause's `x…` value is now measured along global y. `contact trace` is
+unaffected either way: it carries no `x…`/`y…` pair (one `trace_width`, and a
+direction taken from its own global ends) and its five-line expansion is
+symmetric in the two axes. The documented seven-value `contact rect` is not
+listed among the five above only because it is not a sixth clause: it *is* a
+`contact decay_rect` under another name (issue #95), so it turns with the
+plane exactly as `decay_rect` does, through the same code. This reader's
+own six-value corner-spelled `contact rect` genuinely is unaffected — its
+two corners are global coordinates, not a plane-relative length pair.
+
+**What would reopen this.** Public documentation stating one of these five
+clauses' pairs in global x/y *despite* the plane coordinate system the same
+document defines — or a worked example that only comes out right read
+globally. Statement 2 above is a direct quotation about the clause the other
+four are built from, so short of that the mapping stands as implemented.
+`contact_cell_sizes_follow_the_plane_axes_not_the_global_ones` in
+`fasterhenry-cli/src/inp.rs` pins all five clauses (plus the documented
+`contact rect`, which is `decay_rect` under another name) against a rotated
+plane, `a_square_contact_request_is_orientation_independent` pins the
+isotropic no-op (`contact trace` included), and
+`a_rotated_planes_decay_limit_error_names_the_decks_own_axis` pins that the
+per-axis error messages name the axis the deck wrote.
 
 ## `.couples`
 
