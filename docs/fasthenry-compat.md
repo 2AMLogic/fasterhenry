@@ -219,11 +219,11 @@ not share a shape vocabulary: the same supplement records that these
 routines do not support the hole utility at all.
 
 So the earlier "argument list still to be pinned" wording had the situation
-backwards, and this row is now rejected the way `hole user1`…`user7` are
-rather than as deferred work: but a name with
-no meaning to read. The reader keeps rejecting it by name, on the
-statement's own line, and the error says which family each name belongs to
-so a deck that meant `hole circle` is told exactly that.
+backwards, and this row is now rejected the way `hole user1`…`user7` are:
+not deferred work, but a name with no meaning to read. The reader keeps
+rejecting it by name, on the statement's own line, and the error says which
+family each name belongs to so a deck that meant `hole circle` is told
+exactly that.
 
 **The geometry was never the obstacle.** Had the clause existed, the mapping
 would have been a one-liner on top of what `contact decay_rect` already
