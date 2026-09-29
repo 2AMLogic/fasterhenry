@@ -380,12 +380,20 @@
 //!   widen each width by its own cell, as `contact point` pads by half a
 //!   cell on each side, to keep the cells grazing the rim fine as well. The
 //!   error says exactly that rather than leaving the reader to work it out.
+//! * **`file=`** names the plane's nonuniform-discretization *hierarchy*
+//!   file — an input, not a dump of the finished mesh — and `file=NONE`
+//!   says there is no such file: the hierarchy is a single root cell,
+//!   discretized at run time from the statement's own clauses (issue #122).
+//!   That is the only case this reader ever has, so `file=NONE` is accepted
+//!   as the no-op it is (matched without regard to case) and the documented
+//!   `file=NONE contact initial_grid (n1, n2)` spelling reads as written; a
+//!   *named* file is rejected by name, as the input this reader does not
+//!   read.
 //! * The remaining documented plane parameters are rejected by name too,
 //!   each with the reason and the alternative: `rh` (plane filaments are
 //!   uniform), `segwid1`/`segwid2` (bar widths follow
-//!   the cells), `relx`/`rely`/`relz` (name the in-plane nodes instead),
-//!   and `file` (an output option this engine does not have). Nothing on a
-//!   `G` statement is silently ignored.
+//!   the cells), and `relx`/`rely`/`relz` (name the in-plane nodes
+//!   instead). Nothing on a `G` statement is silently ignored.
 //!
 //! # Semantics
 //!
@@ -1572,12 +1580,25 @@ impl<'a> PlaneStatement<'a> {
                 ));
             }
             "file" => {
-                return Err(err(
-                    line,
-                    format!(
-                        "ground plane '{head}': 'file' (dump the plane's discretization) is an output option this engine does not have"
-                    ),
-                ));
+                // `file=` is an *input*: the file holding the plane's
+                // nonuniform-discretization hierarchy, with `file=NONE`
+                // meaning there is none — the hierarchy is a single root
+                // cell, discretized at run time from the statement's own
+                // clauses (issue #122). `NONE` is therefore the one case
+                // this reader ever has, so it is accepted as the no-op it
+                // is and the documented `file=NONE contact initial_grid
+                // (n1, n2)` spelling reads; it is matched without regard to
+                // case, as every other token this reader interprets is. A
+                // *named* file is rejected by name: an input this reader
+                // does not read, not an output it does not write.
+                if !raw.eq_ignore_ascii_case("NONE") {
+                    return Err(err(
+                        line,
+                        format!(
+                            "ground plane '{head}': 'file={raw}' names the plane's nonuniform-discretization hierarchy, an input file this reader does not read (of the documented spellings only 'file=NONE' — no hierarchy file — is accepted); state the discretization in the statement itself instead, with 'seg1'/'seg2' or 'contact initial_grid (n1, n2)' plus the 'contact' refinement clauses"
+                        ),
+                    ));
+                }
             }
             "nx" | "ny" => {
                 return Err(err(
@@ -5863,6 +5884,78 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         .contains("has no 'seg1'"));
     }
 
+    /// `file=` names the plane's nonuniform-discretization *hierarchy* file —
+    /// an input, not a dump of the finished mesh — and `file=NONE` says there
+    /// is no such file, so the hierarchy is a single root cell discretized at
+    /// run time from the statement's own clauses. That is exactly what this
+    /// reader always does, so `file=NONE` is accepted as the no-op it is and
+    /// the documented spelling of an initial grid reads; a *named* file is
+    /// still rejected, as the input this reader does not read (issue #122).
+    #[test]
+    fn file_none_is_the_documented_no_op_and_a_named_hierarchy_file_is_rejected() {
+        // The public description's own equivalence, written out in full:
+        // `seg1=10 seg2=12` "could be replaced with `file=NONE contact
+        // initial_grid (10,12)`".
+        let documented = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 file=NONE contact initial_grid (10, 12)",
+            "",
+        ));
+        let segments = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=10 seg2=12",
+            "",
+        ));
+        assert_eq!(documented.geometry, segments.geometry);
+
+        // Accepting it drops nothing: the token says "no hierarchy file",
+        // which is the only case this reader has, so a plane carrying it is
+        // the same plane. Spelled case-insensitively, as every other token
+        // this reader interprets is.
+        let with_marker = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 file=none",
+            "",
+        ));
+        let without = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3",
+            "",
+        ));
+        assert_eq!(with_marker.geometry, without.geometry);
+
+        // A named file is a discretization hierarchy this reader cannot
+        // read, and the error says so — naming the file, the accepted
+        // alternative, and never calling it an output this engine lacks.
+        let error = parse(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 file=plane.mat",
+            "",
+        ))
+        .unwrap_err();
+        assert_eq!(error.line, 3);
+        assert!(
+            error.message.contains("'file=plane.mat'"),
+            "the rejection names the file it will not read, got: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("file=NONE"),
+            "the rejection names the accepted spelling, got: {}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("output"),
+            "'file' is an input, not an output option, got: {}",
+            error.message
+        );
+    }
+
     /// `seg1` counts cells along `p1 → p2` and `seg2` along `p2 → p3`,
     /// whichever axis each of those edges runs along.
     #[test]
@@ -6191,7 +6284,10 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ("relx=1", "'relx'"),
             ("rely=1", "'rely'"),
             ("relz=1", "'relz'"),
-            ("file=plane.mat", "'file'"),
+            // Only a *named* discretization hierarchy is rejected; the
+            // documented `file=NONE` is accepted as the no-op it is — see
+            // `file_none_is_the_documented_no_op_and_a_named_hierarchy_file_is_rejected`.
+            ("file=plane.mat", "'file=plane.mat'"),
             ("nx=5", "seg1"),
             ("ny=3", "seg1"),
             ("wibble=1", "unknown ground-plane parameter 'wibble'"),
