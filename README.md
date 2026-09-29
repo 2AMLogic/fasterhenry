@@ -138,12 +138,14 @@ MIT — see `LICENSE`.
 Dependencies are restricted to permissive licenses (MIT, Apache-2.0, Zlib,
 Unlicense, Unicode-3.0) — nothing copyleft, and nothing that imposes a
 source-disclosure obligation on the distributed `fasterhenry` binary, which
-links every transitive dependency. The policy is enforced in CI by `cargo deny
-check licenses`; the allowlist and the reason each license is on it are in
-`deny.toml`. Run it locally the same way:
+links every transitive dependency. Dependencies must also come from crates.io —
+no git revisions and no private registries, so every input to a release build is
+an immutable published version. Both policies are enforced in CI by `cargo deny
+check licenses sources`; the allowlist, the allowed registry and the reason each
+entry is there are in `deny.toml`. Run it locally the same way:
 
 ```bash
-cargo deny check licenses
+cargo deny check licenses sources
 ```
 
 The Apache-2.0-only dependencies (`nalgebra`, `simba`, `approx`,

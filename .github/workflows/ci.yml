@@ -30,8 +30,8 @@ jobs:
           fi
           echo "clean"
 
-  licenses:
-    name: Dependency licenses (cargo-deny)
+  dependency-policy:
+    name: Dependency licenses & sources (cargo-deny)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -65,10 +65,17 @@ jobs:
           mkdir -p /tmp/cargo-deny-bin
           tar -xzf /tmp/cargo-deny.tar.gz -C /tmp/cargo-deny-bin --strip-components=1 "$tarball/cargo-deny"
           echo /tmp/cargo-deny-bin >> "$GITHUB_PATH"
-      # The gate itself. Same command a contributor runs locally; the
-      # allowlist and the reasoning behind each entry live in deny.toml.
-      - name: cargo deny check licenses
-        run: cargo deny check licenses --show-stats
+      # The gate itself, both halves in one invocation. Same command a
+      # contributor runs locally; the allowlist, the allowed registry and the
+      # reasoning behind each entry live in deny.toml.
+      #
+      # `licenses` answers "may we ship this dependency's code?"; `sources`
+      # answers "did it come from where we think it did?" -- a git or private-
+      # registry dependency passes the license check silently, because it simply
+      # inherits whatever `license` field its manifest declares. `bans` is
+      # deliberately not checked here; deny.toml records why.
+      - name: cargo deny check licenses sources
+        run: cargo deny check licenses sources --show-stats
 
   third-party-licenses:
     name: Third-party license bundle (cargo-about)
@@ -79,8 +86,9 @@ jobs:
       # cargo-about walks the graph through `cargo metadata`, like cargo-deny
       # above, so a toolchain is needed even though nothing is compiled here.
       - uses: dtolnay/rust-toolchain@stable
-      # No Swatinem/rust-cache, for the reason spelled out in the `licenses`
-      # job: nothing is built, and the sparse registry fetch is cheap.
+      # No Swatinem/rust-cache, for the reason spelled out in the
+      # `dependency-policy` job: nothing is built, and the sparse registry
+      # fetch is cheap.
       #
       # Unlike that job, the tool is not installed by a step here: the script
       # pins cargo-about by version AND sha256 and fetches it itself, so the

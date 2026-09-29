@@ -36,6 +36,8 @@ every file for the MIT notice text and fails the build if it appears.
   `wide`/`simba`, not intrinsics.
 - No BLAS/LAPACK or other C/Fortran dependencies.
 - A new dependency must be permissively licensed — MIT, Apache-2.0, Zlib,
-  Unlicense or Unicode-3.0. `cargo deny check licenses` gates this in CI;
-  `deny.toml` holds the allowlist and why each entry is on it.
+  Unlicense or Unicode-3.0 — and must come from crates.io: no git revisions, no
+  private registries. `cargo deny check licenses sources` gates both in CI;
+  `deny.toml` holds the allowlist, the allowed registry, and why each entry is
+  there.
 - One PR per issue; PRs are reviewed by Loom's Judge and merged by Champion.
