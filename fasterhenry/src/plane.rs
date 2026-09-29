@@ -46,6 +46,28 @@
 //! (regions overlapping — or closer than one fine cell — on an axis merge
 //! into one band, keeping the finest cell and the gentlest ratio).
 //!
+//! ## A band that is not a refinement
+//!
+//! One band takes no part in that merge: one spanning the **whole axis** at
+//! the plane's own cell count for it. Such a band *is* the background mesh
+//! on that axis — its cells are the background cells, and the only edges it
+//! pins are the footprint's own, which are edges regardless — so it adds no
+//! resolution and is dropped before the bands are merged. It has to be:
+//! spanning the axis, it overlaps every other band on it, and merging keeps
+//! the finer cell across the union of the two extents, so one such band
+//! would refine the *entire* axis to the finest cell anywhere on it. That is
+//! a cost nothing in the request asked for (issue #124). A deck's `contact
+//! point` / `contact line` emits exactly this band for an axis whose
+//! requested cell the background already meets, so that axis's edges are
+//! the ones it has without the clause (issue #116).
+//!
+//! A [`ContactRegion`] cut at the background cell over only **part** of an
+//! axis is *not* dropped: it still cuts its own extent into its own cells,
+//! and so still pins its `lo` and `hi` as cell edges — a caller naming a
+//! coordinate gets an edge there even where the resolution is already met,
+//! and it still merges with a neighbour as any other band does. Only the
+//! whole-axis case is a no-op, and only the no-op is dropped.
+//!
 //! ## Cell count
 //!
 //! Per axis, for a span `W` with background count `n` (coarse cell
@@ -666,6 +688,14 @@ fn axis_edges(
     mut bands: Vec<Band>,
 ) -> Result<Vec<f64>, PlaneError> {
     let coarse = (hi - lo) / background as f64;
+    // A band spanning the whole axis at the axis's own cell count *is* the
+    // background mesh: its cells are the background cells and the only edges
+    // it pins are the footprint's own, which are edges regardless. It adds no
+    // resolution, so it takes no part in the merge below — where, spanning the
+    // axis, it would overlap every other band and widen the axis's finest cell
+    // across the whole of it (issue #124). A band at the background cell over
+    // only *part* of an axis is kept: see the module documentation.
+    bands.retain(|band| !(band.start <= lo && band.end >= hi && band.cells == background));
     if bands.is_empty() {
         let mut edges: Vec<f64> = (0..background).map(|i| lo + i as f64 * coarse).collect();
         edges.push(hi);
@@ -1875,6 +1905,106 @@ mod tests {
             .collect();
         assert_eq!(band.len(), 7, "{band:?}");
         assert!(band.iter().all(|&d| d <= 0.25e-3 + 1e-12), "{band:?}");
+    }
+
+    /// A band spanning the whole axis at the plane's own cell count is the
+    /// background mesh, not a refinement, so it is dropped before the merge
+    /// pass instead of widening every finer band on the axis across the
+    /// whole of it. On this 10 × 6 mm / 2 mm-cell plane, the whole-plane x
+    /// band a one-axis-met `contact point` emits beside a 0.1 mm region near
+    /// (1, 1) mm once cost 100 x cells — the finest cell across the entire
+    /// axis — against the 11 the 0.1 mm region costs on its own. Issue #124.
+    #[test]
+    fn a_whole_axis_background_band_never_widens_a_finer_one() {
+        // `contact point (5.3, 3, 0, 4, 0.5)`: x is already met by the 2 mm
+        // background, so it spans the plane at nx = 5; y is refined.
+        let met_on_x = ContactRegion::new([0.0, 2.75e-3], [10e-3, 3.25e-3], [5, 1], 2.0);
+        // A genuine 0.1 mm refinement, nowhere near it on either axis.
+        let fine = ContactRegion::new([0.95e-3, 0.95e-3], [1.05e-3, 1.05e-3], [1, 1], 2.0);
+        let mesh = |contacts: Vec<ContactRegion>| {
+            GroundPlane {
+                contacts,
+                ..test_plane()
+            }
+            .mesh()
+            .unwrap()
+        };
+
+        let alone = mesh(vec![fine]);
+        let both = mesh(vec![met_on_x, fine]);
+        assert_eq!(alone.nx(), 11, "the 0.1 mm region's own x cost");
+        assert_eq!(
+            both.nx(),
+            alone.nx(),
+            "the met x axis costs what the 0.1 mm region alone costs"
+        );
+        // 10 mm / 0.1 mm = the 100 cells the merge once spent on the axis.
+        assert!(
+            both.nx() < 100,
+            "the axis is not refined to 0.1 mm throughout ({})",
+            both.nx()
+        );
+        for (a, b) in both.x_edges().iter().zip(alone.x_edges()) {
+            assert!((a - b).abs() < 1e-15, "x edge {a} vs {b}");
+        }
+        // The y refinement the clause did ask for is untouched.
+        assert!(both.ny() > alone.ny(), "y is still refined by the point");
+
+        // On its own, the whole-plane band is the plain plane's x axis, edge
+        // for edge — what dropping it has to preserve (issue #116).
+        let clamped = mesh(vec![met_on_x]);
+        let plain = mesh(Vec::new());
+        assert_eq!(clamped.nx(), plain.nx());
+        for (a, b) in clamped.x_edges().iter().zip(plain.x_edges()) {
+            assert!((a - b).abs() < 1e-15, "x edge {a} vs {b}");
+        }
+    }
+
+    /// The disposition for an explicit [`ContactRegion`] cut at the
+    /// background cell: only the *whole-axis* band is a no-op and dropped.
+    /// One over part of an axis is kept, so it still pins its own edges —
+    /// even beside a finer band whose grading would otherwise move them.
+    /// Issue #124.
+    #[test]
+    fn a_part_axis_background_band_still_pins_its_edges() {
+        // 2 … 4 mm at exactly the 2 mm background cell, with a 0.1 mm region
+        // at the far end of the axis to grade the gap between them.
+        let plane = GroundPlane {
+            contacts: vec![
+                ContactRegion::new([2e-3, 2e-3], [4e-3, 4e-3], [1, 1], 2.0),
+                ContactRegion::new([8.95e-3, 2.95e-3], [9.05e-3, 3.05e-3], [1, 1], 2.0),
+            ],
+            ..test_plane()
+        };
+        let mesh = plane.mesh().unwrap();
+        for pin in [2e-3, 4e-3] {
+            assert!(
+                mesh.x_edges().iter().any(|e| (e - pin).abs() < 1e-12),
+                "the band's own edge at {pin} m is pinned: {:?}",
+                mesh.x_edges()
+            );
+        }
+        // Dropping it instead would grade that gap straight past those
+        // edges: without the band the same plane has neither.
+        let ungraded = GroundPlane {
+            contacts: vec![ContactRegion::new(
+                [8.95e-3, 2.95e-3],
+                [9.05e-3, 3.05e-3],
+                [1, 1],
+                2.0,
+            )],
+            ..test_plane()
+        }
+        .mesh()
+        .unwrap();
+        assert!(
+            !ungraded
+                .x_edges()
+                .iter()
+                .any(|e| (e - 2e-3).abs() < 1e-12 || (e - 4e-3).abs() < 1e-12),
+            "the pins come from the band, not from the grading: {:?}",
+            ungraded.x_edges()
+        );
     }
 
     #[test]
