@@ -290,6 +290,26 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader: `file=NONE` on a corner-point `G` ground-plane statement is
+  now **accepted** as the no-op it is, and a *named* file is rejected for the
+  right reason (issue #122, found while implementing #113). The public
+  nonuniform-plane description defines `file=` as an **input** — the file
+  holding the plane's discretization hierarchy — with `NONE` meaning there is
+  no such file, so the hierarchy is a single root cell discretized at run
+  time from the statement's own clauses. That is the only case this reader
+  ever has, so the token drops nothing; and it is the spelling the public
+  description's own equivalence uses (`seg1=10 seg2=12` "could be replaced
+  with `file=NONE contact initial_grid (10,12)`"), which until now this
+  reader rejected on the `file=NONE` token even though it reads every other
+  part of that line (issue #113). Matched without regard to case, like every
+  other token this reader interprets. A named hierarchy file is still a
+  line-numbered error — silently ignoring one would mesh the plane at a
+  resolution the deck never asked for — but the message no longer calls
+  `file=` "an output option this engine does not have": it names the file,
+  says it is an input this reader does not read, and points at the
+  in-statement alternatives (`seg1`/`seg2` or `contact initial_grid (n1,
+  n2)`, plus the `contact` refinement clauses). No deck that parsed before
+  changes meaning. See `docs/fasthenry-compat.md`'s two `file=` rows.
 - Deck reader: a `contact` clause's `x…`/`y…` pair of lengths on a
   corner-point `G` ground-plane statement is now read in the **plane's own**
   coordinate system — `x…` along the `p1 → p2` edge, `y…` along `p2 → p3` —
