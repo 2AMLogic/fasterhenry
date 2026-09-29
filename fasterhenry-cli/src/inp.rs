@@ -198,6 +198,43 @@
 //!   about `Lx/xcell + Ly/ycell`; an axis-aligned line costs nothing
 //!   extra. The request itself is always honoured, overlapping regions
 //!   included: merged bands keep their finest cell.
+//! * **`contact trace (x0, y0, z0, x1, y1, z1, trace_width,
+//!   scale_factor)`** (issue #110) refines the plane under a trace whose
+//!   *projection* onto the plane runs from `(x0, y0)` to `(x1, y1)` —
+//!   finely across the trace, not along it. Source: the public memo
+//!   *Nonuniformly Discretized Reference Planes in FastHenry 3.0* (M.
+//!   Kamon, 10 October 1996, section "Grouped contact utilities"), which
+//!   describes the utility as a handful of `contact line` refinements
+//!   keeping the cells under the trace no bigger than `trace_width/2`
+//!   across it and the cells beside it no bigger than `trace_width`, and
+//!   spells the lines out in a worked example along x. For a trace of length `L` and width `w` along
+//!   x, it is exactly these five `contact line`s (along y, the same with
+//!   the axes swapped):
+//!     * at `y`, `y + w/2` and `y − w/2`, cells `(L, w/2)`;
+//!     * at `y + 3w/2` and `y − 3w/2`, cells `(L, w)`.
+//!
+//!   The along-trace cell is the trace's own length, so once that reaches
+//!   the background cell the trace adds no refinement along itself; each
+//!   line then maps onto a region exactly as `contact line` does above
+//!   (clamping included). The memo states that `scale_factor` has no
+//!   effect on a trace parallel to x or y, so here it is only checked to
+//!   be positive. Both ends are checked against the plane's slab and
+//!   footprint on the statement's own line; the side lines are not — the
+//!   deck named the trace, not them — so beside a trace along the plane's
+//!   edge they are clipped to the plane (or dropped, where they miss it)
+//!   instead. A zero-length trace has no direction to refine across and is
+//!   an error naming `contact point` instead.
+//!
+//!   A trace **not parallel to x or y** is rejected by name, on the
+//!   statement's own line, and the rejection is a decision rather than
+//!   deferred work (see `docs/fasthenry-compat.md`, "Decision: a diagonal
+//!   `contact trace` is rejected"): the same memo says the cells under a
+//!   diagonal trace are magnified by `scale_factor^|tan θ|` (θ from the x
+//!   axis) and, a paragraph earlier, that the magnification runs from 1 to
+//!   `scale_factor` as θ goes from 90° to 45° — which disagree for every
+//!   angle past 45° — and it never says where a diagonal trace's side
+//!   lines go or what along-trace cell its lines ask for. The error names
+//!   `contact line` instead, with which a deck states the cell outright.
 //! * **`contact equiv_rect N<name> (x, y, z, xwidth, ywidth)`** declares a
 //!   *contact area*: the rectangle — centre and full widths, as
 //!   `decay_rect` spells it — is tied to one node, named here, so a deck
@@ -253,13 +290,15 @@
 //!   with a single cell has no even index and so no hole.
 //! * Every other documented shape is **rejected by name** too, on the
 //!   statement's own line: this engine's holes are rectangles, points or
-//!   circles and its contacts rectangles, points, lines or tied areas, and
+//!   circles and its contacts rectangles, points, lines, axis-aligned
+//!   traces or tied areas, and
 //!   a shape whose semantics have not been stated and tested must not be
 //!   quietly approximated by one of those. Unlike the user-defined holes,
 //!   these have a public meaning, and each is rejected for its own stated
 //!   reason:
-//!     * `contact trace` — issue #110 (how `trace_width` and
-//!       `scale_factor` set the cell size still to be pinned).
+//!     * `contact trace` **not parallel to x or y** — see its own entry
+//!       above (issue #110: the public description of the diagonal case
+//!       does not determine the cell size);
 //! * **`contact circle` is rejected by name as well — and it is not a
 //!   documented shape at all** (issue #109). The public description of the
 //!   `contact` family names the simple refinement utilities `point`,
@@ -1112,6 +1151,117 @@ fn refine_line_values(
     Ok(RefineLine { ends, cell })
 }
 
+/// A `contact trace` clause parallel to x or y, kept raw until the plane's
+/// own geometry is known (its ends are checked against the slab and the
+/// footprint there). See the [module documentation](self).
+#[derive(Clone, Copy, Debug)]
+struct RefineTrace {
+    /// The trace projection's two ends `(x, y, z)`, metres.
+    ends: [[f64; 3]; 2],
+    /// `trace_width`, metres.
+    width: f64,
+    /// The axis the trace runs along: 0 for x, 1 for y.
+    along: usize,
+}
+
+impl RefineTrace {
+    /// The documented expansion into `contact line`s (the public memo
+    /// *Nonuniformly Discretized Reference Planes in FastHenry 3.0*, M.
+    /// Kamon, 1996, section "Grouped contact utilities"): its worked
+    /// example of a trace along x expands to five lines along the trace —
+    /// at offsets `0` and `±w/2` across it with cells `(L, w/2)`, and at
+    /// `±3w/2` with cells `(L, w)`, where `w` is `trace_width` and `L` the
+    /// trace's length, so there is no refinement along it. The memo states
+    /// that `scale_factor` has no effect on such a trace.
+    fn lines(&self) -> [RefineLine; 5] {
+        let across = 1 - self.along;
+        let length = (self.ends[1][self.along] - self.ends[0][self.along]).abs();
+        let w = self.width;
+        [
+            (0.0, w / 2.0),
+            (w / 2.0, w / 2.0),
+            (-w / 2.0, w / 2.0),
+            (1.5 * w, w),
+            (-1.5 * w, w),
+        ]
+        .map(|(offset, across_cell)| {
+            let mut ends = self.ends;
+            for end in &mut ends {
+                end[across] += offset;
+            }
+            let mut cell = [0.0; 2];
+            cell[self.along] = length;
+            cell[across] = across_cell;
+            RefineLine { ends, cell }
+        })
+    }
+}
+
+/// The values of a `contact trace (x0, y0, z0, x1, y1, z1, trace_width,
+/// scale_factor)` clause. A trace not parallel to x or y is rejected here,
+/// by name: see the [module documentation](self) for why.
+fn refine_trace_values(
+    values: &[String],
+    what: &str,
+    unit: f64,
+    line: usize,
+) -> Result<RefineTrace, ParseError> {
+    if values.len() != 8 {
+        return Err(err(
+            line,
+            format!(
+                "{what} takes 8 values (x0, y0, z0, x1, y1, z1, trace_width, scale_factor), got {}",
+                values.len()
+            ),
+        ));
+    }
+    let ends = [
+        triple(&values[..3], what, unit, line)?,
+        triple(&values[3..6], what, unit, line)?,
+    ];
+    let width = parse_number(&values[6], line)? * unit;
+    if width <= 0.0 {
+        return Err(err(
+            line,
+            format!("{what}: trace_width={width} metres must be > 0"),
+        ));
+    }
+    // Dimensionless: a magnification of the cells under a diagonal trace.
+    let scale = parse_number(&values[7], line)?;
+    if scale <= 0.0 {
+        return Err(err(
+            line,
+            format!(
+                "{what}: scale_factor={scale} must be > 0 — it magnifies the cells under the trace"
+            ),
+        ));
+    }
+    let dx = (ends[1][0] - ends[0][0]).abs();
+    let dy = (ends[1][1] - ends[0][1]).abs();
+    if dx == 0.0 && dy == 0.0 {
+        return Err(err(
+            line,
+            format!(
+                "{what} has zero length, so it has no direction to refine across; use 'contact point (x, y, z, xcell, ycell)' for a point"
+            ),
+        ));
+    }
+    let along = if dy <= 1e-9 * dx {
+        0
+    } else if dx <= 1e-9 * dy {
+        1
+    } else {
+        return Err(err(
+            line,
+            format!(
+                "{what} from ({}, {}) to ({}, {}) metres is not parallel to x or y, and a diagonal 'contact trace' is not supported: the public description says the cells under it are magnified by scale_factor^|tan θ| yet also that the magnification runs from 1 to scale_factor as θ goes from 90° to 45°, which disagree past 45°, and it does not say where a diagonal trace's refining lines go or what cell they ask for along the trace, so this reader will not guess the cell size. Refine under it explicitly with 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' — a diagonal line refines its bounding box to the cell you choose (see docs/fasthenry-compat.md)",
+                ends[0][0], ends[0][1], ends[1][0], ends[1][1]
+            ),
+        ));
+    };
+    Ok(RefineTrace { ends, width, along })
+}
+
 /// The fewest uniform cells across `span` whose extent is no larger than
 /// `cell` — `ceil(span / cell)`, except that a span that is an exact
 /// multiple of `cell` must not gain a spurious extra cell from a last-bit
@@ -1201,6 +1351,9 @@ struct PlaneStatement<'a> {
     contact_decays: Vec<DecayRect>,
     /// `contact point` / `contact line`, with the clause's own name.
     contact_lines: Vec<(&'static str, RefineLine)>,
+    /// `contact trace` parallel to x or y: five `contact line`s once its
+    /// own ends are checked.
+    contact_traces: Vec<RefineTrace>,
     /// `contact equiv_rect` / `contact connection`: the named contact areas,
     /// each becoming one `Equipotential` and one in-plane node.
     contact_equivs: Vec<EquivRect>,
@@ -1413,6 +1566,10 @@ impl<'a> PlaneStatement<'a> {
                     refine_line_values(values, true, &what, unit, line)?,
                 ));
             }
+            ("contact", "trace") => {
+                self.contact_traces
+                    .push(refine_trace_values(values, &what, unit, line)?);
+            }
             ("contact", "equiv_rect") => self.apply_contact_equiv_rect(what, name, values)?,
             ("contact", "connection") => self.apply_contact_connection(what, name, values)?,
             ("contact", "initial_grid") => self.apply_initial_grid(false, what, values)?,
@@ -1615,7 +1772,7 @@ impl<'a> PlaneStatement<'a> {
             (_, other) => err(
                 line,
                 format!(
-                    "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)' or 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' (and '.contact' to set a rectangle's refinement directly, or 'contact equiv_rect N<name> (x, y, z, xwidth, ywidth)' / 'contact connection N<name> (x, y, z, xwidth, ywidth, ratio)' to tie a rectangle of cells to one node)"
+                    "ground plane '{head}': 'contact {other}' is not supported; this engine's contacts are axis-aligned rectangles refined in place, so use 'contact rect (x1, y1, z1, x2, y2, z2)', 'contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)', 'contact point (x, y, z, xcell, ycell)', 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' or 'contact trace (x0, y0, z0, x1, y1, z1, trace_width, scale_factor)' along x or y (and '.contact' to set a rectangle's refinement directly, or 'contact equiv_rect N<name> (x, y, z, xwidth, ywidth)' / 'contact connection N<name> (x, y, z, xwidth, ywidth, ratio)' to tie a rectangle of cells to one node)"
                 ),
             ),
         }
@@ -1754,6 +1911,7 @@ impl<'a> PlaneStatement<'a> {
             contact_rects,
             contact_decays,
             contact_lines,
+            contact_traces,
             contact_equivs,
             ..
         } = self;
@@ -1797,6 +1955,9 @@ impl<'a> PlaneStatement<'a> {
             if let Some(region) = frame.refine_contact(what, &refine)? {
                 contacts.push(region);
             }
+        }
+        for trace in &contact_traces {
+            contacts.extend(frame.trace_contacts(trace)?);
         }
 
         // A named contact area is one equipotential patch plus the in-plane
@@ -2015,12 +2176,58 @@ impl PlaneFrame<'_> {
         ))
     }
 
-    /// The region a `contact point` / `contact line` refines: the segment's
-    /// bounding box, padded by half a requested cell each side, cut into
-    /// cells no coarser than that cell and graded outward at the reader's
-    /// default ratio 2 — or `None` when the background mesh already meets
-    /// the request on both axes. See the module documentation for why the
-    /// box is exact, not a compromise, on this engine's tensor-product mesh.
+    /// Both ends of a deck-given refinement locus (`contact point` /
+    /// `contact line` / `contact trace`) in the slab and on the footprint.
+    fn on_plane(&self, what: &str, end: [f64; 3]) -> Result<(), ParseError> {
+        self.in_slab(what, end)?;
+        if !self.contains(end) {
+            return Err(err(
+                self.line,
+                format!(
+                    "{what}: ({}, {}) metres is outside ground plane '{}'",
+                    end[0], end[1], self.head
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The region a `contact point` / `contact line` refines, once its ends
+    /// are checked against the plane — see [`PlaneFrame::refine_region`].
+    fn refine_contact(
+        &self,
+        what: &str,
+        refine: &RefineLine,
+    ) -> Result<Option<ContactRegion>, ParseError> {
+        for end in refine.ends {
+            self.on_plane(what, end)?;
+        }
+        Ok(self.refine_region(refine))
+    }
+
+    /// The regions a `contact trace` refines: its five documented lines,
+    /// once the trace's own ends are checked against the plane. Only those
+    /// ends are the deck's locus: the lines beside a trace running along
+    /// the plane's edge may fall partly off it, and their regions are
+    /// clipped like any other (or dropped, where they miss it).
+    fn trace_contacts(&self, trace: &RefineTrace) -> Result<Vec<ContactRegion>, ParseError> {
+        for end in trace.ends {
+            self.on_plane("'contact trace'", end)?;
+        }
+        Ok(trace
+            .lines()
+            .iter()
+            .filter_map(|refine| self.refine_region(refine))
+            .collect())
+    }
+
+    /// The region a refinement line asks for: the segment's bounding box,
+    /// padded by half a requested cell each side, cut into cells no coarser
+    /// than that cell and graded outward at the reader's default ratio 2 —
+    /// or `None` when the background mesh already meets the request on both
+    /// axes, or the region misses the plane entirely. See the module
+    /// documentation for why the box is exact, not a compromise, on this
+    /// engine's tensor-product mesh.
     ///
     /// An axis the background mesh already meets is *not* banded around the
     /// request: it spans the whole plane at the plane's own cell count, so
@@ -2030,23 +2237,7 @@ impl PlaneFrame<'_> {
     /// genuinely finer refinement elsewhere on the axis across the whole of
     /// it — see `fasterhenry::plane` § *A band that is not a refinement*
     /// (issue #124).
-    fn refine_contact(
-        &self,
-        what: &str,
-        refine: &RefineLine,
-    ) -> Result<Option<ContactRegion>, ParseError> {
-        for end in refine.ends {
-            self.in_slab(what, end)?;
-            if !self.contains(end) {
-                return Err(err(
-                    self.line,
-                    format!(
-                        "{what}: ({}, {}) metres is outside ground plane '{}'",
-                        end[0], end[1], self.head
-                    ),
-                ));
-            }
-        }
+    fn refine_region(&self, refine: &RefineLine) -> Option<ContactRegion> {
         let mut region = ([0.0f64; 2], [0.0f64; 2]);
         let mut region_cells = [0usize; 2];
         let mut already_met = true;
@@ -2077,7 +2268,14 @@ impl PlaneFrame<'_> {
             region.1[axis] = a.max(b) + cell / 2.0;
             *count = cells_no_coarser_than(region.1[axis] - region.0[axis], cell);
         }
-        Ok((!already_met).then(|| ContactRegion::new(region.0, region.1, region_cells, 2.0)))
+        // Only a trace's side lines can miss the plane entirely (every
+        // other locus has its ends on the footprint): such a region
+        // refines no cell of this plane, so it is dropped rather than
+        // handed to the library, which rejects a region off the plane.
+        let off_plane = (0..2)
+            .any(|axis| region.1[axis].min(self.hi[axis]) <= region.0[axis].max(self.lo[axis]));
+        (!already_met && !off_plane)
+            .then(|| ContactRegion::new(region.0, region.1, region_cells, 2.0))
     }
 
     /// An in-plane node must lie on the plane and in its slab.
@@ -4654,6 +4852,206 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         }
     }
 
+    /// The same mesh up to the last bit of a coordinate: a trace's side
+    /// lines sit at `y ± offset`, which need not round to the same double
+    /// as the offset position written out in the deck.
+    fn assert_same_mesh(a: &Deck, b: &Deck) {
+        let (p, q) = (a.geometry.nodes(), b.geometry.nodes());
+        assert_eq!(p.len(), q.len());
+        assert_eq!(a.geometry.segment_count(), b.geometry.segment_count());
+        for (m, n) in p.iter().zip(q) {
+            assert!(
+                (m.x - n.x).abs() < 1e-15 && (m.y - n.y).abs() < 1e-15 && m.z == n.z,
+                "{m:?} vs {n:?}"
+            );
+        }
+    }
+
+    /// `contact trace` along x is exactly the documented five `contact
+    /// line`s: under the trace (its centre line and both edges) cells no
+    /// wider than `trace_width/2` across it, the lines `1.5 · trace_width`
+    /// either side no wider than `trace_width`, and the trace's own length
+    /// along it (no refinement there once it reaches the background cell).
+    /// `scale_factor` has no effect on an axis-aligned trace, and the ends
+    /// may be given either way round.
+    #[test]
+    fn contact_trace_along_x_is_the_documented_five_lines() {
+        let trace = parse_ok(&refine_deck("contact trace (2, 3, 0, 8, 3, 0, 0.4, 1)"));
+        let lines = parse_ok(&refine_deck(
+            "contact line (2, 3, 0, 8, 3, 0, 6, 0.2)\n\
+             + contact line (2, 3.2, 0, 8, 3.2, 0, 6, 0.2)\n\
+             + contact line (2, 2.8, 0, 8, 2.8, 0, 6, 0.2)\n\
+             + contact line (2, 3.6, 0, 8, 3.6, 0, 6, 0.4)\n\
+             + contact line (2, 2.4, 0, 8, 2.4, 0, 6, 0.4)",
+        ));
+        assert_same_mesh(&trace, &lines);
+        let plain = parse_ok(&plane_deck(REFINE_PLANE, ""));
+        assert_ne!(
+            trace.geometry, plain.geometry,
+            "the trace refines the plane"
+        );
+
+        let scaled = parse_ok(&refine_deck("contact trace (2, 3, 0, 8, 3, 0, 0.4, 7)"));
+        assert_eq!(
+            scaled.geometry, trace.geometry,
+            "scale_factor has no effect"
+        );
+        let reversed = parse_ok(&refine_deck("contact trace (8, 3, 0, 2, 3, 0, 0.4, 1)"));
+        assert_eq!(reversed.geometry, trace.geometry);
+    }
+
+    /// The same along y, checked on the mesh itself: every cell under the
+    /// trace is no wider (in x) than `trace_width/2`, every cell out to
+    /// `1.5 · trace_width` either side no wider than `trace_width`, and a
+    /// trace shorter than the background cell refines along its length to
+    /// that length.
+    #[test]
+    fn contact_trace_along_y_refines_across_it_only() {
+        let trace = parse_ok(&refine_deck("contact trace (5, 1, 0, 5, 5, 0, 0.4, 3)"));
+        let lines = parse_ok(&refine_deck(
+            "contact line (5, 1, 0, 5, 5, 0, 0.2, 4)\n\
+             + contact line (5.2, 1, 0, 5.2, 5, 0, 0.2, 4)\n\
+             + contact line (4.8, 1, 0, 4.8, 5, 0, 0.2, 4)\n\
+             + contact line (5.6, 1, 0, 5.6, 5, 0, 0.4, 4)\n\
+             + contact line (4.4, 1, 0, 4.4, 5, 0, 0.4, 4)",
+        ));
+        assert_same_mesh(&trace, &lines);
+
+        // The same five regions through the library (y along the trace is
+        // 4 mm, at or above the 2 mm background cell, so it is clamped).
+        let regions = [(5.0, 0.2), (5.2, 0.2), (4.8, 0.2), (5.6, 0.4), (4.4, 0.4)]
+            .iter()
+            .map(|&(x, cell): &(f64, f64)| {
+                ContactRegion::new(
+                    [(x - cell / 2.0) * 1e-3, 0.0],
+                    [(x + cell / 2.0) * 1e-3, 6e-3],
+                    [1, 3],
+                    2.0,
+                )
+            })
+            .collect();
+        let mesh = refine_test_plane(regions).mesh().unwrap();
+        for step in 0..=240 {
+            let x = 5e-3 + (f64::from(step) / 240.0 - 0.5) * 1.2e-3;
+            let i = cell_holding(mesh.x_edges(), x);
+            let limit = if (x - 5e-3).abs() <= 0.2e-3 + 1e-12 {
+                0.2e-3
+            } else {
+                0.4e-3
+            };
+            assert!(mesh.dx(i) <= limit + 1e-15, "dx {} at x={x}", mesh.dx(i));
+        }
+
+        // A 1 mm trace against a 2 mm background: 1 mm cells along it.
+        let short = parse_ok(&refine_deck("contact trace (5, 2, 0, 5, 3, 0, 0.4, 1)"));
+        let short_lines = parse_ok(&refine_deck(
+            "contact line (5, 2, 0, 5, 3, 0, 0.2, 1)\n\
+             + contact line (5.2, 2, 0, 5.2, 3, 0, 0.2, 1)\n\
+             + contact line (4.8, 2, 0, 4.8, 3, 0, 0.2, 1)\n\
+             + contact line (5.6, 2, 0, 5.6, 3, 0, 0.4, 1)\n\
+             + contact line (4.4, 2, 0, 4.4, 3, 0, 0.4, 1)",
+        ));
+        assert_same_mesh(&short, &short_lines);
+    }
+
+    /// Only the trace's own ends are checked against the plane's footprint:
+    /// the refining lines beside a trace running along the plane's edge
+    /// fall partly off it, and are clipped like any other region.
+    #[test]
+    fn contact_trace_along_the_plane_edge_is_accepted() {
+        let edge = parse_ok(&refine_deck("contact trace (1, 0.1, 0, 9, 0.1, 0, 0.4, 1)"));
+        let plain = parse_ok(&plane_deck(REFINE_PLANE, ""));
+        assert_ne!(edge.geometry, plain.geometry);
+        // Cells no taller than 0.2 mm under the trace put a cell centre
+        // within 0.1 mm of y = 0.1 mm, which the 2 mm background (centres
+        // at y = 1, 3, 5 mm) never has; the via's nodes sit at y = 3 mm.
+        assert!(
+            edge.geometry
+                .nodes()
+                .iter()
+                .any(|n| (n.y - 0.1e-3).abs() <= 0.1e-3 + 1e-15),
+            "a refined cell lies under the trace"
+        );
+        // Written out by hand, the line at y = −0.5 mm is off the plane.
+        let error = parse(&refine_deck(
+            "contact line (1, -0.5, 0, 9, -0.5, 0, 8, 0.4)",
+        ))
+        .unwrap_err();
+        assert!(error.message.contains("is outside ground plane 'Gp'"));
+    }
+
+    /// A trace not parallel to x or y is rejected by name on the
+    /// statement's own line: the public description of how `scale_factor`
+    /// applies to it does not determine the cell size (see
+    /// `docs/fasthenry-compat.md`, "Decision: a diagonal `contact trace`").
+    /// The error names the explicit alternative, `contact line`.
+    #[test]
+    fn a_diagonal_contact_trace_is_rejected_and_names_the_alternative() {
+        for clause in [
+            "contact trace (1, 1, 0, 9, 5, 0, 0.2, 1)",
+            "contact trace (1, 1, 0, 5, 5, 0, 0.2, 10)",
+            "contact trace (5, 1, 0, 5.1, 5, 0, 0.2, 1)",
+        ] {
+            let error = parse(&refine_deck(clause)).unwrap_err();
+            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
+            for expected in [
+                "'contact trace'",
+                "is not parallel to x or y",
+                "a diagonal 'contact trace' is not supported",
+                "scale_factor",
+                "contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)",
+            ] {
+                assert!(
+                    error.message.contains(expected),
+                    "'{clause}' must name {expected}, got: {}",
+                    error.message
+                );
+            }
+        }
+    }
+
+    /// Every `contact trace` value the reader cannot honour is rejected by
+    /// name on the statement's own line.
+    #[test]
+    fn contact_trace_parameter_errors() {
+        for (clause, expected) in [
+            ("contact trace (1, 3, 0, 9, 3, 0, 0.2)", "takes 8 values"),
+            (
+                "contact trace (1, 3, 0, 9, 3, 0, 0.2, 1, 1)",
+                "takes 8 values",
+            ),
+            ("contact trace (1, 3, 0, 9, 3, 0, 0, 1)", "trace_width=0"),
+            (
+                "contact trace (1, 3, 0, 9, 3, 0, -0.2, 1)",
+                "trace_width=-0.0002",
+            ),
+            ("contact trace (1, 3, 0, 9, 3, 0, 0.2, 0)", "scale_factor=0"),
+            (
+                "contact trace (1, 3, 0, 9, 3, 0, 0.2, -1)",
+                "scale_factor=-1",
+            ),
+            ("contact trace (5, 3, 0, 5, 3, 0, 0.2, 1)", "zero length"),
+            // z is checked against the plane's slab, as every clause's is.
+            (
+                "contact trace (1, 3, 0, 9, 3, 3, 0.2, 1)",
+                "is not in ground plane 'Gp'",
+            ),
+            // …and x/y of the trace's own ends against its footprint.
+            (
+                "contact trace (1, 3, 0, 11, 3, 0, 0.2, 1)",
+                "is outside ground plane 'Gp'",
+            ),
+        ] {
+            let error = parse(&refine_deck(clause)).unwrap_err();
+            assert_eq!(error.line, 3, "'{clause}' reports the statement's line");
+            assert!(
+                error.message.contains(expected),
+                "'{clause}' must name what it rejects, got: {}",
+                error.message
+            );
+        }
+    }
+
     /// A deck that names a contact *area*: `contact equiv_rect` ties every
     /// cell centre inside its rectangle to the one node it names, and a
     /// reference to that node — here through `.equiv` — lands on the tie
@@ -5322,9 +5720,11 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ("ny=3", "seg1"),
             ("wibble=1", "unknown ground-plane parameter 'wibble'"),
             ("hole user1 (5, 3, 0)", "'hole user1' is not supported"),
+            // A diagonal trace stays rejected (issue #110): its cell size
+            // is not determined by the public description.
             (
-                "contact trace (1, 1, 0, 9, 5, 0, 0.2)",
-                "'contact trace' is not supported",
+                "contact trace (1, 1, 0, 9, 5, 0, 0.2, 1)",
+                "a diagonal 'contact trace' is not supported",
             ),
         ] {
             let error = bad(extra);

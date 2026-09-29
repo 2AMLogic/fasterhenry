@@ -34,6 +34,27 @@ breaking changes to the API or the command-line interface; patch releases
   are one statement, a plane giving both (in either order), or two initial
   grids, is a line-numbered error rather than a race between them; no deck
   that parsed before changes meaning.
+- Deck reader: the `contact trace (x0, y0, z0, x1, y1, z1, trace_width,
+  scale_factor)` clause on a corner-point `G` ground-plane statement, for a
+  trace **parallel to x or y** (issue #110, follow-up to #100). It refines
+  the plane finely across the trace's projection but not along it, and is
+  exactly the five `contact line`s the public memo *Nonuniformly
+  Discretized Reference Planes in FastHenry 3.0* (M. Kamon, 1996) spells
+  out in its worked example: at the trace and `±trace_width/2` either side,
+  cells `trace_width/2` across; at `±3·trace_width/2`, cells `trace_width`
+  across; along the trace, cells as long as the trace. `scale_factor` has
+  no effect on an axis-aligned trace (the memo says so) and is only checked
+  to be positive. The trace's own ends are checked against the plane's
+  slab and footprint on the statement's own line; its side lines are
+  clipped to the plane, so a trace along the plane's edge is accepted. A
+  zero-length trace is a line-numbered error naming `contact point`. A
+  trace **not** parallel to x or y stays rejected by name, now as a
+  decision rather than deferred work: the memo's two statements of how
+  `scale_factor` magnifies a diagonal trace's cells disagree past 45°, and
+  it never says where a diagonal trace's side lines go, so the cell size
+  is not determined — the error names `contact line` instead (see
+  `docs/fasthenry-compat.md`, "Decision: a diagonal `contact trace` is
+  rejected").
 - Deck reader / library: named **contact areas** on a corner-point `G`
   ground-plane statement — `contact equiv_rect N<name> (x, y, z, xwidth,
   ywidth)` and its documented shorthand `contact connection N<name> (x, y,
@@ -164,7 +185,8 @@ breaking changes to the API or the command-line interface; patch releases
   (`hole user1…user7`, since decided as a permanent rejection — see its
   entry under "Changed"), #100 (`contact point`, `line`, `circle`, `trace`;
   `point` and `line` have since been implemented — see #100's own entry
-  below, with `circle` and `trace` moved to #109 and #110)
+  below, with `circle` and `trace` moved to #109 and #110; `trace` along x
+  or y has since been implemented — see #110's own entry above)
   and #101 (`contact equiv_rect`, `connection`, `initial_grid`,
   `initial_mesh_grid`; `equiv_rect` and `connection` have since been
   implemented — see #101's own entry above — with the two `initial_*` forms
@@ -207,7 +229,8 @@ breaking changes to the API or the command-line interface; patch releases
   trace` keep their line-numbered rejection, now tracked in #109 and #110:
   the second's cell-size rule is not yet pinned from the public
   documentation and is not guessed, and the first turned out not to be a
-  documented shape at all — see its entry under Changed below.
+  documented shape at all — see its entry under Changed below. (`contact
+  trace` along x or y has since been implemented — see #110's entry above.)
 - Library: `ContactRegion::graded_per_axis`, a contact region whose outward
   decay ratio is chosen per axis — what an anisotropically refined region
   needs, and what `contact decay_rect` derives from the deck (issue #80).
