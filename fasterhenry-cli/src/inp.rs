@@ -88,6 +88,29 @@
 //!   equal resolution, not an identical node set. The `contact
 //!   initial_grid` / `contact initial_mesh_grid` clauses below set this
 //!   same pair, and a statement giving both is an error.
+//! * **The plane's own coordinate system.** `p1` is its origin, the vector
+//!   `p1 → p2` its x-direction and `p2 → p3` its y-direction — the frame the
+//!   public description defines for a corner-point plane, and the frame it
+//!   then states the `contact` clauses' cell sizes in. So every `x…`/`y…`
+//!   pair of *lengths* in the clauses below is read along those two edges
+//!   rather than along global x and y: `contact point`'s and `contact
+//!   line`'s `xcell`/`ycell`, `contact decay_rect`'s `xwidth`/`ywidth`,
+//!   `xcell`/`ycell` and `xmaxcell`/`ymaxcell`, `contact equiv_rect`'s and
+//!   `contact connection`'s `xwidth`/`ywidth`, and — as its own entry below
+//!   already says — `contact initial_grid`'s two counts. On a plane whose
+//!   `p1 → p2` edge runs along global **y**, `xcell` is therefore the cell
+//!   size across global y, and an anisotropic request is not transposed
+//!   (issue #118; `docs/fasthenry-compat.md` records the evidence). It is
+//!   the same convention `seg1`/`seg2` already follow, and for the usual
+//!   plane — `p1 → p2` along global x, as every public example writes it —
+//!   the two readings coincide.
+//!
+//!   **Coordinates are not relative.** Every `(x, y, z)` in the statement's
+//!   body — in-plane nodes, holes, and the contact clauses' points, ends and
+//!   rectangle centres — is an ordinary global deck coordinate, checked
+//!   against this plane's footprint and slab. `p1` is the origin of a frame
+//!   used for *directions* and for the `initial_mesh_grid` cell numbering,
+//!   not an offset to add.
 //! * **`sigma=`** is per deck unit exactly as elsewhere, and so is its
 //!   reciprocal **`rho=`**, which this form takes on the statement too;
 //!   naming both on one statement — continuation lines included — is an
@@ -137,7 +160,8 @@
 //!   values are the rectangle's **centre** `(x, y, z)`, its **full
 //!   widths** `xwidth`/`ywidth` about that centre, the largest cell wanted
 //!   **inside** it (`xcell`/`ycell`) and the largest cell its outward
-//!   decay may grow to (`xmaxcell`/`ymaxcell`, negative for no limit).
+//!   decay may grow to (`xmaxcell`/`ymaxcell`, negative for no limit). All
+//!   three pairs run along the plane's own axes (`p1 → p2` first), as above.
 //!   Each axis is read on its own:
 //!     * the fine cells are the fewest whose extent is no larger than that
 //!       axis's `cell` — `ceil(width / cell)`, so 2 mm at `cell=1` is 2
@@ -190,7 +214,8 @@
 //! * **`contact point (x, y, z, xcell, ycell)`** and **`contact line (x0,
 //!   y0, z0, x1, y1, z1, xcell, ycell)`** (issue #100) ask that every cell
 //!   holding the point, or crossed by the line, be no larger than `xcell`
-//!   across x and `ycell` across y. Both map onto a
+//!   along the plane's first edge and `ycell` along its second (the plane's
+//!   own coordinate system, as above). Both map onto a
 //!   [`fasterhenry::plane::ContactRegion`]:
 //!     * the region is the locus's bounding box padded by half a requested
 //!       cell on every side, cut into the fewest cells no larger than that
@@ -245,7 +270,11 @@
 //!   line then maps onto a region exactly as `contact line` does above
 //!   (clamping included). The memo states that `scale_factor` has no
 //!   effect on a trace parallel to x or y, so here it is only checked to
-//!   be positive. Both ends are checked against the plane's slab and
+//!   be positive. The clause carries no `x…`/`y…` pair of its own — one
+//!   `trace_width`, and a direction taken from its ends — and its expansion
+//!   is symmetric in the two axes, so the plane-coordinate convention above
+//!   leaves it alone: rotating the plane rotates the trace with it
+//!   (issue #118). Both ends are checked against the plane's slab and
 //!   footprint on the statement's own line; the side lines are not — the
 //!   deck named the trace, not them — so beside a trace along the plane's
 //!   edge they are clipped to the plane (or dropped, where they miss it)
@@ -264,7 +293,8 @@
 //!   `contact line` instead, with which a deck states the cell outright.
 //! * **`contact equiv_rect N<name> (x, y, z, xwidth, ywidth)`** declares a
 //!   *contact area*: the rectangle — centre and full widths, as
-//!   `decay_rect` spells it — is tied to one node, named here, so a deck
+//!   `decay_rect` spells it, and like `decay_rect`'s widths measured along
+//!   the plane's own axes — is tied to one node, named here, so a deck
 //!   can `.equiv` an external node onto a whole landing pad instead of a
 //!   point (issue #101). It maps onto
 //!   [`fasterhenry::plane::Equipotential`]: every live cell centre inside
@@ -998,9 +1028,11 @@ struct EquivRect {
     what: String,
     /// The node name the clause carries, as written (case-sensitive).
     name: String,
-    /// The rectangle's centre `(x, y, z)`, metres.
+    /// The rectangle's centre `(x, y, z)`, metres — global coordinates.
     centre: [f64; 3],
-    /// Its full widths `(x, y)`, metres.
+    /// Its full widths `(xwidth, ywidth)`, metres, in the **plane's own**
+    /// coordinate system: index 0 along `p1 → p2`, index 1 along `p2 → p3`.
+    /// [`PlaneFrame::plane_pair`] maps the pair onto the global axes.
     widths: [f64; 2],
 }
 
@@ -1037,15 +1069,19 @@ fn equiv_rect_values(
 /// — and so its background cell — is known.
 #[derive(Clone, Copy, Debug)]
 struct DecayRect {
-    /// The rectangle's centre `(x, y, z)`, metres.
+    /// The rectangle's centre `(x, y, z)`, metres — global coordinates.
     centre: [f64; 3],
-    /// Its full widths `(x, y)`, metres.
+    /// Its full widths `(xwidth, ywidth)`, metres.
     widths: [f64; 2],
-    /// The largest cell wanted inside it, per axis, metres.
+    /// The largest cell wanted inside it, `(xcell, ycell)`, metres.
     cell: [f64; 2],
-    /// The largest cell the outward decay may grow to, per axis, metres;
-    /// `None` where the deck gave a negative value (no limit).
+    /// The largest cell the outward decay may grow to, `(xmaxcell,
+    /// ymaxcell)`, metres; `None` where the deck gave a negative value (no
+    /// limit).
     limit: [Option<f64>; 2],
+    // All three pairs above are in the **plane's own** coordinate system:
+    // index 0 along `p1 → p2`, index 1 along `p2 → p3`. See
+    // [`PlaneFrame::plane_pair`], which maps them onto the global axes.
 }
 
 /// The seven values of the **documented** `contact rect` form:
@@ -1146,9 +1182,13 @@ fn decay_rect_values(
 /// line whose two ends coincide.
 #[derive(Clone, Copy, Debug)]
 struct RefineLine {
-    /// The locus's two ends `(x, y, z)`, metres (equal for a point).
+    /// The locus's two ends `(x, y, z)`, metres (equal for a point) —
+    /// global coordinates.
     ends: [[f64; 3]; 2],
-    /// The largest cell wanted along it, per axis `[x, y]`, metres.
+    /// The largest cell wanted along it, `(xcell, ycell)`, metres, in the
+    /// **plane's own** coordinate system: index 0 along `p1 → p2`, index 1
+    /// along `p2 → p3`. [`PlaneFrame::plane_pair`] maps the pair onto the
+    /// global axes ([`PlaneFrame::refine_region`] applies it).
     cell: [f64; 2],
 }
 
@@ -1223,9 +1263,19 @@ impl RefineTrace {
     /// `±3w/2` with cells `(L, w)`, where `w` is `trace_width` and `L` the
     /// trace's length, so there is no refinement along it. The memo states
     /// that `scale_factor` has no effect on such a trace.
-    fn lines(&self) -> [RefineLine; 5] {
+    ///
+    /// The lines' *ends* are global, like the trace's own; their cell pairs
+    /// are in the plane's own coordinate system, like every other
+    /// `RefineLine`'s, so `axis1` (the global axis the plane's `p1 → p2`
+    /// edge runs along) is needed to say which of the pair is the
+    /// along-trace one. The expansion itself is symmetric in the two axes,
+    /// so a rotated plane changes nothing about the mesh it asks for
+    /// (issue #118).
+    fn lines(&self, axis1: usize) -> [RefineLine; 5] {
         let across = 1 - self.along;
         let length = (self.ends[1][self.along] - self.ends[0][self.along]).abs();
+        // Which half of a plane-coordinate pair the trace runs along.
+        let along_slot = usize::from(self.along != axis1);
         let w = self.width;
         [
             (0.0, w / 2.0),
@@ -1240,8 +1290,8 @@ impl RefineTrace {
                 end[across] += offset;
             }
             let mut cell = [0.0; 2];
-            cell[self.along] = length;
-            cell[across] = across_cell;
+            cell[along_slot] = length;
+            cell[1 - along_slot] = across_cell;
             RefineLine { ends, cell }
         })
     }
@@ -2041,9 +2091,11 @@ impl<'a> PlaneStatement<'a> {
         let mut equipotentials = Vec::with_capacity(contact_equivs.len());
         for equiv in contact_equivs {
             frame.in_slab(&equiv.what, equiv.centre)?;
+            // The centre is global; the widths are a pair in the plane's own
+            // coordinate system. See `PlaneFrame::plane_pair`.
             equipotentials.push(Equipotential::centred(
                 [equiv.centre[0], equiv.centre[1]],
-                equiv.widths,
+                frame.plane_pair(equiv.widths),
             ));
             nodes.push((equiv.name, equiv.centre, Some(equipotentials.len() - 1)));
         }
@@ -2208,37 +2260,84 @@ impl PlaneFrame<'_> {
         (self.hi[axis] - self.lo[axis]) / self.cells[axis] as f64
     }
 
+    /// A per-axis pair written in the plane's **own** coordinate system —
+    /// index 0 along `p1 → p2`, index 1 along `p2 → p3` — mapped onto the
+    /// global x and y axes those two edges run along.
+    ///
+    /// Every `contact` clause that carries an `x…`/`y…` pair of *lengths*
+    /// states that pair this way. The public memo (*Nonuniformly
+    /// Discretized Reference Planes in FastHenry 3.0*, M. Kamon, 10 October
+    /// 1996) makes `p1` the origin of a plane coordinate system whose
+    /// x-direction is the vector `p1 → p2` and whose y-direction is
+    /// `p2 → p3`, and then defines `contact point`'s two cell sizes as the
+    /// cell's width "in the plane coordinate system's x-direction" and its
+    /// width in the y-direction. `line`, `rect` and `decay_rect` are
+    /// defined in that same memo as repeated `point` calls, and `connection`
+    /// as an `equiv_rect` plus a `decay_rect` over the same widths, so the
+    /// whole family inherits it. For a plane whose first edge runs along
+    /// global x the mapping is the identity; for one whose first edge runs
+    /// along global y it transposes the pair (issue #118) — exactly as
+    /// `seg1`/`seg2` and `contact initial_grid` already follow the edges
+    /// rather than the axes.
+    ///
+    /// Only the lengths are plane-relative: each clause's **coordinates**
+    /// are ordinary global deck coordinates, checked against the plane's
+    /// footprint and slab like every other coordinate here. The memo's
+    /// examples place contacts by absolute position on the plane (its
+    /// `decay_rect` example puts one at `(1,0,0)` on a plane spanning
+    /// `y = -2 … 2`, which is that plane's mid-height, not an offset from
+    /// `p1`), and `p1` is named as the origin only where the text needs a
+    /// direction or a cell numbering.
+    fn plane_pair<T>(&self, pair: [T; 2]) -> [T; 2] {
+        if self.axis1 == 0 {
+            pair
+        } else {
+            let [along_first, along_second] = pair;
+            [along_second, along_first]
+        }
+    }
+
     /// The graded region a `contact decay_rect`, a documented seven-value
     /// `contact rect`, or the decay half of a `contact connection` refines.
     /// `what` is the clause quoted for errors.
     fn decay_contact(&self, what: &str, decay: &DecayRect) -> Result<ContactRegion, ParseError> {
         self.in_slab(what, decay.centre)?;
+        // The clause's three length pairs are in the plane's own coordinate
+        // system; the region below is global. See `PlaneFrame::plane_pair`.
+        let widths = self.plane_pair(decay.widths);
+        let cell = self.plane_pair(decay.cell);
+        let limit = self.plane_pair(decay.limit);
         let mut region = ([0.0f64; 2], [0.0f64; 2]);
         let mut region_cells = [0usize; 2];
         let mut ratio = [0.0f64; 2];
         for axis in 0..2 {
-            let name = ['x', 'y'][axis];
-            let half = decay.widths[axis] / 2.0;
+            // The deck's own name for this axis: its `x…` values are the
+            // plane's first edge, whichever global axis that edge follows.
+            let (name, seg) = if axis == self.axis1 {
+                ('x', 1)
+            } else {
+                ('y', 2)
+            };
+            let half = widths[axis] / 2.0;
             region.0[axis] = decay.centre[axis] - half;
             region.1[axis] = decay.centre[axis] + half;
             // The fine cells are the fewest whose own extent is no larger
             // than the deck's `<axis>cell`; a width that is an exact
             // multiple of it must not gain a spurious extra cell from a
             // last-bit rounding of the division.
-            region_cells[axis] = cells_no_coarser_than(decay.widths[axis], decay.cell[axis]);
+            region_cells[axis] = cells_no_coarser_than(widths[axis], cell[axis]);
             // The documented decay law: with `r0` the requested cell as a
             // fraction of the rectangle's width, each cell outside the
             // rectangle is `1/(1 − r0)` times its inward neighbour.
-            ratio[axis] = 1.0 / (1.0 - decay.cell[axis] / decay.widths[axis]);
+            ratio[axis] = 1.0 / (1.0 - cell[axis] / widths[axis]);
             let background = self.background(axis);
-            if decay.limit[axis].is_some_and(|limit| limit < background * (1.0 - 1e-9)) {
+            if limit[axis].is_some_and(|limit| limit < background * (1.0 - 1e-9)) {
                 return Err(err(
                     self.line,
                     format!(
-                        "{what}: {name}maxcell={} metres is finer than ground plane '{}'s own background cell ({background} metres), and this engine's grading levels off at that cell rather than below it; raise 'seg{}' so the whole plane is at least that fine, or drop the limit (a negative value) to accept the background cell",
-                        decay.limit[axis].unwrap_or_default(),
+                        "{what}: {name}maxcell={} metres is finer than ground plane '{}'s own background cell ({background} metres), and this engine's grading levels off at that cell rather than below it; raise 'seg{seg}' so the whole plane is at least that fine, or drop the limit (a negative value) to accept the background cell",
+                        limit[axis].unwrap_or_default(),
                         self.head,
-                        if axis == self.axis1 { 1 } else { 2 }
                     ),
                 ));
             }
@@ -2290,7 +2389,7 @@ impl PlaneFrame<'_> {
             self.on_plane("'contact trace'", end)?;
         }
         Ok(trace
-            .lines()
+            .lines(self.axis1)
             .iter()
             .filter_map(|refine| self.refine_region(refine))
             .collect())
@@ -2313,6 +2412,9 @@ impl PlaneFrame<'_> {
     /// it — see `fasterhenry::plane` § *A band that is not a refinement*
     /// (issue #124).
     fn refine_region(&self, refine: &RefineLine) -> Option<ContactRegion> {
+        // The requested cell is a pair in the plane's own coordinate system;
+        // the region is global. See `PlaneFrame::plane_pair`.
+        let requested = self.plane_pair(refine.cell);
         let mut region = ([0.0f64; 2], [0.0f64; 2]);
         let mut region_cells = [0usize; 2];
         let mut already_met = true;
@@ -2321,7 +2423,7 @@ impl PlaneFrame<'_> {
             // the background mesh (no cell is ever coarser than it), so it
             // is clamped there: a refinement must never coarsen the plane.
             let background = self.background(axis);
-            if refine.cell[axis] >= background * (1.0 - 1e-9) {
+            if requested[axis] >= background * (1.0 - 1e-9) {
                 // Clamped: that axis is left exactly as the plane meshes
                 // it. Bounding a band to the request's own coordinate
                 // would still cut a graded band into it unless the
@@ -2337,7 +2439,7 @@ impl PlaneFrame<'_> {
                 continue;
             }
             already_met = false;
-            let cell = refine.cell[axis];
+            let cell = requested[axis];
             let (a, b) = (refine.ends[0][axis], refine.ends[1][axis]);
             region.0[axis] = a.min(b) - cell / 2.0;
             region.1[axis] = a.max(b) + cell / 2.0;
@@ -5774,6 +5876,148 @@ Gp x1=0 y1=0 z1=0 x2=0 y2=6 z2=0 x3=10 y3=6 z3=0
         ));
         let extension = parse_ok(&plane_deck("Gp 0 0 0.02 10 6 0.02 0.04 nx=5 ny=3", ""));
         assert_eq!(rotated_corners.geometry, extension.geometry);
+    }
+
+    /// The same 10 × 6 mm plane, 5 × 3 cells, written with its first edge
+    /// along global x and along global y. `seg1`/`seg2` are swapped to match,
+    /// so the two statements describe one physical plane (that much is
+    /// `seg1_and_seg2_follow_the_edges_not_the_axes`).
+    fn oriented_plane_decks(x_clause: &str, y_clause: &str) -> (Deck, Deck) {
+        let deck = |statement: &str, clause: &str| {
+            parse_ok(&plane_deck(&format!("{statement}\n+ {clause}"), ""))
+        };
+        (
+            deck(
+                "Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0\n+ thick=0.04 seg1=5 seg2=3",
+                x_clause,
+            ),
+            deck(
+                "Gp x1=0 y1=0 z1=0 x2=0 y2=6 z2=0 x3=10 y3=6 z3=0\n+ thick=0.04 seg1=3 seg2=5",
+                y_clause,
+            ),
+        )
+    }
+
+    /// Every `contact` clause carrying an `x…`/`y…` pair of lengths states
+    /// that pair in the **plane's own** coordinate system — index 0 along
+    /// `p1 → p2`, index 1 along `p2 → p3` — which is what the public memo
+    /// says of `contact point` ("the width of the cell in the plane
+    /// coordinate system's x-direction") and which `line`, `decay_rect`,
+    /// `equiv_rect` and `connection` inherit from it (issue #118), as does
+    /// the documented seven-value `contact rect`, which is exactly a
+    /// `decay_rect` without the outward limits (issue #95) and so turns
+    /// with the plane through that same code. So on a plane whose first
+    /// edge runs along global **y**, the pair is transposed relative to
+    /// global x/y.
+    ///
+    /// Each case writes one physical plane twice — first edge along x, then
+    /// along y with the clause's pair swapped — and the two decks must build
+    /// the same geometry. Every pair here is anisotropic, so leaving it
+    /// *unswapped* must build a different one: without that second
+    /// assertion the test would pass on a reader that ignored the plane's
+    /// axes entirely.
+    #[test]
+    fn contact_cell_sizes_follow_the_plane_axes_not_the_global_ones() {
+        for (x_clause, y_clause) in [
+            // A point's two cell sizes.
+            (
+                "contact point (5, 3, 0, 0.5, 1.5)",
+                "contact point (5, 3, 0, 1.5, 0.5)",
+            ),
+            // A line's — its ends stay global, only the pair turns.
+            (
+                "contact line (1, 3, 0, 9, 3, 0, 0.5, 1.5)",
+                "contact line (1, 3, 0, 9, 3, 0, 1.5, 0.5)",
+            ),
+            // `decay_rect`'s widths and its cells, both anisotropic.
+            (
+                "contact decay_rect (5, 3, 0, 4, 2, 1, 0.25, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 4, 0.25, 1, -1, -1)",
+            ),
+            // The documented seven-value `contact rect` (issue #95) is
+            // `decay_rect` without the outward limits, so it turns with the
+            // plane through the same code, not a special case of its own.
+            (
+                "contact rect (5, 3, 0, 4, 2, 1, 0.25)",
+                "contact rect (5, 3, 0, 2, 4, 0.25, 1)",
+            ),
+            // A contact area's widths: 10 × 2 mm ties the five cells of one
+            // row, 2 × 10 mm the three of one column, so a transposition
+            // changes the node count and not merely which cells are tied.
+            (
+                "contact equiv_rect Npad (5, 3, 0, 10, 2)",
+                "contact equiv_rect Npad (5, 3, 0, 2, 10)",
+            ),
+            // …and the grouped clause built on both halves at once.
+            (
+                "contact connection Npad (5, 3, 0, 4, 2, 4)",
+                "contact connection Npad (5, 3, 0, 2, 4, 4)",
+            ),
+        ] {
+            let (along_x, along_y) = oriented_plane_decks(x_clause, y_clause);
+            assert_eq!(
+                along_x.geometry, along_y.geometry,
+                "'{y_clause}' on a plane whose first edge runs along y must \
+                 mesh like '{x_clause}' on the same plane written along x"
+            );
+            let (_, unswapped) = oriented_plane_decks(x_clause, x_clause);
+            assert_ne!(
+                along_x.geometry, unswapped.geometry,
+                "'{x_clause}' is anisotropic, so reading its pair along \
+                 global x/y on a plane whose first edge runs along y would \
+                 be a visible transposition"
+            );
+        }
+    }
+
+    /// An isotropic request cannot tell the two readings apart, and must
+    /// come out identical either way round — the mapping is a permutation,
+    /// not an extra refinement.
+    #[test]
+    fn a_square_contact_request_is_orientation_independent() {
+        for clause in [
+            "contact point (5, 3, 0, 0.5, 0.5)",
+            "contact decay_rect (5, 3, 0, 2, 2, 0.5, 0.5, -1, -1)",
+            "contact rect (5, 3, 0, 2, 2, 0.5, 0.5)",
+            "contact equiv_rect Npad (5, 3, 0, 4, 4)",
+            "contact connection Npad (5, 3, 0, 2, 2, 4)",
+            // `contact trace` carries no `x…`/`y…` pair at all — one
+            // `trace_width`, and a direction read from its own global ends —
+            // and its expansion is symmetric in the two axes, so the plane's
+            // orientation cannot transpose it either (issue #118).
+            "contact trace (1, 3, 0, 9, 3, 0, 1, 1)",
+        ] {
+            let (along_x, along_y) = oriented_plane_decks(clause, clause);
+            assert_eq!(
+                along_x.geometry, along_y.geometry,
+                "'{clause}' asks for the same mesh whichever edge is first"
+            );
+        }
+    }
+
+    /// The per-axis errors name the axis **the deck** wrote, not the global
+    /// one it lands on: on a plane whose first edge runs along global y, the
+    /// deck's `xmaxcell` is measured along y and is what `seg1` counts.
+    /// Here the plane is 10 × 6 mm with `seg1=3` (along y: a 2 mm
+    /// background cell) and `seg2=10` (along x: 1 mm), so `xmaxcell=1.5`
+    /// is finer than its own axis's background cell while `ymaxcell=9`
+    /// binds nothing.
+    #[test]
+    fn a_rotated_planes_decay_limit_error_names_the_decks_own_axis() {
+        let error = parse(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=0 y2=6 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=3 seg2=10
++ contact decay_rect (5, 3, 0, 4, 2, 1, 0.5, 1.5, 9)",
+            "",
+        ))
+        .unwrap_err();
+        assert_eq!(error.line, 3);
+        assert!(
+            error.message.contains("xmaxcell=") && error.message.contains("'seg1'"),
+            "got: {}",
+            error.message
+        );
     }
 
     /// An in-plane node wires a segment into the plane whichever side of

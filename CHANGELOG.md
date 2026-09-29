@@ -36,13 +36,14 @@ breaking changes to the API or the command-line interface; patch releases
   form's default 2 × 2 cells at ratio 2 is the seven-value form at
   `cell = width/2`, `contact rect (4, 2, 0, 6, 4, 0)` and `contact rect (5,
   3, 0, 2, 2, 1, 1)` are the same region. What the documented form buys is
-  the cell size itself, per axis, which the corner form cannot state. The
-  widths and cells are read along global x and y, as every other `contact`
-  clause's are (issue #118 asks that question fleet-wide). Why accepting
-  both beat migrating to the documented form alone, or documenting the
-  divergence permanently, is written out in `docs/fasthenry-compat.md`
-  § *Decision: `contact rect` reads both spellings, told apart by value
-  count*.
+  the cell size itself, per axis, which the corner form cannot state. Being
+  exactly `contact decay_rect`, the documented form's widths and cells are
+  read in the **plane's own** coordinate system, as `decay_rect`'s are
+  (issue #118); the six-value corner form's two corners stay global
+  coordinates, unaffected. Why accepting both beat migrating to the
+  documented form alone, or documenting the divergence permanently, is
+  written out in `docs/fasthenry-compat.md` § *Decision: `contact rect`
+  reads both spellings, told apart by value count*.
 - Deck reader: the **initial-grid** clauses on a corner-point `G`
   ground-plane statement — `contact initial_grid (n1, n2)` and
   `contact initial_mesh_grid (n1, n2)` (issue #113, follow-up to #101, which
@@ -289,6 +290,37 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader: a `contact` clause's `x…`/`y…` pair of lengths on a
+  corner-point `G` ground-plane statement is now read in the **plane's own**
+  coordinate system — `x…` along the `p1 → p2` edge, `y…` along `p2 → p3` —
+  instead of along global x and y (issue #118). That is the frame the public
+  memo (*Nonuniformly Discretized Reference Planes in FastHenry 3.0*, M.
+  Kamon, 10 October 1996) defines for a corner-point plane, and the frame it
+  states `contact point`'s cell sizes in by name ("0.1 is the width of the
+  cell in the plane coordinate system's x-direction"); `contact line`,
+  `contact rect`, `contact decay_rect`, `contact equiv_rect` and `contact
+  connection` are all defined in that memo as repeated `point` calls or as an
+  `equiv_rect` + `decay_rect` pair over the same widths, so the whole family
+  inherits it. It is also the convention `seg1`/`seg2` and `contact
+  initial_grid` (issue #113) already followed, so the plane model no longer
+  uses two different frames for its two kinds of per-axis value. Affects
+  `contact point`/`line`'s `xcell`/`ycell`, `contact decay_rect`'s
+  `xwidth`/`ywidth`, `xcell`/`ycell` and `xmaxcell`/`ymaxcell`, and `contact
+  equiv_rect`/`connection`'s `xwidth`/`ywidth`; the matching per-axis error
+  messages now name the axis the deck wrote (its `xmaxcell` is what `seg1`
+  counts) rather than the global axis it lands on. **Mesh change**, but only
+  for a plane whose `p1 → p2` edge runs along global **y** *and* an
+  anisotropic request: such a deck's pair was silently transposed before, and
+  now meshes as written. For the plane every public example writes — first
+  edge along global x — the mapping is the identity and nothing moves. Only
+  *lengths* turn with the plane: every coordinate in the statement's body
+  stays global (the memo's own examples place contacts by absolute position,
+  not relative to `p1`). `contact trace` is unaffected — it carries no
+  `x…`/`y…` pair and its expansion is symmetric in the two axes — and so is
+  this reader's corner-spelled `contact rect` (issue #95). The evidence, the
+  relative-versus-absolute question, and what would reopen either are in
+  `docs/fasthenry-compat.md` § *Decision: a `contact` clause's `x…`/`y…` pair
+  is in plane coordinates*.
 - Deck reader: a `contact point` / `contact line` whose requested cell is
   already met by the plane's background cell on one axis now leaves that
   axis's mesh **exactly** as the plane meshes it (issue #116, follow-up to
