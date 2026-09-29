@@ -4,6 +4,13 @@
 * of the plane statement; one via reaches the plane through an in-plane
 * node directly, the other through a `.equiv` join.
 *
+* The `contact rect` clause uses the documented seven-value spelling —
+* centre, full widths about it, largest cell wanted inside — so the
+* rectangle centred at (5, 3) mm and 2 mm across each way spans (4, 2) to
+* (6, 4) mm, with cells no larger than 1 mm, i.e. 2 x 2 fine cells at the
+* decay ratio 1/(1 - 1/2) = 2. `contact rect (4, 2, 0, 6, 4, 0)`, the
+* six-value two-corner spelling this reader also reads, is the same region.
+*
 * `tests/data/plane_extension.inp` is the same problem written in this
 * crate's own `G` / `.hole` / `.contact` syntax; `tests/roundtrip.rs`
 * requires the two to produce the same geometry and the same Z(omega).
@@ -12,7 +19,7 @@
 Gplane x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
 + thick=0.035 seg1=5 seg2=3 sigma=5.8e4
 + hole rect (0.5, 4.5, 0, 1.5, 5.5, 0)
-+ contact rect (4, 2, 0, 6, 4, 0)
++ contact rect (5, 3, 0, 2, 2, 1, 1)
 + Nland1 (1, 1, 0)
 + Nland2 (9, 5, 0)
 Ntop1 x=1 y=1 z=0.5
