@@ -2025,7 +2025,11 @@ impl PlaneFrame<'_> {
     /// An axis the background mesh already meets is *not* banded around the
     /// request: it spans the whole plane at the plane's own cell count, so
     /// that axis's cell edges are exactly the ones it has without the
-    /// clause (issue #116).
+    /// clause (issue #116). A band of exactly that shape adds no resolution,
+    /// and the mesher drops it before merging bands, so it cannot widen a
+    /// genuinely finer refinement elsewhere on the axis across the whole of
+    /// it — see `fasterhenry::plane` § *A band that is not a refinement*
+    /// (issue #124).
     fn refine_contact(
         &self,
         what: &str,
@@ -2058,7 +2062,9 @@ impl PlaneFrame<'_> {
                 // coordinate happened to land on a background grid line
                 // (issue #116), so the band spans the whole plane at the
                 // plane's own cell count instead — the background mesh,
-                // edge for edge.
+                // edge for edge. The mesher recognises a band of that
+                // shape as the no-op it is and drops it rather than
+                // merging it with the axis's real refinements (#124).
                 region.0[axis] = self.lo[axis];
                 region.1[axis] = self.hi[axis];
                 *count = self.cells[axis];
@@ -4337,6 +4343,43 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             refined_mesh.dy(j) <= 0.5e-3 + 1e-15,
             "{}",
             refined_mesh.dy(j)
+        );
+    }
+
+    /// A met axis costs nothing even when the deck refines that same axis
+    /// somewhere else. The clamped band spans the whole plane, so it overlaps
+    /// every other band on its axis, and the mesher's merge rule keeps the
+    /// finer of two overlapping bands across the union of their extents: a
+    /// met-on-x `contact point` beside a 0.1 mm region near (1, 1) mm once
+    /// refined the entire 10 mm x axis to 0.1 mm — 100 cells, against the 11
+    /// that region costs on its own. Issue #124.
+    #[test]
+    fn a_met_axis_costs_nothing_beside_a_finer_refinement_on_it() {
+        let fine = ".contact Gp 0.95 0.95 1.05 1.05 nx=1 ny=1 ratio=2";
+        let both = parse_ok(&plane_deck(
+            &format!("{REFINE_PLANE}\n+ contact point (5.3, 3, 0, 4, 0.5)"),
+            fine,
+        ));
+        let alone = parse_ok(&plane_deck(REFINE_PLANE, fine));
+        // x: the met axis is meshed exactly as the 0.1 mm region alone
+        // meshes it — the clause adds no x cells at all.
+        assert_eq!(node_axis(&both, 0), node_axis(&alone, 0));
+        // y: the cell the point did ask for is still there.
+        assert_ne!(node_axis(&both, 1), node_axis(&alone, 1));
+
+        // The same, counted on the mesh the two regions build.
+        let fine_region = ContactRegion::new([0.95e-3, 0.95e-3], [1.05e-3, 1.05e-3], [1, 1], 2.0);
+        // The x band `contact point (5.3, 3, 0, 4, 0.5)` clamps to.
+        let met_on_x = ContactRegion::new([0.0, 2.75e-3], [10e-3, 3.25e-3], [5, 1], 2.0);
+        let both_mesh = refine_test_plane(vec![met_on_x, fine_region])
+            .mesh()
+            .unwrap();
+        let alone_mesh = refine_test_plane(vec![fine_region]).mesh().unwrap();
+        assert_eq!(alone_mesh.nx(), 11);
+        assert_eq!(
+            both_mesh.nx(),
+            alone_mesh.nx(),
+            "not the 100 of a 0.1 mm x axis"
         );
     }
 

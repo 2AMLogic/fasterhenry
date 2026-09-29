@@ -255,9 +255,18 @@ breaking changes to the API or the command-line interface; patch releases
   that axis now has fewer cells there (its background count), so its
   impedance moves by the usual mesh-refinement amount. A deck that *also*
   refines that axis more finely elsewhere — a `contact connection` or
-  `decay_rect` on the same plane, say — sees the opposite: the whole-plane
-  clamped band merges with the finer one under the existing "merged bands
-  keep their finest cell" rule and widens it across the axis (issue #124).
+  `decay_rect` on the same plane, say — is unaffected as well (issue #124,
+  now resolved): `GroundPlane::mesh` drops a band that spans the whole axis
+  at the plane's own cell count before it merges bands, because such a band
+  *is* the background mesh there — its cells are the background cells, and
+  the only edges it pins are the footprint's own. Until it did, the
+  whole-plane clamped band overlapped every other band on its axis and the
+  existing "merged bands keep their finest cell" rule widened that finest
+  cell across the whole axis: on the same test plane, `contact point (5.3,
+  3, 0, 4, 0.5)` beside a 0.1 mm region near (1, 1) mm cost **100** x cells
+  against the **11** that region costs on its own. A `ContactRegion` cut at
+  the background cell over only *part* of an axis is not a no-op and is kept
+  — it still cuts its own cells and still pins its `lo`/`hi` as cell edges.
 - Deck reader: `contact circle` is now rejected with its own error, and is
   recorded as a shape the format does not have rather than as deferred work
   (issue #109, split out of #100). Looking for the argument list that was
