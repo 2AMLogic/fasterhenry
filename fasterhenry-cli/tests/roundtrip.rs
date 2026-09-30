@@ -3,7 +3,8 @@
 //! document (`tests/data/spiral.json`) must produce identical sweeps.
 
 use fasterhenry::{Solver, SolverChoice, DENSE_PATH_MAX_FILAMENTS};
-use fasterhenry_cli::{read_inputs, run, run_reporting_with, solver_for};
+use fasterhenry_cli::inp::ParseOptions;
+use fasterhenry_cli::{read_inputs, read_inputs_with, run, run_reporting_with, solver_for};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
@@ -198,6 +199,7 @@ e3 n2 n4 w=0.2 h=0.035
         sigma,
         holes: Vec::new(),
         contacts: Vec::new(),
+        equipotentials: Vec::new(),
     };
     let centres = plane.build_into(&mut api).unwrap();
     // Positions computed exactly as the deck computes them (mm * 1e-3):
@@ -293,6 +295,7 @@ e3 n2 n4 w=0.2 h=0.035
                 2.0,
             ),
         ],
+        equipotentials: Vec::new(),
     };
     let mesh = plane.mesh().unwrap();
     let centres = plane.build_into(&mut api).unwrap();
@@ -401,6 +404,87 @@ fn fasthenry_and_extension_plane_syntax_agree() {
         z_extension.without_timing(),
         "the two plane syntaxes must produce identical sweeps"
     );
+}
+
+/// A `contact decay_rect` clause and this crate's `.contact` directive are
+/// two spellings of one graded contact region: the self-authored fixture
+/// pair `plane_decay_rect.inp` / `plane_decay_extension.inp` — same plane,
+/// same hole, same two via landings, and a region the one deck states as a
+/// centre plus widths plus cell sizes and the other as corners plus a cell
+/// count and a ratio — must produce the same geometry and the same `Z(ω)`.
+///
+/// The fixture's numbers are the ones where the two spellings coincide
+/// exactly: a 4 × 2 mm rectangle wanting cells no larger than 2 × 1 mm is
+/// 2 × 2 fine cells, and `1/(1 − cell/width)` is 2 on both axes.
+#[test]
+fn decay_rect_and_contact_directive_agree() {
+    let decay = read_inputs(&fixture("plane_decay_rect.inp")).expect("decay_rect deck");
+    let contact = read_inputs(&fixture("plane_decay_extension.inp")).expect("`.contact` deck");
+
+    assert_eq!(decay.geometry, contact.geometry);
+    assert_eq!(decay.ports, contact.ports);
+    assert_eq!(decay.discretization, contact.discretization);
+    assert_eq!(decay.frequencies_hz, contact.frequencies_hz);
+
+    // The region is real: the plane is graded well past its 5 × 3
+    // background mesh, so this is not two coarse planes agreeing trivially.
+    assert!(
+        decay.geometry.nodes().len() > 5 * 3,
+        "the contact region refines the plane"
+    );
+
+    let z_decay = run(&decay, None).expect("decay_rect solve");
+    let z_contact = run(&contact, None).expect("`.contact` solve");
+    assert_eq!(
+        z_decay.frequencies_hz, z_contact.frequencies_hz,
+        "the two fixtures declare the same sweep"
+    );
+    for (index, (from_decay, from_contact)) in z_decay
+        .impedance_ohm
+        .iter()
+        .zip(&z_contact.impedance_ohm)
+        .enumerate()
+    {
+        let (a, b) = (from_decay[(0, 0)], from_contact[(0, 0)]);
+        let scale = a.norm().max(b.norm()).max(f64::MIN_POSITIVE);
+        assert!(
+            (a - b).norm() / scale < 1e-12,
+            "frequency {index}: Z differs between decay_rect and .contact ({a} vs {b})"
+        );
+    }
+    assert_eq!(
+        z_decay.without_timing(),
+        z_contact.without_timing(),
+        "the two spellings of one contact region must produce identical sweeps"
+    );
+}
+
+/// `--fasthenry-compat` end to end through the file reader: the spiral
+/// fixture with a prose first line is rejected by default and, in compat
+/// mode, reads as exactly the fixture without it.
+#[test]
+fn fasthenry_compat_reads_prose_first_line_through_read_inputs_with() {
+    let original = std::fs::read_to_string(fixture("spiral.inp")).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "fasterhenry-compat-{}-spiral.inp",
+        std::process::id()
+    ));
+    std::fs::write(&path, format!("Two-turn spiral, prose title\n{original}")).unwrap();
+
+    let default = read_inputs(&path);
+    let compat = read_inputs_with(
+        &path,
+        ParseOptions {
+            fasthenry_compat: true,
+        },
+    );
+    std::fs::remove_file(&path).ok();
+
+    let error = default.expect_err("prose line 1 is rejected by default");
+    assert!(error.contains("line 1"), "{error}");
+    let compat = compat.expect("compat mode skips the prose title");
+    let plain = read_inputs(&fixture("spiral.inp")).unwrap();
+    assert_eq!(compat, plain);
 }
 
 /// Parse helper for inline deck text (the file-based one needs a path).

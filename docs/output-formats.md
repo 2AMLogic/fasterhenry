@@ -1,11 +1,15 @@
 # Output formats
 
-How `fasterhenry run`'s results reach other tools. The JSON form (always
+How a `fasterhenry` run's results reach other tools. The JSON form (always
 emitted, to stdout or `--json`) is the primary, versioned one
 (`schema_version`, provenance, exact `f64` round-trips); the formats below
 exist for tool interop.
 
 ## `--zc-mat out.mat` — MATLAB level-4 binary
+
+(Also written as `./Zc.mat`, without the flag, by the drop-in invocation
+`fasterhenry <deck>` — see `fasterhenry-cli/README.md` § "Migrating from
+FastHenry".)
 
 The format of FastHenry's `Zc.mat`, written from the published on-disk
 specification. A MAT v4 file is a sequence of matrices; `fasterhenry`

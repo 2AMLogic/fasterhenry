@@ -75,7 +75,7 @@ use thiserror::Error;
 use crate::coupling::{Coupling, CouplingError, TruncationWarning};
 use crate::dense::lu_solve;
 use crate::filament::{
-    discretize, discretize_graded, graded_surface_extent, DiscretizeError, Filament,
+    discretize, discretize_graded_per_axis, graded_surface_extent, DiscretizeError, Filament,
 };
 use crate::geometry::Geometry;
 use crate::inductance::{
@@ -132,6 +132,11 @@ pub(crate) const SWEEP_MEMORY_BUDGET_BYTES: usize = 2 << 30;
 pub const DENSE_PATH_MAX_FILAMENTS: usize = 10_000;
 
 /// Which of the two solve paths runs.
+///
+/// Deliberately exhaustive (unlike the crate's error enums and
+/// [`Discretization`]): a new solve path is an architectural change, and
+/// code that dispatches on the path — such as deciding which features a path
+/// can honour — should fail to compile until it has decided for the new one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Solver {
@@ -156,6 +161,8 @@ impl std::fmt::Display for Solver {
 /// [`Auto`](Self::Auto) — the default — resolves to [`Solver::Dense`] at or
 /// below [`DENSE_PATH_MAX_FILAMENTS`] filaments and to
 /// [`Solver::Iterative`] above it; the other two variants force a path.
+///
+/// Deliberately exhaustive, for the same reason as [`Solver`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SolverChoice {
@@ -204,7 +211,7 @@ impl Subdivision {
 /// nearer the surface (see [`crate::filament::discretize_graded`]).
 ///
 /// Supported grids at `ratio == 1.0` equal the uniform grid bit for bit.
-/// Assembly rejects grids outside [`discretize_graded`]'s scale-aware
+/// Assembly rejects grids outside [`discretize_graded`](crate::filament::discretize_graded)'s scale-aware
 /// numerical limits, reporting the segment, axis, counts and ratio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Grading {
@@ -236,6 +243,58 @@ impl Grading {
     }
 }
 
+/// One segment's `nw × nh` grid with an independent grading ratio along
+/// each cross-section axis (see
+/// [`crate::filament::discretize_graded_per_axis`]): each filament across
+/// the width is `width_ratio` times the extent of its neighbour one step
+/// nearer the surface, and likewise across the height at `height_ratio`.
+///
+/// Both ratios at `1.0` is the uniform [`Subdivision`] of the same counts,
+/// bit for bit; equal ratios are the [`Grading`] of that ratio.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AxisGrading {
+    /// Filaments across the width.
+    pub nw: usize,
+    /// Filaments across the height.
+    pub nh: usize,
+    /// Ratio of adjacent filament widths, coarsening inward; at least 1.
+    pub width_ratio: f64,
+    /// Ratio of adjacent filament heights, coarsening inward; at least 1.
+    pub height_ratio: f64,
+}
+
+impl AxisGrading {
+    /// `nw × nh` filaments, graded inward by `width_ratio` across the width
+    /// and by `height_ratio` across the height.
+    pub const fn new(nw: usize, nh: usize, width_ratio: f64, height_ratio: f64) -> Self {
+        Self {
+            nw,
+            nh,
+            width_ratio,
+            height_ratio,
+        }
+    }
+
+    fn validate(&self) -> Result<(), SolveError> {
+        for (axis, ratio) in [("width", self.width_ratio), ("height", self.height_ratio)] {
+            if !(ratio.is_finite() && ratio >= 1.0) {
+                return Err(SolveError::InvalidGrading {
+                    reason: format!(
+                        "the {axis} grading ratio must be finite and at least 1, got {ratio}"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl From<Subdivision> for AxisGrading {
+    fn from(subdivision: Subdivision) -> Self {
+        Self::new(subdivision.nw, subdivision.nh, 1.0, 1.0)
+    }
+}
+
 /// A graded grid whose filament counts are chosen per segment from the skin
 /// depth at a frequency of interest.
 ///
@@ -252,7 +311,7 @@ impl Grading {
 /// depth is infinite and every segment is a single filament.
 ///
 /// The cap controls cost, not numerical safety. After counts are selected,
-/// assembly applies [`discretize_graded`]'s scale-aware limits and returns
+/// assembly applies [`discretize_graded`](crate::filament::discretize_graded)'s scale-aware limits and returns
 /// [`SolveError::Discretize`] with the segment, axis and selected grid if it
 /// is unusable. It does not silently replace the selected grid with a coarser
 /// one when the requested resolution is numerically unsafe.
@@ -341,6 +400,7 @@ impl SkinDepthGrading {
 /// How the segments of a geometry are cut into filaments.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Discretization {
     /// The same uniform subdivision for every segment.
     Uniform(Subdivision),
@@ -351,6 +411,11 @@ pub enum Discretization {
     /// A surface-graded grid whose counts follow the skin depth at a
     /// frequency of interest, segment by segment.
     SkinDepth(SkinDepthGrading),
+    /// One grid per segment, in segment order, each with its own counts and
+    /// its own grading ratio along each axis — the per-segment counterpart
+    /// of [`Graded`](Self::Graded), as a deck with per-segment `rw`/`rh`
+    /// needs.
+    PerSegmentGraded(Vec<AxisGrading>),
 }
 
 impl Discretization {
@@ -406,6 +471,19 @@ impl Discretization {
                 expected: segment_count,
                 got: list.len(),
             })),
+            Self::PerSegmentGraded(list) if list.len() == segment_count => list
+                .iter()
+                .map(|grading| {
+                    grading.validate()?;
+                    Ok(SegmentGrid::from(*grading))
+                })
+                .collect(),
+            Self::PerSegmentGraded(list) => {
+                Err(SolveError::Mesh(MeshError::SegmentCountMismatch {
+                    expected: segment_count,
+                    got: list.len(),
+                }))
+            }
             Self::Graded(grading) => {
                 grading.validate()?;
                 Ok(vec![SegmentGrid::from(*grading); segment_count])
@@ -417,7 +495,8 @@ impl Discretization {
                     .map(|segment| SegmentGrid {
                         nw: grading.count_for(segment.width, segment.sigma),
                         nh: grading.count_for(segment.height, segment.sigma),
-                        ratio: grading.ratio,
+                        width_ratio: grading.ratio,
+                        height_ratio: grading.ratio,
                     })
                     .collect())
             }
@@ -431,7 +510,8 @@ impl Discretization {
 struct SegmentGrid {
     nw: usize,
     nh: usize,
-    ratio: f64,
+    width_ratio: f64,
+    height_ratio: f64,
 }
 
 impl From<Subdivision> for SegmentGrid {
@@ -439,7 +519,8 @@ impl From<Subdivision> for SegmentGrid {
         Self {
             nw: subdivision.nw,
             nh: subdivision.nh,
-            ratio: 1.0,
+            width_ratio: 1.0,
+            height_ratio: 1.0,
         }
     }
 }
@@ -449,7 +530,19 @@ impl From<Grading> for SegmentGrid {
         Self {
             nw: grading.nw,
             nh: grading.nh,
-            ratio: grading.ratio,
+            width_ratio: grading.ratio,
+            height_ratio: grading.ratio,
+        }
+    }
+}
+
+impl From<AxisGrading> for SegmentGrid {
+    fn from(grading: AxisGrading) -> Self {
+        Self {
+            nw: grading.nw,
+            nh: grading.nh,
+            width_ratio: grading.width_ratio,
+            height_ratio: grading.height_ratio,
         }
     }
 }
@@ -465,6 +558,7 @@ pub fn skin_depth(frequency_hz: f64, sigma: f64) -> f64 {
 
 /// Why an impedance extraction failed.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum SolveError {
     /// A segment could not be cut into filaments.
     #[error("segment {segment}: {source}")]
@@ -560,7 +654,7 @@ impl MeshSystem {
     /// # Errors
     ///
     /// * [`SolveError::Discretize`] for a zero `nw` or `nh`, or graded cells
-    ///   outside [`discretize_graded`]'s numerical limits;
+    ///   outside [`discretize_graded`](crate::filament::discretize_graded)'s numerical limits;
     /// * [`SolveError::InvalidGrading`] for an out-of-range grading
     ///   parameter;
     /// * [`SolveError::Mesh`] for ports that do not fit the geometry (none
@@ -838,7 +932,13 @@ pub(crate) fn discretize_geometry(
             Discretization::Uniform(_) | Discretization::PerSegment(_) => {
                 discretize(&segment, grid.nw, grid.nh)
             }
-            _ => discretize_graded(&segment, grid.nw, grid.nh, grid.ratio),
+            _ => discretize_graded_per_axis(
+                &segment,
+                grid.nw,
+                grid.nh,
+                grid.width_ratio,
+                grid.height_ratio,
+            ),
         }
         .map_err(|source| SolveError::Discretize {
             segment: index,

@@ -434,8 +434,58 @@ pub fn discretize_graded(
     nh: usize,
     ratio: f64,
 ) -> Result<Vec<Filament>, DiscretizeError> {
-    if !(ratio.is_finite() && ratio >= 1.0) {
-        return Err(DiscretizeError::InvalidRatio { ratio });
+    discretize_graded_per_axis(segment, nw, nh, ratio, ratio)
+}
+
+/// As [`discretize_graded`], but with an independent grading ratio along
+/// each cross-section axis: `width_ratio` for the `nw` filaments across the
+/// width, `height_ratio` for the `nh` across the height.
+///
+/// Each axis follows exactly the law of [`graded_extents`] at its own ratio,
+/// so `discretize_graded_per_axis(s, nw, nh, r, r)` is
+/// `discretize_graded(s, nw, nh, r)` bit for bit, and both ratios equal to
+/// `1` reproduce [`discretize`]. A ratio of `1` on one axis leaves that axis
+/// uniform while the other is graded.
+///
+/// # Errors
+///
+/// As [`discretize_graded`]. [`DiscretizeError::InvalidRatio`] reports the
+/// first offending ratio (width before height), and
+/// [`DiscretizeError::UnusableGrading`] reports the ratio of the axis that
+/// failed.
+///
+/// # Example
+///
+/// ```
+/// use fasterhenry::{discretize_graded_per_axis, Node, Segment};
+///
+/// // Three filaments across the width graded 2:1 (weights 1, 2, 1), four
+/// // across the thickness left uniform.
+/// let trace = Segment::new(
+///     Node::new(0.0, 0.0, 0.0),
+///     Node::new(10e-3, 0.0, 0.0),
+///     1e-3,
+///     35e-6,
+///     5.8e7,
+/// );
+/// let filaments = discretize_graded_per_axis(&trace, 3, 4, 2.0, 1.0)?;
+/// assert_eq!(filaments.len(), 12);
+/// assert!((filaments[0].width() - 1e-3 / 4.0).abs() < 1e-18);
+/// assert!((filaments[1].width() - 1e-3 / 2.0).abs() < 1e-18);
+/// assert!((filaments[0].height() - 35e-6 / 4.0).abs() < 1e-18);
+/// # Ok::<(), fasterhenry::DiscretizeError>(())
+/// ```
+pub fn discretize_graded_per_axis(
+    segment: &Segment,
+    nw: usize,
+    nh: usize,
+    width_ratio: f64,
+    height_ratio: f64,
+) -> Result<Vec<Filament>, DiscretizeError> {
+    for ratio in [width_ratio, height_ratio] {
+        if !(ratio.is_finite() && ratio >= 1.0) {
+            return Err(DiscretizeError::InvalidRatio { ratio });
+        }
     }
     if nw == 0 || nh == 0 {
         return Err(DiscretizeError::ZeroSubdivision { nw, nh });
@@ -447,16 +497,16 @@ pub fn discretize_graded(
     let (a, b) = (segment.a.position(), segment.b.position());
     let length = segment.length();
 
-    let across_width = graded_cells(segment.width, nw, ratio)?;
-    let across_height = graded_cells(segment.height, nh, ratio)?;
+    let across_width = graded_cells(segment.width, nw, width_ratio)?;
+    let across_height = graded_cells(segment.height, nh, height_ratio)?;
     grading::validate(
         segment,
         &basis,
         &across_width,
         &across_height,
-        (nw, nh, ratio),
+        (nw, nh, width_ratio, height_ratio),
     )?;
-    if ratio == 1.0 {
+    if width_ratio == 1.0 && height_ratio == 1.0 {
         return discretize(segment, nw, nh);
     }
 
@@ -829,6 +879,56 @@ mod tests {
                 "nw = {nw}, nh = {nh}"
             );
         }
+    }
+
+    /// Independent ratios grade each axis by its own law: the widths are
+    /// exactly those of the width-ratio grid, the heights those of the
+    /// height-ratio grid, and the centres combine both — every filament of
+    /// the per-axis grid matches, field for field, one assembled from the two
+    /// single-ratio grids.
+    #[test]
+    fn per_axis_ratios_grade_each_axis_independently() {
+        let segment = skew_segment();
+        for (nw, nh, rw, rh) in [(4, 3, 3.0, 1.0), (3, 5, 1.0, 2.0), (5, 4, 2.0, 1.5)] {
+            let mixed = discretize_graded_per_axis(&segment, nw, nh, rw, rh).unwrap();
+            let by_width = discretize_graded(&segment, nw, nh, rw).unwrap();
+            let by_height = discretize_graded(&segment, nw, nh, rh).unwrap();
+            assert_eq!(mixed.len(), nw * nh);
+            let widths = graded_extents(segment.width, nw, rw).unwrap();
+            let heights = graded_extents(segment.height, nh, rh).unwrap();
+            let centre = segment.center();
+            for (index, f) in mixed.iter().enumerate() {
+                let (i, j) = (index % nw, index / nw);
+                assert!((f.width() - widths[i]).abs() < TOL, "{nw}x{nh} {rw}/{rh}");
+                assert!((f.height() - heights[j]).abs() < TOL, "{nw}x{nh} {rw}/{rh}");
+                let offset = f.center() - centre;
+                let (w, h) = (f.width_dir(), f.height_dir());
+                assert!((offset.dot(&w) - (by_width[index].center() - centre).dot(&w)).abs() < TOL);
+                assert!(
+                    (offset.dot(&h) - (by_height[index].center() - centre).dot(&h)).abs() < TOL
+                );
+            }
+            let total: f64 = mixed.iter().map(Filament::area).sum();
+            assert!((total - segment.area()).abs() < TOL * segment.area());
+        }
+        // Equal ratios are the single-ratio grid, and unit ratios the uniform one.
+        assert_eq!(
+            discretize_graded_per_axis(&segment, 3, 4, 2.5, 2.5).unwrap(),
+            discretize_graded(&segment, 3, 4, 2.5).unwrap()
+        );
+        assert_eq!(
+            discretize_graded_per_axis(&segment, 3, 4, 1.0, 1.0).unwrap(),
+            discretize(&segment, 3, 4).unwrap()
+        );
+        // Either ratio out of range is rejected, naming the offending value.
+        assert_eq!(
+            discretize_graded_per_axis(&segment, 2, 2, 2.0, 0.5),
+            Err(DiscretizeError::InvalidRatio { ratio: 0.5 })
+        );
+        assert_eq!(
+            discretize_graded_per_axis(&segment, 2, 2, -1.0, 2.0),
+            Err(DiscretizeError::InvalidRatio { ratio: -1.0 })
+        );
     }
 
     #[test]

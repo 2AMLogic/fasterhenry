@@ -88,6 +88,7 @@ fn trace_over_plane(nx: usize, ny: usize) -> (Geometry, Vec<Port>, Discretizatio
         sigma: SIGMA,
         holes: Vec::new(),
         contacts: Vec::new(),
+        equipotentials: Vec::new(),
     };
     let centres = plane.build_into(&mut geometry).unwrap();
     let segments_before = geometry.segment_count();
@@ -222,7 +223,7 @@ fn pypeec_plane_reference() -> Option<serde_json::Value> {
 fn slotted_plane(nx: usize, ny: usize, slotted: bool) -> (Geometry, Vec<Port>, Discretization) {
     let mut geometry = Geometry::new();
     let holes = if slotted {
-        vec![fasterhenry::plane::Hole {
+        vec![fasterhenry::plane::Hole::Rect {
             lo: [0.5e-3, 0.0],
             hi: [0.7e-3, 0.64e-3],
         }]
@@ -239,6 +240,7 @@ fn slotted_plane(nx: usize, ny: usize, slotted: bool) -> (Geometry, Vec<Port>, D
         sigma: SIGMA,
         holes,
         contacts: Vec::new(),
+        equipotentials: Vec::new(),
     };
     let centres = plane.build_into(&mut geometry).unwrap();
     let west = plane.attach(&centres, [1e-9, 0.4e-3, 10e-6]).unwrap();
@@ -420,6 +422,7 @@ fn contact_plane(mesh: ContactMesh, far: bool) -> (GroundPlane, [[f64; 2]; 2]) {
         sigma: SIGMA,
         holes: Vec::new(),
         contacts,
+        equipotentials: Vec::new(),
     };
     (plane, landings)
 }
@@ -687,6 +690,133 @@ fn contact_separation_differential_against_pypec() {
     );
     assert!((dr - pypeec_dr).abs() / pypeec_dr < 0.15);
     println!("CONTACT GATE PASSED (graded vs PyPEEC separation differential)");
+}
+
+// ---------------------------------------------------------------------------
+// Equipotential contacts (issue #101): a landing that is a pad, not a point
+// ---------------------------------------------------------------------------
+
+/// A small copper sheet driven between two 100 µm landings, each resolved
+/// by its own graded contact region. The sheet is deliberately smaller than
+/// the fixture above (82 and 162 bars, four DC solves, ~15 s unoptimized)
+/// so this gate runs in a debug build: what it measures is a *difference
+/// between two models of the same mesh*, not an accuracy claim that would
+/// need a fine one.
+const PAD_HI: [f64; 2] = [0.6e-3, 0.4e-3];
+const PAD: [f64; 2] = [100e-6, 100e-6];
+const PAD_LANDINGS: [[f64; 2]; 2] = [[0.15e-3, 0.2e-3], [0.45e-3, 0.2e-3]];
+
+/// `(R at DC, plane bars, cells tied per pad)` for that sheet with each
+/// landing's region cut into `cells` fine cells per axis — driven either
+/// between the two nearest cell-centre nodes (`pad = false`: the landing
+/// this engine has always had) or between two `Equipotential` pads covering
+/// the same two rectangles (`pad = true`).
+fn pad_resistance(cells: usize, pad: bool) -> (f64, usize, usize) {
+    let corners = |landing: [f64; 2]| {
+        (
+            [landing[0] - PAD[0] / 2.0, landing[1] - PAD[1] / 2.0],
+            [landing[0] + PAD[0] / 2.0, landing[1] + PAD[1] / 2.0],
+        )
+    };
+    let mut plane = GroundPlane {
+        lo: [0.0, 0.0],
+        hi: PAD_HI,
+        z_top: CONTACT_T,
+        thickness: CONTACT_T,
+        nx: 6,
+        ny: 4,
+        sigma: SIGMA,
+        holes: Vec::new(),
+        contacts: PAD_LANDINGS
+            .iter()
+            .map(|&landing| {
+                let (lo, hi) = corners(landing);
+                fasterhenry::plane::ContactRegion::new(lo, hi, [cells; 2], CONTACT_RATIO)
+            })
+            .collect(),
+        equipotentials: Vec::new(),
+    };
+    if pad {
+        for landing in PAD_LANDINGS {
+            let (lo, hi) = corners(landing);
+            plane
+                .equipotentials
+                .push(fasterhenry::plane::Equipotential::new(lo, hi));
+        }
+    }
+    let mut geometry = Geometry::new();
+    let centres = plane.build_into(&mut geometry).unwrap();
+    let bars = geometry.segment_count();
+    let mut ends = Vec::new();
+    for (index, landing) in PAD_LANDINGS.iter().enumerate() {
+        ends.push(if pad {
+            plane
+                .equipotential_node(&centres, index)
+                .unwrap()
+                .expect("each pad ties at least one live cell")
+        } else {
+            plane
+                .attach(&centres, [landing[0], landing[1], CONTACT_T / 2.0])
+                .unwrap()
+        });
+    }
+    // How many cells the first landing's node speaks for, for the report.
+    let mesh = plane.mesh().unwrap();
+    let tied = (0..mesh.nx())
+        .flat_map(|i| (0..mesh.ny()).map(move |j| (i, j)))
+        .filter(|&(i, j)| centres[i][j] == Some(ends[0]))
+        .count();
+    let ports = vec![Port::new(ends[0], ends[1]).named("pad")];
+    let result = solve(
+        &geometry,
+        &ports,
+        &Discretization::Uniform(Subdivision::SINGLE),
+        &[0.0],
+    )
+    .unwrap();
+    (result.impedance_ohm[0][(0, 0)].re, bars, tied)
+}
+
+/// What an equipotential contact buys, measured on the same mesh: current
+/// enters the pad across its whole boundary instead of through one cell, so
+/// the port's DC resistance is lower than a single-node landing's — and,
+/// unlike that landing's, it barely moves when the landing's own cells are
+/// refined. A point contact's constriction resistance grows without bound
+/// as the cell shrinks (it is the mesh, not the geometry, that sets it);
+/// the pad's is set by the rectangle the deck named, which is the whole
+/// reason `contact equiv_rect` exists.
+#[test]
+fn an_equipotential_pad_lowers_resistance_and_stops_the_mesh_setting_it() {
+    let (coarse_point, coarse_bars, coarse_cells) = pad_resistance(2, false);
+    let (fine_point, fine_bars, fine_cells) = pad_resistance(3, false);
+    let (coarse_pad, _, coarse_tied) = pad_resistance(2, true);
+    let (fine_pad, _, fine_tied) = pad_resistance(3, true);
+    println!(
+        "point landing: {coarse_point:.6} ohm ({coarse_bars} bars, {coarse_cells} cell) -> \
+         {fine_point:.6} ohm ({fine_bars} bars, {fine_cells} cell); pad: {coarse_pad:.6} ohm \
+         ({coarse_tied} cells tied) -> {fine_pad:.6} ohm ({fine_tied} cells tied)"
+    );
+    assert_eq!((coarse_cells, fine_cells), (1, 1), "a landing is one cell");
+    assert_eq!((coarse_tied, fine_tied), (4, 9), "a pad is its rectangle");
+    for (point, pad, cells) in [(coarse_point, coarse_pad, 2), (fine_point, fine_pad, 3)] {
+        assert!(
+            pad < point,
+            "{cells} cells across the landing: the pad must beat the point \
+             landing ({pad} vs {point})"
+        );
+    }
+    // Refining the landing tightens the point contact's constriction…
+    assert!(
+        fine_point > coarse_point * 1.03,
+        "the point landing's resistance must climb as its cell shrinks \
+         ({coarse_point} -> {fine_point})"
+    );
+    // …while the pad, whose size the deck stated, stays where it was.
+    let drift = (fine_pad - coarse_pad).abs() / coarse_pad;
+    assert!(
+        drift < 0.05,
+        "the pad's resistance must not follow the mesh ({coarse_pad} -> {fine_pad}, {drift})"
+    );
 }
 
 #[test]

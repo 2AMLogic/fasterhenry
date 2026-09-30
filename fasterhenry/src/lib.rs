@@ -77,7 +77,9 @@ pub mod result;
 pub mod solve;
 
 pub use coupling::{Coupling, CouplingError, TruncationWarning};
-pub use filament::{discretize, discretize_graded, DiscretizeError, Filament};
+pub use filament::{
+    discretize, discretize_graded, discretize_graded_per_axis, DiscretizeError, Filament,
+};
 pub use geometry::{
     Geometry, GeometryError, LocalBasis, Node, NodeId, Segment, SegmentDef, SegmentError,
 };
@@ -93,8 +95,8 @@ pub use mesh::{MeshError, MeshMatrix, Port};
 pub use pfft::{GridSpacing, PfftError, PfftOperator, PfftParams, PfftStats};
 pub use result::{Counts, Provenance, SweepResult, Timing};
 pub use solve::{
-    filament_resistance, skin_depth, solve, Discretization, Grading, MeshSystem, SkinDepthGrading,
-    SolveError, Solver, SolverChoice, Subdivision, DENSE_PATH_MAX_FILAMENTS,
+    filament_resistance, skin_depth, solve, AxisGrading, Discretization, Grading, MeshSystem,
+    SkinDepthGrading, SolveError, Solver, SolverChoice, Subdivision, DENSE_PATH_MAX_FILAMENTS,
 };
 
 /// Crate version, for CLI `--version` and JSON output provenance.

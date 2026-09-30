@@ -66,12 +66,18 @@ __pycache__/
 .loom/metrics/
 .loom/usage-cache.json
 .loom/claude-config/
+.loom/claude-config.*/
+.loom/claude-config-*/
 .loom/native-tools/
 .loom/tokens/
 .loom/tokens.*/
 .loom/tokens-*/
 .loom/accounts.env
+.loom/accounts.env.*
+.loom/accounts.env-*
 .loom/api-keys/
+.loom/api-keys.*/
+.loom/api-keys-*/
 .loom/account-health.json
 .loom/account-health.lock
 .loom/CANARY
@@ -83,7 +89,11 @@ __pycache__/
 .loom/logs/
 .loom/.resync-in-progress
 .loom/gh-config/
+.loom/gh-config.*/
+.loom/gh-config-*/
 .loom/gh-config-by-owner/
+.loom/gh-config-by-owner.*/
+.loom/gh-config-by-owner-*/
 .loom-local/
 # <<< loom-managed <<<
 .loom/health-metrics.json
@@ -112,3 +122,7 @@ tools/pypeec_plane_solid_reference.json
 # EPHEMERAL_PATTERNS (see loom's .gitignore: consumer repos have no reason to
 # inherit a rule for a tool they may not use), so it is declared here instead.
 .squad/
+
+# The CLI's documented default output (`./Zc.mat`, written to the current
+# directory when no --zc-mat path is given). Never a tracked file.
+Zc.mat

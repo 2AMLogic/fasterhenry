@@ -1,7 +1,7 @@
 //! Ground planes: thick rectangular sheets discretized into a mesh of
-//! bars, with rectangular holes and locally refined contact regions — the
-//! FastHenry `G` feature, on the same segment/kernel/mesh machinery
-//! everything else uses.
+//! bars, with holes (rectangle, point or circle) and locally refined
+//! contact regions — the FastHenry `G` feature, on the same
+//! segment/kernel/mesh machinery everything else uses.
 //!
 //! # Discretization
 //!
@@ -17,11 +17,12 @@
 //! * a y-directed bar spans `(dyⱼ + dyⱼ₊₁)/2`, with cross-section
 //!   `dxᵢ × thickness`.
 //!
-//! Cells whose centre lies inside a hole are removed together with their
-//! incident bars. This is a PEEC discretization in its own right (not a
-//! transcription of FastHenry's particular panel mesh — see the
-//! clean-room note in the repository README): convergence to the
-//! continuum plane goes as the grid is refined.
+//! A hole removes the cells it covers together with their incident bars —
+//! see [`Hole`] for each shape's exact cell-removal rule. This is a PEEC
+//! discretization in its own right (not a transcription of FastHenry's
+//! particular panel mesh — see the clean-room note in the repository
+//! README): convergence to the continuum plane goes as the grid is
+//! refined.
 //!
 //! # Graded contact regions
 //!
@@ -31,7 +32,9 @@
 //! refining everywhere is ruinous. A [`ContactRegion`] refines locally
 //! instead — inside the region the mesh is uniform at the fine cell
 //! `h = w / cells`, and outside it each cell is `ratio` times its
-//! neighbour until it reaches the background cell `c`.
+//! neighbour until it reaches the background cell `c`. The ratio is
+//! itself per axis, so a region that is refined harder across x than
+//! across y decays at its own rate on each.
 //!
 //! Grading is applied **per axis**, so the mesh stays a structured
 //! (tensor-product) grid: a region's x-refinement extends as a band
@@ -43,12 +46,35 @@
 //! (regions overlapping — or closer than one fine cell — on an axis merge
 //! into one band, keeping the finest cell and the gentlest ratio).
 //!
+//! ## A band that is not a refinement
+//!
+//! One band takes no part in that merge: one spanning the **whole axis** at
+//! the plane's own cell count for it. Such a band *is* the background mesh
+//! on that axis — its cells are the background cells, and the only edges it
+//! pins are the footprint's own, which are edges regardless — so it adds no
+//! resolution and is dropped before the bands are merged. It has to be:
+//! spanning the axis, it overlaps every other band on it, and merging keeps
+//! the finer cell across the union of the two extents, so one such band
+//! would refine the *entire* axis to the finest cell anywhere on it. That is
+//! a cost nothing in the request asked for (issue #124). A deck's `contact
+//! point` / `contact line` emits exactly this band for an axis whose
+//! requested cell the background already meets, so that axis's edges are
+//! the ones it has without the clause (issue #116).
+//!
+//! A [`ContactRegion`] cut at the background cell over only **part** of an
+//! axis is *not* dropped: it still cuts its own extent into its own cells,
+//! and so still pins its `lo` and `hi` as cell edges — a caller naming a
+//! coordinate gets an edge there even where the resolution is already met,
+//! and it still merges with a neighbour as any other band does. Only the
+//! whole-axis case is a no-op, and only the no-op is dropped.
+//!
 //! ## Cell count
 //!
 //! Per axis, for a span `W` with background count `n` (coarse cell
 //! `c = W/n`) and one region of width `w` cut into `k` cells
-//! (`h = w/k`) at ratio `r`: the region contributes `k` cells, and each
-//! gap of length `g` beside it takes the smallest `m` cells with
+//! (`h = w/k`) at that axis's ratio `r`: the region contributes `k`
+//! cells, and each gap of length `g` beside it takes the smallest `m`
+//! cells with
 //!
 //! ```text
 //! Σ_{i<m} min(h·r^(i+1), c)  ≥  g
@@ -58,6 +84,35 @@
 //! region on *both* sides takes the smaller of the two sides' targets per
 //! cell, so it is thin at both ends and coarse in the middle. The axis
 //! total is `k + Σ m` cells.
+//!
+//! # Equipotential contacts
+//!
+//! A landing that is a *pad* rather than a point — a wide via, a bond pad,
+//! the footprint of a connector — shorts a whole patch of the plane to one
+//! potential. An [`Equipotential`] rectangle says exactly that: every live
+//! cell centre inside it shares a single node, so the patch has no internal
+//! drop and current enters it across its whole boundary instead of through
+//! one cell. This is what a deck's *named contact area* needs, and it is a
+//! different thing from a [`ContactRegion`], which only grades the mesh.
+//!
+//! The tie changes the mesh, not just a label, so its consequences are
+//! stated rather than left to be inferred:
+//!
+//! * the bars **inside** the patch disappear — both of their ends are the
+//!   same node, and a perfect conductor carries no drop across itself;
+//! * the bars that **cross the patch's boundary** run from their own cell
+//!   centre to the tie node, which sits at the mean of the cell centres it
+//!   ties. The model is therefore exact for a patch covering one cell; for
+//!   a larger patch each entering bar reaches that one point through metal
+//!   the mesh still treats as ordinary plane rather than as the perfect
+//!   conductor the patch is, which over-states the patch's own resistance
+//!   rather than under-stating it — and, unlike landing on a single cell
+//!   centre, the over-statement does not grow as the mesh is refined;
+//! * two rectangles that tie a cell in common are **one** equipotential
+//!   (two overlapping perfect conductors are one conductor), so overlapping
+//!   regions merge rather than needing a tie-break;
+//! * a rectangle catching no live cell centre ties nothing, and
+//!   [`GroundPlane::equipotential_node`] reports `None` for it.
 //!
 //! # Cost
 //!
@@ -79,27 +134,148 @@
 //! **snapped** to the nearest live cell-centre node ([`GroundPlane::attach`]): the
 //! segment then shares that node with the plane mesh, closing the current
 //! path. Snapping is explicit in the API and in the deck reader (`G`'
-//! footprint), never silent elsewhere.
+//! footprint), never silent elsewhere. An endpoint landing inside an
+//! [`Equipotential`] rectangle snaps to a cell of that patch, and so to the
+//! patch's one tie node, with no further machinery; a caller that wants the
+//! tie node itself — a deck naming a *contact area* rather than a point —
+//! asks [`GroundPlane::equipotential_node`] for it.
 
 use thiserror::Error;
 
 use crate::geometry::{Geometry, GeometryError, Node, NodeId, SegmentDef};
 
-/// A rectangular hole in a plane's surface coordinates.
+/// A hole cut into a plane's mesh: the region whose covered cells are
+/// removed together with their incident bars.
+///
+/// Each variant states its own cell-removal rule — and, where the shape can
+/// produce one, the rule at a tie — rather than sharing one geometric test:
+/// a rectangle, a point and a circle are not comparable shapes, so forcing
+/// one rule onto all three would either silently misrepresent one of them
+/// or need an undocumented guess (see [`GroundPlane::build_into`], which
+/// applies every hole in [`GroundPlane::holes`] cell by cell).
+///
+/// `#[non_exhaustive]`: this is a list of *shapes*, and the list is not
+/// claimed to be closed, so adding one should not be a breaking change the
+/// way this enum's own introduction was (issue #98 widened this from a
+/// rectangle-only struct).
+///
+/// # Arbitrary removal rules
+///
+/// There is deliberately **no** predicate or callback variant here (issue
+/// #99; the decision and its reasoning are recorded in
+/// `docs/fasthenry-compat.md` § *`hole user1`…`user7`*). A hole whose rule
+/// is "whatever this program decides, cell by cell" needs no new variant,
+/// because [`GroundPlane::mesh`] does not depend on
+/// [`GroundPlane::holes`]: mesh the plane first, apply your own rule to the
+/// cell centres the mesh reports, and cut each selected cell with a
+/// [`Hole::Point`] at its own centre. A centre lies strictly inside its own
+/// cell, so each such point removes exactly that one cell and no other —
+/// the composition is exact, not an approximation.
+///
+/// ```
+/// use fasterhenry::geometry::Geometry;
+/// use fasterhenry::plane::{GroundPlane, Hole};
+///
+/// let mut plane = GroundPlane {
+///     lo: [0.0, 0.0],
+///     hi: [10e-3, 6e-3],
+///     z_top: 0.0,
+///     thickness: 35e-6,
+///     nx: 5,
+///     ny: 3,
+///     sigma: 5.8e7,
+///     ..GroundPlane::default()
+/// };
+///
+/// // Any rule at all over a cell centre — here a diagonal cut that no
+/// // rectangle, point or circle describes.
+/// let cut = |centre: [f64; 2]| centre[1] > centre[0] / 2.0;
+///
+/// let mesh = plane.mesh()?;
+/// for i in 0..mesh.nx() {
+///     for j in 0..mesh.ny() {
+///         let centre = mesh.centre(i, j);
+///         if cut([centre[0], centre[1]]) {
+///             plane.holes.push(Hole::Point {
+///                 at: [centre[0], centre[1]],
+///             });
+///         }
+///     }
+/// }
+///
+/// let mut geometry = Geometry::new();
+/// let live = plane.build_into(&mut geometry)?;
+/// assert!(live[0][2].is_none()); // centre (1 mm, 5 mm): above the cut
+/// assert!(live[4][0].is_some()); // centre (9 mm, 1 mm): below it
+/// # Ok::<(), fasterhenry::plane::PlaneError>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Hole {
-    /// Inclusive lower corner `(x, y)`.
-    pub lo: [f64; 2],
-    /// Exclusive... see [`GroundPlane::contains`]: a cell centre strictly inside.
-    pub hi: [f64; 2],
+#[non_exhaustive]
+pub enum Hole {
+    /// An axis-aligned rectangle: removes every cell whose **centre**
+    /// lies strictly inside `lo .. hi` (open on both edges) — a centre
+    /// exactly on the rectangle's boundary is not removed. This is the
+    /// original rectangle rule, unchanged from before this type became an
+    /// enum.
+    Rect {
+        /// Inclusive lower corner `(x, y)`.
+        lo: [f64; 2],
+        /// Exclusive upper corner `(x, y)`; see the strict-inequality note
+        /// above.
+        hi: [f64; 2],
+    },
+    /// A single point: removes every cell whose own extent — edges
+    /// included — contains it. A point strictly inside exactly one cell
+    /// removes that cell alone; a point exactly on a shared edge (or
+    /// corner) between cells is the documented tie, and removes every
+    /// cell touching that edge or corner rather than guessing a single
+    /// winner among them.
+    Point {
+        /// The point `(x, y)`.
+        at: [f64; 2],
+    },
+    /// A circle: removes every cell whose **centre** lies at or inside
+    /// `radius` of `centre` — a centre exactly on the circle is removed
+    /// (closed boundary; there is no legacy rectangle-style behaviour to
+    /// match here, so the boundary is defined inclusive).
+    Circle {
+        /// Centre `(x, y)`.
+        centre: [f64; 2],
+        /// Radius, metres. A negative value is not rejected by this type
+        /// (a distance is never negative, so `centre`'s test is simply
+        /// always false and the hole removes nothing) — the deck reader
+        /// validates `radius >= 0` itself, since a negative radius on a
+        /// deck line is a mistake to report, not a shape to build.
+        radius: f64,
+    },
+}
+
+impl Hole {
+    /// Whether this hole removes a cell, given the cell's own centre and
+    /// its extent `(lo, hi)` in the plane's xy coordinates. `bounds` only
+    /// matters for [`Hole::Point`]; see each variant's doc for its test.
+    fn removes(&self, centre: [f64; 3], bounds: ([f64; 2], [f64; 2])) -> bool {
+        match *self {
+            Hole::Rect { lo, hi } => {
+                lo[0] < centre[0] && centre[0] < hi[0] && lo[1] < centre[1] && centre[1] < hi[1]
+            }
+            Hole::Point { at } => {
+                let (lo, hi) = bounds;
+                lo[0] <= at[0] && at[0] <= hi[0] && lo[1] <= at[1] && at[1] <= hi[1]
+            }
+            Hole::Circle { centre: c, radius } => {
+                (centre[0] - c[0]).hypot(centre[1] - c[1]) <= radius
+            }
+        }
+    }
 }
 
 /// A rectangular contact region: the patch of plane under a via landing,
 /// meshed finely and decaying back to the background cell outside.
 ///
 /// Inside `[lo, hi]` the mesh is uniform with `cells` cells per axis (fine
-/// cell `h = (hi − lo) / cells`); outside, cells grow by `ratio` each until
-/// they reach the background cell. See the [module
+/// cell `h = (hi − lo) / cells`); outside, cells grow by that axis's
+/// `ratio` each until they reach the background cell. See the [module
 /// documentation](self#graded-contact-regions) for the tensor-product
 /// consequence and the cell-count formula.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,16 +286,30 @@ pub struct ContactRegion {
     pub hi: [f64; 2],
     /// Fine cells across the region, `[x, y]`.
     pub cells: [usize; 2],
-    /// Geometric growth ratio per cell outside the region (`>= 1`; `1` is
-    /// no decay at all, i.e. a uniformly fine axis).
-    pub ratio: f64,
+    /// Geometric growth ratio per cell outside the region, per axis
+    /// `[x, y]` (each `>= 1`; `1` is no decay at all on that axis, i.e. a
+    /// uniformly fine axis). [`ContactRegion::new`] sets both alike;
+    /// [`ContactRegion::graded_per_axis`] sets them apart, which is what a
+    /// region refined harder across one axis than the other needs.
+    pub ratio: [f64; 2],
 }
 
 impl ContactRegion {
     /// A region spanning `lo … hi`, `cells` fine cells per axis, decaying
-    /// outward by `ratio`.
+    /// outward by `ratio` on both axes alike.
     #[must_use]
     pub fn new(lo: [f64; 2], hi: [f64; 2], cells: [usize; 2], ratio: f64) -> Self {
+        Self::graded_per_axis(lo, hi, cells, [ratio, ratio])
+    }
+
+    /// A region spanning `lo … hi`, `cells` fine cells per axis, decaying
+    /// outward by a ratio chosen per axis (`[x, y]`).
+    ///
+    /// The anisotropic case [`ContactRegion::new`]'s single ratio cannot
+    /// express: a region whose refinement differs between the axes decays
+    /// back to the background cell at a different rate on each.
+    #[must_use]
+    pub fn graded_per_axis(lo: [f64; 2], hi: [f64; 2], cells: [usize; 2], ratio: [f64; 2]) -> Self {
         Self {
             lo,
             hi,
@@ -142,6 +332,55 @@ impl ContactRegion {
     }
 }
 
+/// A rectangular patch of plane tied to a single node: every live cell
+/// centre inside it shares one node, so the patch is an equipotential.
+///
+/// A [`ContactRegion`] grades the mesh under a landing; this ties the metal
+/// together. The two are independent and compose: a pad that is both
+/// resolved finely and shorted is one of each on the same rectangle.
+///
+/// Membership is by cell **centre**, with the rectangle's boundary
+/// **included** — a centre exactly on an edge is tied. (There is no legacy
+/// rectangle behaviour to match here, as there is for [`Hole::Rect`]'s open
+/// test, and a contact names a patch of metal: excluding a centre on the
+/// edge would quietly shrink the patch the deck asked for.) See the [module
+/// documentation](self#equipotential-contacts) for what the tie does to the
+/// mesh, and [`GroundPlane::equipotential_node`] for the node it produces.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Equipotential {
+    /// Lower corner `(x, y)` in plane coordinates, metres.
+    pub lo: [f64; 2],
+    /// Upper corner `(x, y)`, metres.
+    pub hi: [f64; 2],
+}
+
+impl Equipotential {
+    /// The patch spanning `lo … hi`.
+    #[must_use]
+    pub fn new(lo: [f64; 2], hi: [f64; 2]) -> Self {
+        Self { lo, hi }
+    }
+
+    /// The patch of full widths `widths` about `centre` — the centre-and-
+    /// widths spelling a deck's contact clauses use.
+    #[must_use]
+    pub fn centred(centre: [f64; 2], widths: [f64; 2]) -> Self {
+        Self {
+            lo: [centre[0] - widths[0] / 2.0, centre[1] - widths[1] / 2.0],
+            hi: [centre[0] + widths[0] / 2.0, centre[1] + widths[1] / 2.0],
+        }
+    }
+
+    /// Whether this patch ties the cell with the given centre (boundary
+    /// included; see the type's own documentation).
+    fn ties(&self, centre: [f64; 3]) -> bool {
+        self.lo[0] <= centre[0]
+            && centre[0] <= self.hi[0]
+            && self.lo[1] <= centre[1]
+            && centre[1] <= self.hi[1]
+    }
+}
+
 /// A ground plane specification: extent, discretization, holes, contacts.
 #[derive(Clone, Debug, Default)]
 pub struct GroundPlane {
@@ -160,14 +399,21 @@ pub struct GroundPlane {
     pub ny: usize,
     /// Conductivity, S/m.
     pub sigma: f64,
-    /// Rectangular holes (x/y in plane coordinates).
+    /// Holes cut into the mesh (x/y in plane coordinates); see [`Hole`] for
+    /// each shape's removal rule, and for the way an arbitrary per-cell rule
+    /// composes from [`GroundPlane::mesh`] and [`Hole::Point`].
     pub holes: Vec<Hole>,
     /// Locally refined contact regions (x/y in plane coordinates).
     pub contacts: Vec<ContactRegion>,
+    /// Patches tied to one node each (x/y in plane coordinates); see
+    /// [`Equipotential`] and the [module
+    /// documentation](self#equipotential-contacts).
+    pub equipotentials: Vec<Equipotential>,
 }
 
 /// Why a ground plane could not be built.
 #[derive(Clone, Debug, PartialEq, Error)]
+#[non_exhaustive]
 pub enum PlaneError {
     /// The discretization is degenerate.
     #[error("ground plane needs nx, ny >= 1 (got {nx}, {ny})")]
@@ -322,12 +568,45 @@ impl PlaneMesh {
         ]
     }
 
+    /// The lower and upper corners `(x, y)` of cell `(i, j)`'s own extent.
+    ///
+    /// # Panics
+    ///
+    /// If `i >= self.nx()` or `j >= self.ny()`.
+    #[must_use]
+    pub fn cell_bounds(&self, i: usize, j: usize) -> ([f64; 2], [f64; 2]) {
+        ([self.x[i], self.y[j]], [self.x[i + 1], self.y[j + 1]])
+    }
+
     /// Bars the mesh would carry with every cell live:
     /// `2·nx·ny − nx − ny`.
     #[must_use]
     pub fn bars(&self) -> usize {
         2 * self.nx() * self.ny() - self.nx() - self.ny()
     }
+}
+
+/// The fewest uniform cells across `span` whose extent is no larger than
+/// `fine` — `ceil(span / fine)`, at least one.
+///
+/// A span that is an exact multiple of `fine` must not gain a spurious
+/// extra cell from a last-bit rounding of the division, so a quotient
+/// within a relative `1e-9` of an integer counts as that integer. Rounding
+/// to the *nearest* count instead (as band layout once did) could cut a
+/// merged or edge-widened band into cells up to twice the requested fine
+/// cell, breaking the "keeps the finest cell" guarantee the refinement
+/// shapes rely on.
+fn cells_no_coarser_than(span: f64, fine: f64) -> usize {
+    let quotient = span / fine;
+    let rounded = quotient.round();
+    let cells = if (quotient - rounded).abs() <= 1e-9 * rounded {
+        rounded
+    } else {
+        quotient.ceil()
+    };
+    // `as` saturates: an infinite quotient (a fine cell that underflowed
+    // to zero) becomes `usize::MAX`, which the per-axis limit then refuses.
+    (cells as usize).max(1)
 }
 
 /// Appends the cells filling the gap `from … to` to `edges`.
@@ -409,6 +688,14 @@ fn axis_edges(
     mut bands: Vec<Band>,
 ) -> Result<Vec<f64>, PlaneError> {
     let coarse = (hi - lo) / background as f64;
+    // A band spanning the whole axis at the axis's own cell count *is* the
+    // background mesh: its cells are the background cells and the only edges
+    // it pins are the footprint's own, which are edges regardless. It adds no
+    // resolution, so it takes no part in the merge below — where, spanning the
+    // axis, it would overlap every other band and widen the axis's finest cell
+    // across the whole of it (issue #124). A band at the background cell over
+    // only *part* of an axis is kept: see the module documentation.
+    bands.retain(|band| !(band.start <= lo && band.end >= hi && band.cells == background));
     if bands.is_empty() {
         let mut edges: Vec<f64> = (0..background).map(|i| lo + i as f64 * coarse).collect();
         edges.push(hi);
@@ -424,7 +711,7 @@ fn axis_edges(
                 let fine = last.fine().min(band.fine());
                 last.end = last.end.max(band.end);
                 last.ratio = last.ratio.min(band.ratio);
-                last.cells = (((last.end - last.start) / fine).round() as usize).max(1);
+                last.cells = cells_no_coarser_than(last.end - last.start, fine);
             }
             _ => merged.push(band),
         }
@@ -484,9 +771,49 @@ fn axis_edges(
     Ok(edges)
 }
 
+/// The equipotential classes of a meshed plane: which [`Equipotential`]
+/// each live cell belongs to once regions sharing a cell have merged, and
+/// where each class's one tie node sits.
+#[derive(Clone, Debug)]
+struct Ties {
+    /// The representative region of each declared region.
+    root: Vec<usize>,
+    /// The representative region of each cell, `[i][j]`; `None` where the
+    /// cell is holed or no region ties it.
+    cell: Vec<Vec<Option<usize>>>,
+    /// The tie node's position, per region; `Some` only for a
+    /// representative that ties at least one live cell.
+    node_at: Vec<Option<[f64; 3]>>,
+}
+
+impl Ties {
+    /// Whether two cells are tied into the same equipotential.
+    fn joined(&self, a: (usize, usize), b: (usize, usize)) -> bool {
+        match (self.cell[a.0][a.1], self.cell[b.0][b.1]) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
+    }
+}
+
+/// Union-find over region indices, with path halving.
+fn find(parent: &mut [usize], mut index: usize) -> usize {
+    while parent[index] != index {
+        parent[index] = parent[parent[index]];
+        index = parent[index];
+    }
+    index
+}
+
 impl GroundPlane {
     /// The plane's cell layout — uniform `nx × ny`, refined around every
     /// [`ContactRegion`].
+    ///
+    /// The layout does **not** depend on [`GroundPlane::holes`]: holes
+    /// remove cells from this mesh, they never move its edges. A caller may
+    /// therefore mesh a plane, decide from the cell centres which cells it
+    /// wants gone, and only then push the holes that remove them — see
+    /// [`Hole`] § *Arbitrary removal rules*.
     ///
     /// # Errors
     ///
@@ -508,10 +835,12 @@ impl GroundPlane {
         }
         let mut bands: [Vec<Band>; 2] = [Vec::new(), Vec::new()];
         for contact in &self.contacts {
-            if !(contact.ratio.is_finite() && contact.ratio >= 1.0) {
-                return Err(PlaneError::ContactRatio {
-                    ratio: contact.ratio,
-                });
+            if let Some(&ratio) = contact
+                .ratio
+                .iter()
+                .find(|ratio| !(ratio.is_finite() && **ratio >= 1.0))
+            {
+                return Err(PlaneError::ContactRatio { ratio });
             }
             if contact.cells[0] < 1 || contact.cells[1] < 1 {
                 return Err(PlaneError::ContactZeroCells {
@@ -552,8 +881,8 @@ impl GroundPlane {
                 bands.push(Band {
                     start,
                     end,
-                    cells: (((end - start) / fine).round() as usize).max(1),
-                    ratio: contact.ratio,
+                    cells: cells_no_coarser_than(end - start, fine),
+                    ratio: contact.ratio[axis],
                 });
             }
         }
@@ -565,19 +894,128 @@ impl GroundPlane {
         })
     }
 
-    /// Whether a cell centre falls inside a hole.
-    fn holed(&self, centre: [f64; 3]) -> bool {
-        self.holes.iter().any(|hole| {
-            hole.lo[0] < centre[0]
-                && centre[0] < hole.hi[0]
-                && hole.lo[1] < centre[1]
-                && centre[1] < hole.hi[1]
-        })
+    /// Whether a cell is removed by any hole. `bounds` is the cell's own
+    /// extent, `(lo, hi)`; see [`Hole`] for the per-shape removal rule.
+    fn holed(&self, centre: [f64; 3], bounds: ([f64; 2], [f64; 2])) -> bool {
+        self.holes.iter().any(|hole| hole.removes(centre, bounds))
+    }
+
+    /// Which [`Equipotential`] ties each live cell of `mesh`, and where each
+    /// class's node sits.
+    ///
+    /// Regions that tie a live cell in common are merged into one class —
+    /// two overlapping perfect conductors are one conductor — so no
+    /// tie-break between overlapping rectangles is needed. A class's node
+    /// sits at the mean of the cell centres it ties.
+    fn ties(&self, mesh: &PlaneMesh) -> Ties {
+        let (nx, ny) = (mesh.nx(), mesh.ny());
+        let mut root: Vec<usize> = (0..self.equipotentials.len()).collect();
+        let mut cell: Vec<Vec<Option<usize>>> = (0..nx).map(|_| vec![None; ny]).collect();
+        if self.equipotentials.is_empty() {
+            return Ties {
+                root,
+                cell,
+                node_at: Vec::new(),
+            };
+        }
+        // Pass 1: every region tying a given live cell joins that cell's
+        // class, so regions overlapping on the mesh merge.
+        for (i, column) in cell.iter_mut().enumerate() {
+            for (j, slot) in column.iter_mut().enumerate() {
+                let centre = mesh.centre(i, j);
+                if self.holed(centre, mesh.cell_bounds(i, j)) {
+                    continue;
+                }
+                for (index, region) in self.equipotentials.iter().enumerate() {
+                    if !region.ties(centre) {
+                        continue;
+                    }
+                    let index = find(&mut root, index);
+                    match *slot {
+                        None => *slot = Some(index),
+                        Some(first) => {
+                            let first = find(&mut root, first);
+                            root[index] = first;
+                            *slot = Some(first);
+                        }
+                    }
+                }
+            }
+        }
+        // Pass 2: resolve every cell to its class's final representative,
+        // accumulating each class's tie position as it goes.
+        let mut sum = vec![[0.0f64; 3]; self.equipotentials.len()];
+        let mut tied = vec![0usize; self.equipotentials.len()];
+        for (i, column) in cell.iter_mut().enumerate() {
+            for (j, slot) in column.iter_mut().enumerate() {
+                let Some(index) = *slot else { continue };
+                let index = find(&mut root, index);
+                *slot = Some(index);
+                let centre = mesh.centre(i, j);
+                for axis in 0..3 {
+                    sum[index][axis] += centre[axis];
+                }
+                tied[index] += 1;
+            }
+        }
+        let node_at = sum
+            .iter()
+            .zip(&tied)
+            .map(|(sum, &tied)| (tied > 0).then(|| sum.map(|total| total / tied as f64)))
+            .collect();
+        Ties {
+            root,
+            cell,
+            node_at,
+        }
+    }
+
+    /// The node every live cell of equipotential region `index` shares, as
+    /// [`GroundPlane::build_into`] built it into `centres` — the node a deck
+    /// naming a *contact area* attaches to. `None` when the rectangle
+    /// catches no live cell centre, and so ties nothing.
+    ///
+    /// Regions merged with `index` (see [`Equipotential`]) report the same
+    /// node, whichever of them is asked.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`GroundPlane::mesh`] reports.
+    ///
+    /// # Panics
+    ///
+    /// If `index >= self.equipotentials.len()`.
+    pub fn equipotential_node(
+        &self,
+        centres: &[Vec<Option<NodeId>>],
+        index: usize,
+    ) -> Result<Option<NodeId>, PlaneError> {
+        assert!(
+            index < self.equipotentials.len(),
+            "equipotential {index} is not one of this plane's {}",
+            self.equipotentials.len()
+        );
+        let mesh = self.mesh()?;
+        let mut ties = self.ties(&mesh);
+        let root = find(&mut ties.root, index);
+        for (i, column) in ties.cell.iter().enumerate() {
+            for (j, class) in column.iter().enumerate() {
+                if *class == Some(root) {
+                    return Ok(centres[i][j]);
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Builds the plane's mesh into `geometry`, returning the node id of
     /// each live cell centre, indexed `[i][j]` (`None` where a hole
     /// removed the cell).
+    ///
+    /// Cells an [`Equipotential`] ties **share** one node id, so the same id
+    /// appears at every `[i][j]` of that patch and the bars that would have
+    /// run inside it are not built; see the [module
+    /// documentation](self#equipotential-contacts).
     ///
     /// # Errors
     ///
@@ -588,16 +1026,31 @@ impl GroundPlane {
     ) -> Result<Vec<Vec<Option<NodeId>>>, PlaneError> {
         let mesh = self.mesh()?;
         let (nx, ny) = (mesh.nx(), mesh.ny());
+        let ties = self.ties(&mesh);
+        // One node per equipotential class, created at the first cell it
+        // ties so that a plane without equipotentials numbers its nodes
+        // exactly as it always has.
+        let mut tie_nodes: Vec<Option<NodeId>> = vec![None; self.equipotentials.len()];
 
         let mut centres: Vec<Vec<Option<NodeId>>> = (0..nx).map(|_| vec![None; ny]).collect();
         for (i, column) in centres.iter_mut().enumerate() {
             for (j, slot) in column.iter_mut().enumerate() {
                 let position = mesh.centre(i, j);
-                if self.holed(position) {
+                if self.holed(position, mesh.cell_bounds(i, j)) {
                     continue;
                 }
-                *slot =
-                    Some(geometry.add_node(Node::new(position[0], position[1], position[2]))?);
+                *slot = Some(match ties.cell[i][j] {
+                    Some(class) => match tie_nodes[class] {
+                        Some(node) => node,
+                        None => {
+                            let at = ties.node_at[class].expect("a tied class ties a live cell");
+                            let node = geometry.add_node(Node::new(at[0], at[1], at[2]))?;
+                            tie_nodes[class] = Some(node);
+                            node
+                        }
+                    },
+                    None => geometry.add_node(Node::new(position[0], position[1], position[2]))?,
+                });
             }
         }
         let mut bars = 0;
@@ -606,9 +1059,11 @@ impl GroundPlane {
                 let Some(here) = *here else { continue };
                 // An x-directed bar is as wide as the cell row's extent
                 // across y; a y-directed bar as wide as the column's
-                // extent across x.
+                // extent across x. A bar whose two cells are tied into one
+                // equipotential is not built at all: its ends are the same
+                // node, and a perfect conductor carries no drop.
                 if i + 1 < nx {
-                    if let Some(right) = centres[i + 1][j] {
+                    if let Some(right) = centres[i + 1][j].filter(|&right| right != here) {
                         geometry.add_segment(SegmentDef::new(
                             here,
                             right,
@@ -620,7 +1075,7 @@ impl GroundPlane {
                     }
                 }
                 if j + 1 < ny {
-                    if let Some(up) = column[j + 1] {
+                    if let Some(up) = column[j + 1].filter(|&up| up != here) {
                         geometry.add_segment(SegmentDef::new(
                             here,
                             up,
@@ -642,16 +1097,21 @@ impl GroundPlane {
     }
 
     /// Independent count of live bars (for the debug assertion above and
-    /// for tests).
+    /// for tests): adjacent live cells that are not tied into the same
+    /// equipotential.
     fn live_bars(&self, mesh: &PlaneMesh) -> usize {
-        let live = |i: usize, j: usize| !self.holed(mesh.centre(i, j));
+        let ties = self.ties(mesh);
+        let live = |i: usize, j: usize| !self.holed(mesh.centre(i, j), mesh.cell_bounds(i, j));
         let mut bars = 0;
         for i in 0..mesh.nx() {
             for j in 0..mesh.ny() {
-                if live(i, j) && i + 1 < mesh.nx() && live(i + 1, j) {
+                if !live(i, j) {
+                    continue;
+                }
+                if i + 1 < mesh.nx() && live(i + 1, j) && !ties.joined((i, j), (i + 1, j)) {
                     bars += 1;
                 }
-                if live(i, j) && j + 1 < mesh.ny() && live(i, j + 1) {
+                if j + 1 < mesh.ny() && live(i, j + 1) && !ties.joined((i, j), (i, j + 1)) {
                     bars += 1;
                 }
             }
@@ -721,6 +1181,7 @@ mod tests {
             sigma: 5.8e7,
             holes: Vec::new(),
             contacts: Vec::new(),
+            equipotentials: Vec::new(),
         }
     }
 
@@ -747,7 +1208,7 @@ mod tests {
         let mut geometry = Geometry::new();
         let mut plane = test_plane();
         // A hole covering the middle cell (2,1): its centre (5mm, 3mm).
-        plane.holes.push(Hole {
+        plane.holes.push(Hole::Rect {
             lo: [4.9e-3, 2.9e-3],
             hi: [5.1e-3, 3.1e-3],
         });
@@ -759,12 +1220,366 @@ mod tests {
         // A hole exactly on a centre boundary does not remove the cell.
         let mut geometry = Geometry::new();
         let mut plane = test_plane();
-        plane.holes.push(Hole {
+        plane.holes.push(Hole::Rect {
             lo: [5e-3, 0.0],
             hi: [6e-3, 6e-3],
         });
         plane.build_into(&mut geometry).unwrap();
         assert_eq!(geometry.nodes().len(), 15);
+    }
+
+    #[test]
+    fn point_hole_removes_the_cell_containing_it() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // Cell (2, 1) spans x in [4mm, 6mm], y in [2mm, 4mm]; a point well
+        // inside it removes only that cell.
+        plane.holes.push(Hole::Point {
+            at: [5.5e-3, 3.5e-3],
+        });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres[2][1].is_none());
+        assert_eq!(geometry.nodes().len(), 14);
+        assert_eq!(geometry.segment_count(), 18);
+
+        // A point exactly on the shared edge between cells (1,1) and (2,1)
+        // (x = 4mm) is the documented tie: both cells are removed.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Point { at: [4e-3, 3.5e-3] });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres[1][1].is_none());
+        assert!(centres[2][1].is_none());
+        assert_eq!(geometry.nodes().len(), 13);
+
+        // A point outside the plane's footprint removes nothing.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Point { at: [50e-3, 3e-3] });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres.iter().flatten().all(Option::is_some));
+    }
+
+    #[test]
+    fn circle_hole_removes_cells_whose_centre_falls_inside() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // Cell centres sit on a 2 mm grid — (1,1), (3,1), (5,1), (7,1),
+        // (9,1) mm on the bottom row (j=0), (1,3)…(9,3) on the row above
+        // (j=1). A circle of radius 2.5 mm around (5, 1) mm reaches its
+        // three grid neighbours 2 mm away — (3,1) and (7,1) in x, (5,3) in
+        // y — but not the diagonal ones (2.83 mm away) or the row's far
+        // ends (4 mm away).
+        plane.holes.push(Hole::Circle {
+            centre: [5e-3, 1e-3],
+            radius: 2.5e-3,
+        });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        for (i, j) in [(1, 0), (2, 0), (3, 0), (2, 1)] {
+            assert!(centres[i][j].is_none(), "cell ({i}, {j}) should be removed");
+        }
+        for (i, j) in [(0, 0), (4, 0), (0, 1), (1, 1), (3, 1), (4, 1)] {
+            assert!(centres[i][j].is_some(), "cell ({i}, {j}) should survive");
+        }
+        assert_eq!(geometry.nodes().len(), 11);
+
+        // A centre exactly on the circle's boundary is removed (closed).
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Circle {
+            centre: [5e-3, 1e-3],
+            radius: 2e-3,
+        });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres[2][0].is_none()); // centre (5, 1) itself
+        assert!(centres[1][0].is_none()); // (3, 1): distance exactly 2mm
+        assert!(centres[3][0].is_none()); // (7, 1): distance exactly 2mm
+        assert!(centres[2][1].is_none()); // (5, 3): distance exactly 2mm
+
+        // A circle large enough to cover the whole plane removes every
+        // cell.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Circle {
+            centre: [5e-3, 3e-3],
+            radius: 100e-3,
+        });
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres.iter().flatten().all(Option::is_none));
+        assert_eq!(geometry.nodes().len(), 0);
+        assert_eq!(geometry.segment_count(), 0);
+    }
+
+    /// The escape hatch issue #99 chose over a predicate variant: because
+    /// [`GroundPlane::mesh`] ignores [`GroundPlane::holes`], an arbitrary
+    /// per-cell rule is exactly expressible as one [`Hole::Point`] per
+    /// selected cell centre.
+    #[test]
+    fn an_arbitrary_rule_composes_from_mesh_and_point_holes() {
+        // Cuts the cells an arbitrary rule selects, and reports which
+        // survived, `[i][j]`.
+        let build = |rule: &dyn Fn(usize, usize) -> bool| {
+            let mut plane = test_plane();
+            let mesh = plane.mesh().unwrap();
+            for i in 0..mesh.nx() {
+                for j in 0..mesh.ny() {
+                    if rule(i, j) {
+                        let centre = mesh.centre(i, j);
+                        plane.holes.push(Hole::Point {
+                            at: [centre[0], centre[1]],
+                        });
+                    }
+                }
+            }
+            let mut geometry = Geometry::new();
+            let live = plane.build_into(&mut geometry).unwrap();
+            (live, geometry.nodes().len())
+        };
+
+        // A checkerboard: no rectangle, point or circle describes it, and
+        // each point removes exactly its own cell — never a neighbour.
+        let checker = |i: usize, j: usize| (i + j) % 2 == 0;
+        let (live, nodes) = build(&checker);
+        for (i, column) in live.iter().enumerate() {
+            for (j, cell) in column.iter().enumerate() {
+                assert_eq!(
+                    cell.is_none(),
+                    checker(i, j),
+                    "cell ({i}, {j}) follows the rule"
+                );
+            }
+        }
+        assert_eq!(nodes, 7); // 15 cells, 8 on the cut colour
+
+        // An always-true rule removes every cell; an always-false one
+        // removes none and leaves the unholed mesh untouched.
+        let (live, nodes) = build(&|_, _| true);
+        assert!(live.iter().flatten().all(Option::is_none));
+        assert_eq!(nodes, 0);
+        let (live, nodes) = build(&|_, _| false);
+        assert!(live.iter().flatten().all(Option::is_some));
+        assert_eq!(nodes, 15);
+    }
+
+    /// The same composition on a *graded* plane: the rule is applied to the
+    /// mesh the plane will actually be built with, so a contact region's
+    /// refinement does not change which cells the rule removes.
+    #[test]
+    fn the_arbitrary_rule_composition_holds_on_a_graded_mesh() {
+        let mut plane = test_plane();
+        plane
+            .contacts
+            .push(ContactRegion::centred([5e-3, 3e-3], 1e-3, 2, 2.0));
+        let mesh = plane.mesh().unwrap();
+        let (nx, ny) = (mesh.nx(), mesh.ny());
+        assert!(nx > 5 && ny > 3, "the contact region refined the mesh");
+
+        // Everything left of the plane's midline, however the mesh grades.
+        let cut = |centre: [f64; 2]| centre[0] < 5e-3;
+        let mut expected = 0;
+        for i in 0..nx {
+            for j in 0..ny {
+                let centre = mesh.centre(i, j);
+                if cut([centre[0], centre[1]]) {
+                    plane.holes.push(Hole::Point {
+                        at: [centre[0], centre[1]],
+                    });
+                    expected += 1;
+                }
+            }
+        }
+        assert!(expected > 0 && expected < nx * ny, "a genuine partition");
+
+        let mut geometry = Geometry::new();
+        let live = plane.build_into(&mut geometry).unwrap();
+        for (i, column) in live.iter().enumerate() {
+            for (j, cell) in column.iter().enumerate() {
+                let centre = mesh.centre(i, j);
+                assert_eq!(
+                    cell.is_none(),
+                    cut([centre[0], centre[1]]),
+                    "cell ({i}, {j}) follows the rule"
+                );
+            }
+        }
+        assert_eq!(geometry.nodes().len(), nx * ny - expected);
+    }
+
+    /// The tie is a change to the mesh: the cells inside the rectangle
+    /// share one node at the mean of their centres, the bars that ran
+    /// between them are gone, and the bars crossing the boundary now end on
+    /// that node.
+    #[test]
+    fn an_equipotential_ties_its_cells_into_one_node() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // Cell centres sit on a 2 mm grid: x = 1, 3, 5, 7, 9 and
+        // y = 1, 3, 5 mm. This rectangle catches the six centres with
+        // x ∈ {3, 5, 7} and y ∈ {1, 3}.
+        plane
+            .equipotentials
+            .push(Equipotential::new([2e-3, 0.0], [8e-3, 4e-3]));
+        let mesh = plane.mesh().unwrap();
+        let centres = plane.build_into(&mut geometry).unwrap();
+
+        let tie = centres[1][0].unwrap();
+        for (i, j) in [(1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)] {
+            assert_eq!(centres[i][j], Some(tie), "cell ({i}, {j}) joins the tie");
+        }
+        for (i, j) in [(0, 0), (4, 0), (0, 1), (4, 1), (0, 2), (2, 2), (4, 2)] {
+            assert!(
+                centres[i][j].is_some() && centres[i][j] != Some(tie),
+                "cell ({i}, {j}) keeps its own node"
+            );
+        }
+        // Six cells became one node; the tie sits at the mean of the six
+        // centres, at the mesh's own mid-thickness depth.
+        assert_eq!(geometry.nodes().len(), 15 - 6 + 1);
+        let node = geometry.nodes()[tie.0];
+        assert!((node.x - 5e-3).abs() < 1e-12, "{}", node.x);
+        assert!((node.y - 2e-3).abs() < 1e-12, "{}", node.y);
+        assert!((node.z + 17.5e-6).abs() < 1e-12);
+        // The seven bars inside the patch (four across x, three across y)
+        // are not built; every other bar survives, including the ones that
+        // cross the patch's boundary.
+        assert_eq!(geometry.segment_count(), 22 - 7);
+        assert_eq!(geometry.segment_count(), plane.live_bars(&mesh));
+        // No bar joins a node to itself.
+        for index in 0..geometry.segment_count() {
+            let def = geometry.segment_defs()[index];
+            assert_ne!(def.a, def.b, "segment {index} is a self-loop");
+        }
+        // The patch's node is what a deck naming this contact area gets…
+        assert_eq!(plane.equipotential_node(&centres, 0).unwrap(), Some(tie));
+        // …and an endpoint landing anywhere inside the patch snaps to it.
+        assert_eq!(plane.attach(&centres, [6.9e-3, 0.1e-3, 0.0]).unwrap(), tie);
+    }
+
+    /// The rectangle's boundary is closed: a cell centre exactly on an edge
+    /// (or corner) is tied, unlike [`Hole::Rect`]'s strict interior.
+    #[test]
+    fn the_equipotential_boundary_includes_its_edges() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // Corners exactly on the centres (5, 1), (5, 3), (7, 1), (7, 3) mm.
+        plane
+            .equipotentials
+            .push(Equipotential::new([5e-3, 1e-3], [7e-3, 3e-3]));
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let tie = centres[2][0].unwrap();
+        for (i, j) in [(2, 0), (3, 0), (2, 1), (3, 1)] {
+            assert_eq!(centres[i][j], Some(tie), "cell ({i}, {j}) is on the patch");
+        }
+        assert_eq!(geometry.nodes().len(), 15 - 4 + 1);
+    }
+
+    /// A rectangle that catches no live cell centre ties nothing — whether
+    /// it falls between centres or a hole has taken the only cell it
+    /// covers. The mesh is then exactly the untied one.
+    #[test]
+    fn an_equipotential_catching_no_live_cell_ties_nothing() {
+        // Between the centres at x = 1 and x = 3 mm.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane
+            .equipotentials
+            .push(Equipotential::new([1.2e-3, 0.2e-3], [2.8e-3, 1.8e-3]));
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert_eq!(geometry.nodes().len(), 15);
+        assert_eq!(geometry.segment_count(), 22);
+        assert_eq!(plane.equipotential_node(&centres, 0).unwrap(), None);
+
+        // Over cell (2, 1) alone, with a hole that has already taken it.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane.holes.push(Hole::Point { at: [5e-3, 3.5e-3] });
+        plane
+            .equipotentials
+            .push(Equipotential::centred([5e-3, 3e-3], [1e-3, 1e-3]));
+        let centres = plane.build_into(&mut geometry).unwrap();
+        assert!(centres[2][1].is_none());
+        assert_eq!(geometry.nodes().len(), 14);
+        assert_eq!(plane.equipotential_node(&centres, 0).unwrap(), None);
+    }
+
+    /// Two rectangles that tie a cell in common are one equipotential —
+    /// two overlapping perfect conductors are one conductor — while
+    /// disjoint ones stay separate nodes.
+    #[test]
+    fn equipotentials_sharing_a_cell_merge() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        // The first catches the bottom-row centres x = 1, 3, 5 mm, the
+        // second x = 5, 7, 9 — the centre at x = 5 mm is in both, so all
+        // five merge into one equipotential.
+        plane
+            .equipotentials
+            .push(Equipotential::new([0.5e-3, 0.0], [5.5e-3, 2e-3]));
+        plane
+            .equipotentials
+            .push(Equipotential::new([4.5e-3, 0.0], [9.5e-3, 2e-3]));
+        let mesh = plane.mesh().unwrap();
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let tie = centres[0][0].unwrap();
+        for (i, column) in centres.iter().enumerate() {
+            assert_eq!(column[0], Some(tie), "cell ({i}, 0) joins the tie");
+        }
+        assert_eq!(geometry.nodes().len(), 15 - 5 + 1);
+        assert_eq!(geometry.segment_count(), plane.live_bars(&mesh));
+        // Either region names the merged node.
+        assert_eq!(plane.equipotential_node(&centres, 0).unwrap(), Some(tie));
+        assert_eq!(plane.equipotential_node(&centres, 1).unwrap(), Some(tie));
+        // The merged tie sits at the mean of the whole row it ties.
+        let node = geometry.nodes()[tie.0];
+        assert!((node.x - 5e-3).abs() < 1e-12, "{}", node.x);
+
+        // Regions that share no cell stay two nodes.
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane
+            .equipotentials
+            .push(Equipotential::centred([1e-3, 1e-3], [1e-3, 1e-3]));
+        plane
+            .equipotentials
+            .push(Equipotential::centred([9e-3, 5e-3], [1e-3, 1e-3]));
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let first = plane.equipotential_node(&centres, 0).unwrap().unwrap();
+        let second = plane.equipotential_node(&centres, 1).unwrap().unwrap();
+        assert_ne!(first, second);
+        // Each covers one cell, so the mesh is untouched but for the ties.
+        assert_eq!(geometry.nodes().len(), 15);
+    }
+
+    /// A tie composes with a contact region on the same rectangle — the
+    /// pair a deck's `contact connection` writes: the region's fine cells
+    /// are all tied, and the graded mesh is otherwise the region's own.
+    #[test]
+    fn an_equipotential_composes_with_a_contact_region() {
+        let mut geometry = Geometry::new();
+        let mut plane = test_plane();
+        plane
+            .contacts
+            .push(ContactRegion::centred([5e-3, 3e-3], 1e-3, 4, 2.0));
+        plane
+            .equipotentials
+            .push(Equipotential::centred([5e-3, 3e-3], [1e-3, 1e-3]));
+        let mesh = plane.mesh().unwrap();
+        let centres = plane.build_into(&mut geometry).unwrap();
+        let tie = plane.equipotential_node(&centres, 0).unwrap().unwrap();
+
+        let mut tied = 0;
+        for (i, column) in centres.iter().enumerate() {
+            for (j, slot) in column.iter().enumerate() {
+                let centre = mesh.centre(i, j);
+                let inside = (4.5e-3..=5.5e-3).contains(&centre[0])
+                    && (2.5e-3..=3.5e-3).contains(&centre[1]);
+                assert_eq!(*slot == Some(tie), inside, "cell ({i}, {j}) at {centre:?}");
+                tied += usize::from(inside);
+            }
+        }
+        assert_eq!(tied, 16, "the region's 4 × 4 fine cells are all tied");
+        assert_eq!(geometry.nodes().len(), mesh.nx() * mesh.ny() - tied + 1);
+        assert_eq!(geometry.segment_count(), plane.live_bars(&mesh));
     }
 
     #[test]
@@ -775,7 +1590,7 @@ mod tests {
         // dies; a point over the holed corner then snaps to the nearest
         // live centre, cell (0, 1) at (1 mm, 3 mm) — ties resolved by
         // grid order.
-        plane.holes.push(Hole {
+        plane.holes.push(Hole::Rect {
             lo: [0.0, 0.0],
             hi: [2.0e-3, 2.0e-3],
         });
@@ -915,11 +1730,47 @@ mod tests {
         }
     }
 
+    /// A per-axis ratio decays the two axes at different rates — the case
+    /// a single scalar ratio cannot express. On the 10 × 6 mm test plane
+    /// (2 mm background cell) a 2 × 2 mm region at 0.5 mm fine cells is
+    /// ungraded across x (ratio 1, so 0.5 mm everywhere: 20 cells) and
+    /// decays in one step across y (ratio 4, so 0.5 mm × 4 = the 2 mm
+    /// background cell immediately: 1 + 4 + 1 cells).
+    #[test]
+    fn a_per_axis_ratio_decays_each_axis_at_its_own_rate() {
+        let region =
+            |ratio| ContactRegion::graded_per_axis([4e-3, 2e-3], [6e-3, 4e-3], [4, 4], ratio);
+        let mesh = GroundPlane {
+            contacts: vec![region([1.0, 4.0])],
+            ..test_plane()
+        }
+        .mesh()
+        .unwrap();
+        assert_eq!((mesh.nx(), mesh.ny()), (20, 6));
+
+        // Swapping the ratios swaps the two axes' layouts: across x the
+        // two 4 mm gaps each take two background cells (2 + 4 + 2), and y
+        // is now the uniformly fine axis (6 mm / 0.5 mm).
+        let mesh = GroundPlane {
+            contacts: vec![region([4.0, 1.0])],
+            ..test_plane()
+        }
+        .mesh()
+        .unwrap();
+        assert_eq!((mesh.nx(), mesh.ny()), (8, 12));
+
+        // `new` is the isotropic special case of `graded_per_axis`.
+        assert_eq!(
+            ContactRegion::new([4e-3, 2e-3], [6e-3, 4e-3], [4, 4], 1.5),
+            region([1.5, 1.5])
+        );
+    }
+
     #[test]
     fn contacts_compose_with_holes() {
         let plane = GroundPlane {
             contacts: vec![ContactRegion::centred([5e-3, 3e-3], 1e-3, 2, 2.0)],
-            holes: vec![Hole {
+            holes: vec![Hole::Rect {
                 lo: [4.5e-3, 2.5e-3],
                 hi: [5.5e-3, 3.5e-3],
             }],
@@ -1012,6 +1863,148 @@ mod tests {
             .filter(|&i| (mesh.dx(i) - 0.1e-3).abs() < 1e-12)
             .count();
         assert_eq!(fine, 15, "the merged 1.5 mm band is cut at 0.1 mm");
+    }
+
+    /// A band widened to absorb a sliver at the footprint edge, or merged
+    /// with a neighbour, is cut into the fewest cells *no coarser* than its
+    /// fine cell — never into the nearest count, which could leave a cell
+    /// up to twice as wide as the region asked for.
+    #[test]
+    fn widened_and_merged_bands_never_coarsen_the_fine_cell() {
+        // A one-cell, 1 mm region 0.3 mm from the plane's left edge: the
+        // 0.3 mm sliver is absorbed, and the 1.3 mm band takes two cells
+        // (rounding would have made it one 1.3 mm cell).
+        let plane = GroundPlane {
+            contacts: vec![ContactRegion::new(
+                [0.3e-3, 2.5e-3],
+                [1.3e-3, 3.5e-3],
+                [1, 1],
+                2.0,
+            )],
+            ..test_plane()
+        };
+        let mesh = plane.mesh().unwrap();
+        assert!((mesh.dx(0) - 0.65e-3).abs() < 1e-12, "{}", mesh.dx(0));
+        assert!((mesh.dx(1) - 0.65e-3).abs() < 1e-12, "{}", mesh.dx(1));
+
+        // Two regions 0.1 mm apart merge into one 1.6 mm band at the finer
+        // 0.25 mm cell: 6.4 cells' worth, so 7 cells, none above 0.25 mm.
+        let plane = GroundPlane {
+            contacts: vec![
+                ContactRegion::new([4e-3, 2e-3], [5e-3, 4e-3], [4, 4], 2.0),
+                ContactRegion::new([5.1e-3, 2e-3], [5.6e-3, 4e-3], [1, 4], 2.0),
+            ],
+            ..test_plane()
+        };
+        let mesh = plane.mesh().unwrap();
+        let band: Vec<f64> = (0..mesh.nx())
+            .filter(|&i| {
+                mesh.x_edges()[i] >= 4e-3 - 1e-12 && mesh.x_edges()[i + 1] <= 5.6e-3 + 1e-12
+            })
+            .map(|i| mesh.dx(i))
+            .collect();
+        assert_eq!(band.len(), 7, "{band:?}");
+        assert!(band.iter().all(|&d| d <= 0.25e-3 + 1e-12), "{band:?}");
+    }
+
+    /// A band spanning the whole axis at the plane's own cell count is the
+    /// background mesh, not a refinement, so it is dropped before the merge
+    /// pass instead of widening every finer band on the axis across the
+    /// whole of it. On this 10 × 6 mm / 2 mm-cell plane, the whole-plane x
+    /// band a one-axis-met `contact point` emits beside a 0.1 mm region near
+    /// (1, 1) mm once cost 100 x cells — the finest cell across the entire
+    /// axis — against the 11 the 0.1 mm region costs on its own. Issue #124.
+    #[test]
+    fn a_whole_axis_background_band_never_widens_a_finer_one() {
+        // `contact point (5.3, 3, 0, 4, 0.5)`: x is already met by the 2 mm
+        // background, so it spans the plane at nx = 5; y is refined.
+        let met_on_x = ContactRegion::new([0.0, 2.75e-3], [10e-3, 3.25e-3], [5, 1], 2.0);
+        // A genuine 0.1 mm refinement, nowhere near it on either axis.
+        let fine = ContactRegion::new([0.95e-3, 0.95e-3], [1.05e-3, 1.05e-3], [1, 1], 2.0);
+        let mesh = |contacts: Vec<ContactRegion>| {
+            GroundPlane {
+                contacts,
+                ..test_plane()
+            }
+            .mesh()
+            .unwrap()
+        };
+
+        let alone = mesh(vec![fine]);
+        let both = mesh(vec![met_on_x, fine]);
+        assert_eq!(alone.nx(), 11, "the 0.1 mm region's own x cost");
+        assert_eq!(
+            both.nx(),
+            alone.nx(),
+            "the met x axis costs what the 0.1 mm region alone costs"
+        );
+        // 10 mm / 0.1 mm = the 100 cells the merge once spent on the axis.
+        assert!(
+            both.nx() < 100,
+            "the axis is not refined to 0.1 mm throughout ({})",
+            both.nx()
+        );
+        for (a, b) in both.x_edges().iter().zip(alone.x_edges()) {
+            assert!((a - b).abs() < 1e-15, "x edge {a} vs {b}");
+        }
+        // The y refinement the clause did ask for is untouched.
+        assert!(both.ny() > alone.ny(), "y is still refined by the point");
+
+        // On its own, the whole-plane band is the plain plane's x axis, edge
+        // for edge — what dropping it has to preserve (issue #116).
+        let clamped = mesh(vec![met_on_x]);
+        let plain = mesh(Vec::new());
+        assert_eq!(clamped.nx(), plain.nx());
+        for (a, b) in clamped.x_edges().iter().zip(plain.x_edges()) {
+            assert!((a - b).abs() < 1e-15, "x edge {a} vs {b}");
+        }
+    }
+
+    /// The disposition for an explicit [`ContactRegion`] cut at the
+    /// background cell: only the *whole-axis* band is a no-op and dropped.
+    /// One over part of an axis is kept, so it still pins its own edges —
+    /// even beside a finer band whose grading would otherwise move them.
+    /// Issue #124.
+    #[test]
+    fn a_part_axis_background_band_still_pins_its_edges() {
+        // 2 … 4 mm at exactly the 2 mm background cell, with a 0.1 mm region
+        // at the far end of the axis to grade the gap between them.
+        let plane = GroundPlane {
+            contacts: vec![
+                ContactRegion::new([2e-3, 2e-3], [4e-3, 4e-3], [1, 1], 2.0),
+                ContactRegion::new([8.95e-3, 2.95e-3], [9.05e-3, 3.05e-3], [1, 1], 2.0),
+            ],
+            ..test_plane()
+        };
+        let mesh = plane.mesh().unwrap();
+        for pin in [2e-3, 4e-3] {
+            assert!(
+                mesh.x_edges().iter().any(|e| (e - pin).abs() < 1e-12),
+                "the band's own edge at {pin} m is pinned: {:?}",
+                mesh.x_edges()
+            );
+        }
+        // Dropping it instead would grade that gap straight past those
+        // edges: without the band the same plane has neither.
+        let ungraded = GroundPlane {
+            contacts: vec![ContactRegion::new(
+                [8.95e-3, 2.95e-3],
+                [9.05e-3, 3.05e-3],
+                [1, 1],
+                2.0,
+            )],
+            ..test_plane()
+        }
+        .mesh()
+        .unwrap();
+        assert!(
+            !ungraded
+                .x_edges()
+                .iter()
+                .any(|e| (e - 2e-3).abs() < 1e-12 || (e - 4e-3).abs() < 1e-12),
+            "the pins come from the band, not from the grading: {:?}",
+            ungraded.x_edges()
+        );
     }
 
     #[test]

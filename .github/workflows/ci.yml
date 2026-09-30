@@ -30,6 +30,81 @@ jobs:
           fi
           echo "clean"
 
+  dependency-policy:
+    name: Dependency licenses & sources (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # One pin for the whole job: the download URL and the checksum below both
+      # read it, so they cannot drift apart. Bump both together.
+      CARGO_DENY_VERSION: "0.18.2"
+      CARGO_DENY_SHA256: "43c4a79c4b9fd1fcb3dddb305a1b4d8f7ac4a72accd61bb50a0b698789ca894c"
+    steps:
+      - uses: actions/checkout@v4
+      # cargo-deny shells out to `cargo metadata` to walk the graph, so a
+      # toolchain is still required even though this job compiles nothing.
+      - uses: dtolnay/rust-toolchain@stable
+      # Deliberately no Swatinem/rust-cache here, unlike the `rust` and
+      # `package` jobs. This job builds no crates, so the only thing a cache
+      # entry would hold is the registry index -- which cargo-deny re-fetches
+      # cheaply over the sparse protocol anyway. A cache entry per job is not
+      # free: see the `rust` job's comment, this repo sits at the 10 GB
+      # per-repo cache cap, and a save on main would spend some of it here for
+      # no measurable gain.
+      #
+      # The binary is the upstream prebuilt release, pinned by version AND by
+      # checksum: a supply-chain gate that fetched an unverified binary over
+      # the network would be checking everyone's dependencies but its own.
+      - name: install cargo-deny ${{ env.CARGO_DENY_VERSION }}
+        run: |
+          set -euo pipefail
+          tarball="cargo-deny-$CARGO_DENY_VERSION-x86_64-unknown-linux-musl"
+          curl -fsSL --retry 3 -o /tmp/cargo-deny.tar.gz \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/$CARGO_DENY_VERSION/$tarball.tar.gz"
+          echo "$CARGO_DENY_SHA256  /tmp/cargo-deny.tar.gz" | sha256sum --check --strict
+          mkdir -p /tmp/cargo-deny-bin
+          tar -xzf /tmp/cargo-deny.tar.gz -C /tmp/cargo-deny-bin --strip-components=1 "$tarball/cargo-deny"
+          echo /tmp/cargo-deny-bin >> "$GITHUB_PATH"
+      # The gate itself, both halves in one invocation. Same command a
+      # contributor runs locally; the allowlist, the allowed registry and the
+      # reasoning behind each entry live in deny.toml.
+      #
+      # `licenses` answers "may we ship this dependency's code?"; `sources`
+      # answers "did it come from where we think it did?" -- a git or private-
+      # registry dependency passes the license check silently, because it simply
+      # inherits whatever `license` field its manifest declares. `bans` is
+      # deliberately not checked here; deny.toml records why.
+      - name: cargo deny check licenses sources
+        run: cargo deny check licenses sources --show-stats
+
+  third-party-licenses:
+    name: Third-party license bundle (cargo-about)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # cargo-about walks the graph through `cargo metadata`, like cargo-deny
+      # above, so a toolchain is needed even though nothing is compiled here.
+      - uses: dtolnay/rust-toolchain@stable
+      # No Swatinem/rust-cache, for the reason spelled out in the
+      # `dependency-policy` job: nothing is built, and the sparse registry
+      # fetch is cheap.
+      #
+      # Unlike that job, the tool is not installed by a step here: the script
+      # pins cargo-about by version AND sha256 and fetches it itself, so the
+      # command below is *exactly* what a contributor runs locally -- one pin,
+      # in one file, that cannot drift from what CI verifies.
+      #
+      # Three ways this fails, all of them things that must not reach a
+      # release: the committed THIRD_PARTY_LICENSES.md no longer matches a
+      # fresh generation (a dependency was added, dropped or bumped);
+      # about.toml's accepted list has drifted from deny.toml's allowlist; or a
+      # workflow distributes a built artifact without shipping the bundle
+      # alongside it, which Apache-2.0 §4(a) requires of the four
+      # Apache-2.0-only crates in the graph.
+      - name: bundle is current (tools/third-party-licenses.sh --check)
+        run: ./tools/third-party-licenses.sh --check
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

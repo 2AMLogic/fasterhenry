@@ -19,26 +19,22 @@ cargo install fasterhenry-cli
 
 ## Usage
 
+One deck, two spellings of the same command:
+
+```bash
+fasterhenry deck.inp            # writes ./Zc.mat, as a FastHenry run does
+fasterhenry run deck.inp        # writes a Zc.mat only when --zc-mat asks
+```
+
+Both take the same options and produce the same JSON on stdout; they differ
+only in that default output (see
+[Migrating from FastHenry](#migrating-from-fasthenry)).
+
 ```text
 $ fasterhenry --help
 Clean-room PEEC inductance/resistance extractor
 
-Usage: fasterhenry <COMMAND>
-
-Commands:
-  run   Run a frequency sweep on a FastHenry .inp deck or a JSON problem document.
-  help  Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help     Print help
-  -V, --version  Print version
-```
-
-```text
-$ fasterhenry run --help
-Run a frequency sweep on a FastHenry .inp deck or a JSON problem document.
-
-Usage: fasterhenry run [OPTIONS] <INPUT>
+Usage: fasterhenry [OPTIONS] <INPUT>
 
 Arguments:
   <INPUT>
@@ -52,7 +48,7 @@ Options:
           Write the JSON result to this file instead of stdout
 
       --zc-mat <OUT_MAT>
-          Write the impedance sweep as a binary MAT v4 `Zc.mat`-format file: `Zc_1 … Zc_K` (complex, ohms) and `freqs` (Hz)
+          Write the impedance sweep as a binary MAT v4 `Zc.mat`-format file: `Zc_1 … Zc_K` (complex, ohms) and `freqs` (Hz). A bare invocation writes `./Zc.mat` without this flag
 
       --spice <OUT_CIR>
           Write a SPICE subcircuit at one frequency (coupled inductors for L, H sources for R)
@@ -70,9 +66,63 @@ Options:
 
           [default: auto]
 
+      --fasthenry-compat
+          Read a `.inp`/`.fh` deck's first line as an always-ignored title, as the public FastHenry format does, for third-party decks whose line 1 is prose. Off by default: line 1 is parsed like any other and `.title <text>` sets the title. A later `.title` is still honored in this mode
+
   -h, --help
           Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+`fasterhenry run <INPUT> [OPTIONS]` is the same command with the same options; it differs only in writing no Zc.mat unless --zc-mat asks for one.
 ```
+
+`fasterhenry run --help` prints the same option list under
+`Usage: fasterhenry run [OPTIONS] <INPUT>`, and `fasterhenry help` lists the
+subcommands.
+
+## Migrating from FastHenry
+
+A script that calls FastHenry today usually names the deck and nothing else,
+then reads the `Zc.mat` the run left in the working directory. `fasterhenry`
+answers that shape directly:
+
+```bash
+fasterhenry deck.inp        # ./Zc.mat is written, whether or not you ask
+```
+
+- **The input** is the deck's path — `.inp` or `.fh` by extension, or a JSON
+  problem document (see below). It may be given before or after the options
+  (`fasterhenry --solver dense deck.inp` works).
+- **`./Zc.mat`** is written by this bare form even without `--zc-mat`: same
+  MAT level-4 layout FastHenry writes (`Zc_1 … Zc_K`, complex ohms, plus
+  `freqs`), readable by `scipy.io.loadmat` and MATLAB/Octave. Pass
+  `--zc-mat <path>` to put it somewhere else — the flag replaces the default,
+  it does not add a second file.
+- **The JSON result** still goes to stdout (`--json <path>` to a file
+  instead), so a migrating script may ignore it or start using it.
+- **`fasterhenry run <deck>`** is the same command with the same options and
+  the 0.1 behaviour: it writes a `Zc.mat` only when `--zc-mat` asks for one.
+  Existing invocations keep working unchanged.
+
+What is *not* claimed: FastHenry's own command-line options are not
+reimplemented, and this project does not consult that program's source or
+manuals (see [`CONTRIBUTING.md`](https://github.com/2AMLogic/fasterhenry/blob/main/CONTRIBUTING.md)).
+The policy is instead that nothing is silently ignored — any option or extra
+argument this CLI does not define is an error naming it, so a flag your script
+passes today is reported rather than quietly dropped:
+
+```text
+$ fasterhenry deck.inp -S 10
+error: unexpected argument '-S' found
+```
+
+Translate such a flag into the equivalent option above (or into a deck
+directive) rather than expecting it to be honored. One naming corner: the
+first argument is read as a subcommand name when it is exactly one
+(`run`, `help`), so a deck literally named `run` needs `fasterhenry run run`
+or a qualified path such as `./run`.
 
 `--solver auto` (the default) is a size threshold, not a limit: the dense
 path up to 10 000 filaments, GMRES on the precorrected-FFT operator above
@@ -87,8 +137,10 @@ when built outside a repository, e.g. from a crates.io tarball).
 
 The deck reader covers a subset of the public FastHenry `.inp` format:
 `.units`, `.default`, `N` nodes, `E` segments (with `nwinc`/`nhinc`
-filament counts), `.external` ports, `.freq`, `.equiv`, `G` ground planes
-with holes and contact refinement, `.couples` coupling truncation, and
+filament counts, `rw`/`rh` filament grading ratios toward the surfaces, and
+a `wx`/`wy`/`wz` width direction), `.external` ports, `.freq`, `.equiv`, `G`
+ground planes with holes and contact refinement, `.couples` coupling
+truncation, and
 `.end`. Anything outside it is rejected with a line-numbered error rather
 than guessed at; `src/inp.rs` documents the exact syntax and semantics
 (note that `.units` is mandatory — one of `km`, `m`, `cm`, `mm`, `um`, `in`
@@ -115,7 +167,7 @@ it.
 Gplane x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
 + thick=0.035 seg1=5 seg2=3 sigma=5.8e4
 + hole rect (0.5, 4.5, 0, 1.5, 5.5, 0)
-+ contact rect (4, 2, 0, 6, 4, 0)
++ contact rect (5, 3, 0, 2, 2, 1, 1)
 + Nland1 (1, 1, 0)
 
 * The same plane in this crate's shorthand — which names the plane's TOP
@@ -125,6 +177,15 @@ Gplane 0 0 0.0175 10 6 0.0175 0.035 nx=5 ny=3
 .contact Gplane 4 2 6 4
 ```
 
+`contact rect` is the one clause with two spellings, told apart by value
+count: the documented seven values above — the rectangle's centre, its full
+widths about that centre, and the largest cell wanted inside it, the shape
+of argument list every other `contact` shape uses — or six, `(x1, y1, z1,
+x2, y2, z2)`, two opposite corners as `hole rect` spells them, refined to
+2 × 2 cells. The example's `contact rect (5, 3, 0, 2, 2, 1, 1)` and
+`contact rect (4, 2, 0, 6, 4, 0)` are the same region (see
+`docs/fasthenry-compat.md`).
+
 In-plane nodes (`N<name> (x, y, z)`) are ordinary deck nodes that belong to
 their plane: reference one from a segment or `.external`, or join it to a
 segment's node with `.equiv`, and the connection lands on the nearest cell
@@ -132,12 +193,14 @@ of *that* plane whichever side `.equiv` named first.
 
 `seg1`/`seg2` become the background cell counts of this engine's own
 cell-centre PEEC mesh (the `nx`/`ny` of the shorthand form), so equal
-counts mean equal resolution rather than an identical node set. Every other
-documented plane parameter is either mapped or **rejected by name** with the
-statement's line number — `rho` (on the corner-point form give
-`sigma = 1/rho`, or set `.default rho=`; the shorthand takes `sigma=` or
-`rho=` on the line, alongside `nhinc=`), `rh`, `segwid1`/`segwid2`,
-`relx`/`rely`/`relz`, `file`, and every hole or contact shape other than
+counts mean equal resolution rather than an identical node set. Both forms
+take the plane's conductivity as either `sigma=` or its reciprocal `rho=` on
+the statement itself, alongside `nhinc=` — naming both on one statement,
+continuation lines included, is a line-numbered error, and naming neither
+falls back to the `.default` conductivity. Every other documented plane
+parameter is either mapped or **rejected by name** with the statement's line
+number — `rh`, `segwid1`/`segwid2`, `relx`/`rely`/`relz`, `file`, and every
+hole or contact shape other than
 `rect`. Nothing on a `G` statement is silently ignored.
 `tests/data/plane_fasthenry.inp` and `tests/data/plane_extension.inp` are
 the same problem in the two syntaxes, and a test requires them to produce
@@ -148,7 +211,9 @@ Two further outputs are optional:
 
 - `--zc-mat out.mat` — the sweep as a MATLAB level-4 binary file in the
   layout of FastHenry's `Zc.mat` (`Zc_1 … Zc_K`, complex ohms, plus
-  `freqs`), readable by `scipy.io.loadmat` and MATLAB/Octave.
+  `freqs`), readable by `scipy.io.loadmat` and MATLAB/Octave. A bare
+  invocation writes `./Zc.mat` without being asked; under `run` the flag is
+  the only way to get one.
 - `--spice out.cir [--spice-freq HZ]` — a SPICE subcircuit at one
   frequency (default: the last): coupled inductors for `L`, current-
   controlled sources for `R`.
