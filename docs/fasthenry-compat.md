@@ -111,7 +111,7 @@ records how each documented field maps.
 | `file=NONE` | Supported | Issue #122. The nonuniform-plane description defines `file=` as an *input* — the file holding the plane's discretization hierarchy — and `NONE` as "no such file": the hierarchy is a single root cell, discretized at run time from the statement's own clauses. That is the only case this reader ever has, so `file=NONE` is accepted as the no-op it is and the documented `file=NONE contact initial_grid (10,12)` spelling reads as written. Matched without regard to case, like every other token this reader interprets. |
 | `file=<name>` (a named hierarchy file) | Not supported | Issue #122. Rejected by name on the statement's own line: a stored nonuniform-discretization hierarchy is an *input* this reader does not read (not, as the message used to say, an output it does not write), and silently ignoring it would mesh the plane at a resolution the deck never asked for. The error names the file, says only `file=NONE` is accepted, and points at the in-statement alternatives — `seg1`/`seg2` or `contact initial_grid (n1, n2)` plus the `contact` refinement clauses, which is what this reader discretizes from. |
 | In-plane node `N<name> (x, y, z)` | Supported | An ordinary deck node belonging to the plane; a reference to it lands on the nearest live cell-centre node of that plane. |
-| `hole rect (x1, y1, z1, x2, y2, z2)` | Supported | Two opposite corners, as documented, onto the plane model's rectangular hole. The redundant `z` coordinates are checked against the plane's slab, so a rectangle meant for another plane cannot land here silently. |
+| `hole rect (x1, y1, z1, x2, y2, z2)` | Supported | Two opposite corners, as documented, onto the plane model's rectangular hole. The redundant `z` coordinates are checked against the plane's slab, so a rectangle meant for another plane cannot land here silently. A rectangle (like a `hole point`/`circle`, `contact rect` or `contact decay_rect`) wholly outside the plane's footprint is accepted with a line-numbered warning — see the decision below (issue #105). |
 | `contact rect (x, y, z, xwidth, ywidth, xcell, ycell)` | Supported | Issue #95. The **documented** spelling — the rectangle's centre, its full widths about that centre, and the largest cell wanted inside it, the same shape of argument list every other `contact` shape uses. It is exactly `contact decay_rect` without the outward limits, and is read as one with both `maxcell`s at the negative "no limit" sentinel, so the row below describes it in full: `ceil(width/cell)` fine cells per axis, the documented decay law `1/(1 − cell/width)` outside, `cell` smaller than `width`. |
 | `contact rect (x1, y1, z1, x2, y2, z2)` | Supported, extended | Issue #95. Two opposite corners, as `hole rect` spells them — **not** documented FastHenry syntax but this reader's own extension, kept because decks written against earlier releases use it. Refined to 2 × 2 fine cells at ratio 2, which is the seven-value form at `xcell = xwidth/2`, `ycell = ywidth/2`: `contact rect (4, 2, 0, 6, 4, 0)` and `contact rect (5, 3, 0, 2, 2, 1, 1)` are the same region. The two spellings are told apart by **value count alone**, and any other count is a line-numbered error naming both — see the decision below. |
 | `contact decay_rect (x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` | Supported, differs | Issue #80. Maps onto `fasterhenry::plane::ContactRegion`: centre and full widths give the rectangle, `ceil(width/cell)` per axis gives the fine cells, and the documented decay law `1/(1 − cell/width)` gives that axis's growth ratio. All three `x…`/`y…` pairs are in the plane's own coordinate system (`x…` along `p1 → p2`), per the decision below; the centre is a global coordinate. `cell` must be smaller than `width` (the documentation's own `r0 < 1`). The differences are both in the outward limit: this engine's grading levels off at the plane's **background cell** rather than at `maxcell`, so a positive `maxcell` **finer** than the background cell is rejected by name (raise `seg1`/`seg2` instead of shipping a quietly coarser mesh), while one at or above it never binds; a negative `maxcell` — the sentinel the documented `contact connection` shorthand expands to — asks for no limit. The resulting mesh is this engine's own graded cell-centre mesh, not FastHenry's cell subdivision, so equal cell sizes mean equal resolution, not an identical node set. |
@@ -532,6 +532,73 @@ plane, `a_square_contact_request_is_orientation_independent` pins the
 isotropic no-op (`contact trace` included), and
 `a_rotated_planes_decay_limit_error_names_the_decks_own_axis` pins that the
 per-axis error messages name the axis the deck wrote.
+
+### Decision: a hole or contact rectangle off its plane is accepted with a warning (issue #105)
+
+Every `hole` / `contact` clause's `z` has always been checked against the
+plane's slab, but until issue #105 a `hole rect`, `hole point` or `hole
+circle` whose **xy** lay wholly outside the plane's footprint was silently
+accepted and removed nothing — the mesh quietly differed from the one the
+deck asked for, typically because of a coordinate typo or a wrong `.units`
+scale. The rule now, per shape:
+
+| Clause | Wholly outside the footprint means | What happens |
+|---|---|---|
+| `hole point (x, y, z)` | the point is outside the closed footprint | accepted (removes nothing) + warning |
+| `hole circle (x, y, z, r)` | the closed disc does not intersect the closed footprint — a centre off the plane is **not** enough if the radius still reaches over an edge or corner | accepted (removes nothing) + warning |
+| `hole rect (x1, y1, z1, x2, y2, z2)` | the two rectangles do not intersect — partial overhang, or merely touching the boundary, is not disjoint | accepted (removes nothing) + warning |
+| `contact rect` (either spelling), `contact decay_rect` | the contact's rectangle does not intersect the footprint | accepted (refines nothing; the region is dropped) + warning |
+| `contact connection N<name> (…)` | its `decay_rect` half as above | the clause's tie half keeps its existing error first (below), so it never parses with a disjoint decay region |
+
+The warning is a diagnostic, not an error: a deck that parsed before still
+parses to the same mesh, and stdout is unchanged. It names the clause, the
+ground plane and the clause's **physical** line — the continuation (`+`)
+line it is written on, not the line its `G` statement starts on — and there
+is exactly one per offending clause, however many share a statement or a
+line. The command-line binary prints each on stderr as `warning: line N:
+…`; the library never prints: `inp::parse_reporting` /
+`inp::parse_with_options_reporting` and `read_inputs_reporting` /
+`read_inputs_reporting_with` return the warnings, while `parse`,
+`parse_with_options`, `read_inputs` and `read_inputs_with` keep their
+signatures and discard them (as `run` does `run_reporting`'s).
+
+Why a warning rather than an error: the clause is not malformed, and
+turning an accepted clause into a rejected one would break decks that
+parse today; a warning catches the typo without that cost. It is
+deliberately **only** about disjointness from the footprint. A clause inside
+the footprint that happens to change nothing — a circle too small to catch a
+cell centre, a hole inside another hole, a contact the background mesh
+already meets — does not warn: those are legitimate decks, and "warn
+whenever the final mesh is unchanged" would be different semantics.
+
+Two consequences worth stating:
+
+- **A wholly-disjoint `contact rect` / `contact decay_rect` used to be an
+  error** — not from this reader but from the plane library at assembly,
+  reported on line 0 ("contact region … lies outside the plane footprint").
+  Such a region refines nothing, so it is now dropped with the warning
+  instead, on its own line, consistent with the holes. No deck that parsed
+  before changes meaning. A rectangle that only *touches* the footprint
+  (zero overlap area) is not disjoint by this rule, so it still reaches the
+  library and keeps that existing error.
+- **The stricter clauses stay errors.** `contact point`, `contact line` and
+  `contact trace` name a locus that must lie on the plane, and an off-plane
+  end remains a line-numbered error; a `contact equiv_rect` (or the tie half
+  of a `contact connection`) whose node is off the plane, or that covers no
+  live cell, remains an error too. The `.hole` / `.contact` extension
+  directives are unchanged.
+
+`fasterhenry-cli/src/inp.rs`'s tests `disjoint_hole_point_warns_on_its_own_line`,
+`disjoint_hole_circle_warns_on_its_own_line`,
+`disjoint_hole_rect_warns_on_its_own_line`,
+`disjoint_contact_rects_warn_and_are_dropped`,
+`disjoint_contact_decay_rect_warns_and_is_dropped`,
+`one_warning_per_disjoint_clause_with_its_physical_line`,
+`shapes_meeting_the_footprint_do_not_warn`,
+`in_footprint_clauses_that_change_nothing_do_not_warn` and
+`stricter_off_plane_errors_are_unchanged` pin the rule, and
+`a_hole_off_its_plane_solves_with_a_line_numbered_warning` in
+`fasterhenry-cli/tests/cli.rs` pins the command-line behaviour.
 
 ## `.couples`
 
