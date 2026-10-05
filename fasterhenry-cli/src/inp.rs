@@ -172,7 +172,11 @@
 //!       cell, the documented decay law, until they reach the plane's
 //!       background cell. `cell` must therefore be smaller than `width`
 //!       (the ratio is otherwise not a ratio at all), and a `cell` equal
-//!       to half the width is the familiar ratio 2;
+//!       to half the width is the familiar ratio 2. Under
+//!       [`ParseOptions::fasthenry_compat`] a `cell` at or above `width`
+//!       is instead clamped to 0.99 × `width` on that axis, as FastHenry
+//!       does, with one line-numbered warning per clamped axis (issue
+//!       #145); a `cell` ≤ 0 is an error in both modes;
 //!     * a positive `maxcell` **finer** than the plane's own background
 //!       cell is rejected by name: this engine's grading levels off *at*
 //!       the background cell, so honouring a tighter limit would need a
@@ -1191,15 +1195,23 @@ struct DecayRect {
 /// `values` may be longer — [`decay_rect_values`] reads its own two
 /// trailing limits over the top of this — so the caller checks its own
 /// arity first.
+///
+/// Under [`ParseOptions::fasthenry_compat`] (`compat`), a `cell` at or
+/// above its axis's `width` is clamped to [`COMPAT_CELL_CLAMP`] × `width`
+/// instead of rejected (issue #145): the second value returned holds, per
+/// axis, the cell as written wherever it was clamped, for the caller's
+/// warning. A `cell` ≤ 0 is an error in both modes.
 fn contact_rect_values(
     values: &[String],
     what: &str,
     unit: f64,
+    compat: bool,
     line: usize,
-) -> Result<DecayRect, ParseError> {
+) -> Result<(DecayRect, [Option<f64>; 2]), ParseError> {
     let centre = triple(&values[..3], what, unit, line)?;
     let mut widths = [0.0f64; 2];
     let mut cell = [0.0f64; 2];
+    let mut clamped = [None; 2];
     for axis in 0..2 {
         let name = ['x', 'y'][axis];
         widths[axis] = parse_number(&values[3 + axis], line)? * unit;
@@ -1215,6 +1227,11 @@ fn contact_rect_values(
             ));
         }
         cell[axis] = parse_number(&values[5 + axis], line)? * unit;
+        // Both axes clamp at `>=`, so the ratio below never meets r0 = 1.
+        if compat && cell[axis] > 0.0 && cell[axis] >= widths[axis] {
+            clamped[axis] = Some(cell[axis]);
+            cell[axis] = COMPAT_CELL_CLAMP * widths[axis];
+        }
         if !(cell[axis] > 0.0 && cell[axis] < widths[axis]) {
             return Err(err(
                 line,
@@ -1225,13 +1242,23 @@ fn contact_rect_values(
             ));
         }
     }
-    Ok(DecayRect {
-        centre,
-        widths,
-        cell,
-        limit: [None, None],
-    })
+    Ok((
+        DecayRect {
+            centre,
+            widths,
+            cell,
+            limit: [None, None],
+        },
+        clamped,
+    ))
 }
+
+/// The fraction of its rectangle's width a `contact rect` /
+/// `contact decay_rect` cell at or above that width is clamped to under
+/// [`ParseOptions::fasthenry_compat`] (issue #145) — FastHenry's own
+/// observed clamp, which keeps the decay ratio `1/(1 − cell/width)` finite
+/// (here 100) and so grades effectively nothing outside the rectangle.
+const COMPAT_CELL_CLAMP: f64 = 0.99;
 
 /// The nine values of a `contact decay_rect` clause:
 /// `(x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` — the
@@ -1242,8 +1269,9 @@ fn decay_rect_values(
     values: &[String],
     what: &str,
     unit: f64,
+    compat: bool,
     line: usize,
-) -> Result<DecayRect, ParseError> {
+) -> Result<(DecayRect, [Option<f64>; 2]), ParseError> {
     if values.len() != 9 {
         return Err(err(
             line,
@@ -1253,7 +1281,7 @@ fn decay_rect_values(
             ),
         ));
     }
-    let mut rect = contact_rect_values(values, what, unit, line)?;
+    let (mut rect, clamped) = contact_rect_values(values, what, unit, compat, line)?;
     for axis in 0..2 {
         let name = ['x', 'y'][axis];
         let raw = parse_number(&values[7 + axis], line)?;
@@ -1270,7 +1298,7 @@ fn decay_rect_values(
             ));
         };
     }
-    Ok(rect)
+    Ok((rect, clamped))
 }
 
 /// A `contact point` or `contact line` clause, kept raw until the plane's
@@ -1496,6 +1524,7 @@ fn parse_plane_statement(
     body_lines: &[usize],
     unit: f64,
     defaults: &Defaults,
+    compat: bool,
     line: usize,
 ) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
     // The tokens are rejoined with single spaces, so token `k` starts at
@@ -1516,7 +1545,7 @@ fn parse_plane_statement(
             .and_then(|index| body_lines.get(index).copied())
             .unwrap_or(line)
     };
-    let mut statement = PlaneStatement::new(head, unit, defaults, line);
+    let mut statement = PlaneStatement::new(head, unit, defaults, compat, line);
     for (order, (at, item)) in scan_plane_items(&body.join(" "), line)?
         .into_iter()
         .enumerate()
@@ -1599,6 +1628,11 @@ struct PlaneStatement<'a> {
     /// `contact equiv_rect` / `contact connection`: the named contact areas,
     /// each becoming one `Equipotential` and one in-plane node.
     contact_equivs: Vec<EquivRect>,
+    /// Whether the deck is read under [`ParseOptions::fasthenry_compat`].
+    compat: bool,
+    /// Warnings raised while the items are applied (before the plane's
+    /// geometry is known), each with its clause's source order.
+    warnings: Vec<(usize, ParseWarning)>,
 }
 
 /// The checked geometry of a FastHenry-form `G` statement, which every
@@ -1629,11 +1663,12 @@ struct PlaneFrame<'a> {
 }
 
 impl<'a> PlaneStatement<'a> {
-    fn new(head: &'a str, unit: f64, defaults: &Defaults, line: usize) -> Self {
+    fn new(head: &'a str, unit: f64, defaults: &Defaults, compat: bool, line: usize) -> Self {
         PlaneStatement {
             head,
             unit,
             line,
+            compat,
             sigma: defaults.sigma,
             nhinc: 1,
             ..PlaneStatement::default()
@@ -1809,11 +1844,13 @@ impl<'a> PlaneStatement<'a> {
             // two opposite corners as `hole rect` spells them, taking the
             // default 2 × 2 cells at ratio 2.
             ("contact", "rect") => match values.len() {
-                7 => self.contact_decays.push((
-                    "'contact rect'",
-                    contact_rect_values(values, &what, unit, line)?,
-                    clause_line,
-                )),
+                7 => {
+                    let (decay, clamped) =
+                        contact_rect_values(values, &what, unit, self.compat, line)?;
+                    self.warn_clamped_cells("'contact rect'", &decay, clamped);
+                    self.contact_decays
+                        .push(("'contact rect'", decay, clause_line));
+                }
                 6 => self
                     .contact_rects
                     .push((rect_corners(values, &what, unit, line)?, clause_line)),
@@ -1826,11 +1863,12 @@ impl<'a> PlaneStatement<'a> {
                     ))
                 }
             },
-            ("contact", "decay_rect") => self.contact_decays.push((
-                "'contact decay_rect'",
-                decay_rect_values(values, &what, unit, line)?,
-                clause_line,
-            )),
+            ("contact", "decay_rect") => {
+                let (decay, clamped) = decay_rect_values(values, &what, unit, self.compat, line)?;
+                self.warn_clamped_cells("'contact decay_rect'", &decay, clamped);
+                self.contact_decays
+                    .push(("'contact decay_rect'", decay, clause_line));
+            }
             ("contact", "point") => {
                 self.contact_lines.push((
                     "'contact point'",
@@ -1854,6 +1892,29 @@ impl<'a> PlaneStatement<'a> {
             _ => return Err(self.unsupported_clause(kind, shape)),
         }
         Ok(())
+    }
+
+    /// One warning per axis of a `contact rect` / `contact decay_rect`
+    /// whose cell [`contact_rect_values`] clamped under
+    /// [`ParseOptions::fasthenry_compat`] (issue #145), on the clause's own
+    /// line and in its source order.
+    fn warn_clamped_cells(&mut self, what: &str, decay: &DecayRect, clamped: [Option<f64>; 2]) {
+        for axis in 0..2 {
+            let Some(written) = clamped[axis] else {
+                continue;
+            };
+            let name = ['x', 'y'][axis];
+            self.warnings.push((
+                self.clause_seq,
+                ParseWarning {
+                    line: self.clause_line,
+                    message: format!(
+                        "ground plane '{}': {what}: {name}cell={written} metres is not smaller than {name}width={} metres; clamped to {}×{name}width = {} metres, as FastHenry does (--fasthenry-compat), so the rectangle grades effectively nothing outside itself",
+                        self.head, decay.widths[axis], COMPAT_CELL_CLAMP, decay.cell[axis]
+                    ),
+                },
+            ));
+        }
     }
 
     /// `hole circle (x, y, z, r)`.
@@ -2188,7 +2249,6 @@ impl<'a> PlaneStatement<'a> {
     /// off the plane), but neither is an error.
     fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
         let frame = self.frame()?;
-        let mut warnings: Vec<(usize, ParseWarning)> = Vec::new();
         let PlaneStatement {
             head,
             nhinc,
@@ -2202,6 +2262,7 @@ impl<'a> PlaneStatement<'a> {
             contact_lines,
             contact_traces,
             contact_equivs,
+            mut warnings,
             ..
         } = self;
 
@@ -2934,6 +2995,7 @@ pub fn parse_with_options_reporting(
     let folded = fold_lines(text, options)?;
     let mut deck = DeckBuilder {
         title: folded.title,
+        compat: options.fasthenry_compat,
         ..DeckBuilder::default()
     };
     for (number, tokens, token_lines) in &folded.lines {
@@ -3066,6 +3128,8 @@ struct DeckBuilder {
     ended: bool,
     /// Every [`ParseWarning`] raised so far, in deck order.
     warnings: Vec<ParseWarning>,
+    /// Whether the deck is read under [`ParseOptions::fasthenry_compat`].
+    compat: bool,
 }
 
 impl DeckBuilder {
@@ -3592,6 +3656,7 @@ impl DeckBuilder {
             token_lines.get(1..).unwrap_or_default(),
             factor,
             &self.defaults,
+            self.compat,
             number,
         )?;
         self.warnings.extend(warnings);
@@ -5143,6 +5208,133 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
                 error.message
             );
         }
+    }
+
+    /// Issue #145: under `--fasthenry-compat`, a `contact decay_rect` /
+    /// seven-value `contact rect` cell at or above its axis's width is
+    /// clamped to 0.99 × that width — the deck then reads exactly as the
+    /// one writing the clamped cell out — with one warning per clamped
+    /// axis on the clause's own line. Both axes clamp at `>=`, so a cell
+    /// *equal* to the width (r0 = 1) clamps on y as on x.
+    #[test]
+    fn compat_clamps_a_cell_at_or_above_the_width() {
+        let statement = |clause: &str| {
+            plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ {clause}"
+                ),
+                "",
+            )
+        };
+        let compat = |clause: &str| {
+            // Compat reads line 1 as the title, so the clause moves to line 6.
+            parse_with_options_reporting(&format!("title\n{}", statement(clause)), COMPAT)
+                .unwrap_or_else(|error| panic!("{clause}: {error}"))
+        };
+        let clamp_warnings = |warnings: &[ParseWarning]| -> Vec<ParseWarning> {
+            warnings
+                .iter()
+                .filter(|warning| warning.message.contains("clamped"))
+                .cloned()
+                .collect()
+        };
+        for (clause, explicit, axes) in [
+            // Both axes above the width, as the issue's black-box deck.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 4, 4, 2, 2)",
+                "contact decay_rect (5, 3, 0, 2, 2, 1.98, 1.98, 2, 2)",
+                &['x', 'y'][..],
+            ),
+            // A negative limit clamps the same way.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 4, 4, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 2, 1.98, 1.98, -1, -1)",
+                &['x', 'y'][..],
+            ),
+            // Equal on both axes: `>=` on y too, not FastHenry's `>`.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 2, 2, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 2, 1.98, 1.98, -1, -1)",
+                &['x', 'y'][..],
+            ),
+            // One axis only: the other keeps its own cell and decay.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 1, 2, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 2, 1, 1.98, -1, -1)",
+                &['y'][..],
+            ),
+            (
+                "contact decay_rect (5, 3, 0, 2, 1, 3, 0.5, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 1, 1.98, 0.5, -1, -1)",
+                &['x'][..],
+            ),
+            // The seven-value `contact rect` is the same clause.
+            (
+                "contact rect (5, 3, 0, 2, 2, 2, 5)",
+                "contact rect (5, 3, 0, 2, 2, 1.98, 1.98)",
+                &['x', 'y'][..],
+            ),
+        ] {
+            let (clamped, warnings) = compat(clause);
+            let (expected, explicit_warnings) = compat(explicit);
+            assert_eq!(clamped.geometry, expected.geometry, "{clause}");
+            assert!(clamp_warnings(&explicit_warnings).is_empty(), "{explicit}");
+            let warnings = clamp_warnings(&warnings);
+            assert_eq!(warnings.len(), axes.len(), "{clause}: {warnings:?}");
+            for (warning, axis) in warnings.iter().zip(axes) {
+                // The clause's own continuation line, not the `G` line.
+                assert_eq!(warning.line, 6, "{clause}");
+                assert!(
+                    warning.message.contains(&format!("{axis}cell="))
+                        && warning.message.contains("0.99×")
+                        && warning.message.contains("ground plane 'Gp'"),
+                    "{clause}: {}",
+                    warning.message
+                );
+            }
+            // Native mode keeps the error.
+            let error = parse(&statement(clause)).unwrap_err();
+            assert!(
+                error.message.contains("must be > 0 and smaller than"),
+                "{clause}: {error}"
+            );
+        }
+        // A cell ≤ 0 is still an error under compat.
+        for clause in [
+            "contact decay_rect (5, 3, 0, 2, 2, 0, 4, -1, -1)",
+            "contact rect (5, 3, 0, 2, 2, 4, -1)",
+        ] {
+            let error =
+                parse_with_options(&format!("title\n{}", statement(clause)), COMPAT).unwrap_err();
+            assert!(
+                error.message.contains("must be > 0 and smaller than"),
+                "{clause}: {error}"
+            );
+        }
+    }
+
+    /// The clamp warnings take their clause's place among the statement's
+    /// other warnings, in source order (issue #145).
+    #[test]
+    fn compat_clamp_warnings_keep_source_order() {
+        let deck = plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole point (50, 50, 0) contact decay_rect (5, 3, 0, 2, 2, 4, 1, -1, -1)
++ hole point (60, 60, 0)",
+            "",
+        );
+        let (_, warnings) =
+            parse_with_options_reporting(&format!("title\n{deck}"), COMPAT).unwrap();
+        let shape: Vec<(usize, bool)> = warnings
+            .iter()
+            .map(|warning| (warning.line, warning.message.contains("clamped")))
+            .collect();
+        assert_eq!(shape, [(6, false), (6, true), (7, false)], "{warnings:?}");
     }
 
     /// The unsupported-contact-shape message is user-facing documentation of
