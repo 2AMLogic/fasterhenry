@@ -8,10 +8,10 @@ Usage:
 
 Neither the FastHenry binary nor its decks belong in this repository (see
 CONTRIBUTING.md); build and keep them elsewhere and point this script at
-them. The script reports numbers only: it never echoes deck text or
-FastHenry's console output, so its table can be committed as-is. The one
-message it does print is fasterhenry's own parse error, which names the
-unsupported directive.
+them. The script reports numbers only: it never echoes deck text, port or
+node names, or either tool's console output, so its table and JSON can be
+committed as-is. Failures are reported as fixed categories plus exit codes
+and counts.
 
 Each tool runs in a fresh temporary directory (FastHenry writes `Zc.mat` to
 its working directory) with the deck given by absolute path. fasterhenry
@@ -115,12 +115,14 @@ def compare(fh_names, fh_sweeps, our_names, our_sweeps):
     them in its own order). Returns [(freq, err)] or raises ValueError."""
     # Never fall back to positional matching: a silent misalignment would
     # publish a wrong agreement number.
+    # Messages carry counts only, never the labels (they come from the deck).
     if not fh_names or sorted(fh_names) != sorted(our_names):
-        raise ValueError(f"port names differ: {fh_names} vs {our_names}")
+        raise ValueError(
+            f"port names differ ({len(fh_names)} FastHenry vs {len(our_names)} fasterhenry)")
     # Duplicate labels cannot identify a port: `.index` would map every
     # repeat to the first one and hide differences in the others.
     if len(set(fh_names)) != len(fh_names):
-        raise ValueError(f"duplicate port names: {fh_names}")
+        raise ValueError(f"duplicate port names ({len(fh_names)} ports)")
     perm = [our_names.index(n) for n in fh_names]
     n = len(perm)
     out = []
@@ -133,19 +135,13 @@ def compare(fh_names, fh_sweeps, our_names, our_sweeps):
         if abs(near[0] - f) > 1e-4 * max(abs(f), 1e-12):
             continue
         z = near[1]
+        if len(z) != n or any(len(r) != n for r in z):
+            raise ValueError(f"fasterhenry matrix at {f:g} Hz is not {n} x {n}")
         aligned = [[z[perm[r]][perm[c]] for c in range(len(perm))] for r in range(len(perm))]
         out.append((f, rel_frobenius(aligned, ref)))
     if not out:
         raise ValueError("no common frequencies")
     return out
-
-
-def first_error_line(stderr):
-    for line in stderr.splitlines():
-        if line.startswith("Error"):
-            return line.strip()
-    lines = [l for l in stderr.splitlines() if l.strip()]
-    return lines[-1].strip() if lines else ""
 
 
 def resolve_exe(path):
@@ -173,8 +169,8 @@ def one_deck(deck, args):
             row["fasthenry_filaments"] = fasthenry_filaments(out + err)
             try:
                 fh_names, fh_sweeps = parse_fasthenry_zc(zc)
-            except (ValueError, IndexError) as e:
-                row["fasthenry"] = f"unreadable Zc.mat ({e})"
+            except (ValueError, IndexError):
+                row["fasthenry"] = "unreadable Zc.mat"
     with tempfile.TemporaryDirectory() as our_dir:
         js = os.path.join(our_dir, "out.json")
         cmd = [fasterhenry, "--fasthenry-compat", "--json", js, deck]
@@ -182,8 +178,8 @@ def one_deck(deck, args):
         if rc is None:
             row["fasterhenry"] = "timeout"
         elif rc != 0:
-            row["fasterhenry"] = "parse/solve error"
-            row["fasterhenry_error"] = first_error_line(err)
+            # stderr can quote deck tokens; report only the exit code.
+            row["fasterhenry"] = f"parse/solve error (exit {rc})"
         else:
             row["fasterhenry"] = "ok"
             row["fasterhenry_s"] = secs
@@ -220,7 +216,7 @@ def table(rows):
         if r.get("fasthenry") != "ok":
             status.append(f"FastHenry {r.get('fasthenry')}")
         if r.get("fasterhenry") != "ok":
-            status.append(f"fasterhenry: {r.get('fasterhenry_error') or r.get('fasterhenry')}")
+            status.append(f"fasterhenry: {r.get('fasterhenry')}")
         if "compare_error" in r:
             status.append(r["compare_error"])
         lo = r.get("err_lowest_f")

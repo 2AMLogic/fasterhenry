@@ -2,7 +2,7 @@
 """Unit tests for `tools/fasthenry_compare.py`.
 
 Run with:
-    python3 -m unittest tools/test_fasthenry_compare.py
+    python3 -m unittest discover -s tools -p test_fasthenry_compare.py
 """
 
 import argparse
@@ -56,6 +56,20 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             fc.compare(["p", "p"], fh, ["p", "p"], ours)
 
+    def test_our_matrix_must_be_square_of_port_count(self) -> None:
+        fh = [(1.0, [[1, 0], [0, 1]])]
+        with self.assertRaisesRegex(ValueError, "not 2 x 2"):
+            fc.compare(["a", "b"], fh, ["a", "b"], [(1.0, [[1]])])
+
+    def test_messages_do_not_echo_port_names(self) -> None:
+        sentinel = "SENTINELPORT"
+        for fh_names, our_names in ((["p", "p"], ["p", "p"]),
+                                    ([sentinel], ["other"])):
+            with self.assertRaises(ValueError) as cm:
+                fc.compare(fh_names, [(1.0, [[1]])], our_names, [(1.0, [[1]])])
+            self.assertNotIn(sentinel, str(cm.exception))
+            self.assertNotIn("other", str(cm.exception))
+
 
 class ResolveExeTests(unittest.TestCase):
     def test_path_is_made_absolute_and_bare_name_kept(self) -> None:
@@ -85,6 +99,44 @@ class OneDeckRelativeBinaryTests(unittest.TestCase):
         self.assertEqual(row["fasterhenry"], "ok")
         self.assertNotIn("compare_error", row)
         self.assertEqual(row["err_worst"], (1000.0, 0.0))
+
+
+LEAKY_STUB = """#!/usr/bin/env python3
+import sys
+sys.stderr.write("Error: bad token SENTINELTOKEN at node SENTINELNODE\\n")
+sys.exit(3)
+"""
+
+BAD_SHAPE_STUB = """#!/usr/bin/env python3
+import json, sys
+out = sys.argv[sys.argv.index("--json") + 1]
+json.dump({"ports": [{"name": "a/b"}], "frequencies_hz": [1000],
+           "impedance_ohm": [[]], "provenance": {}}, open(out, "w"))
+"""
+
+
+class ReportLeakTests(unittest.TestCase):
+    def _run(self, ours_stub):
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            write_exe(root / "fh", FH_STUB)
+            write_exe(root / "ours", ours_stub)
+            (root / "deck.inp").write_text("title\n")
+            args = argparse.Namespace(
+                fasthenry=str(root / "fh"), fasterhenry=str(root / "ours"),
+                timeout=60, single_thread=False)
+            return fc.one_deck(str(root / "deck.inp"), args)
+
+    def test_stderr_never_reaches_table_or_json(self) -> None:
+        row = self._run(LEAKY_STUB)
+        self.assertIn("exit 3", row["fasterhenry"])
+        for text in (fc.table([row]), json.dumps(row)):
+            self.assertNotIn("SENTINEL", text)
+
+    def test_malformed_our_matrix_is_a_per_deck_error(self) -> None:
+        row = self._run(BAD_SHAPE_STUB)
+        self.assertIn("compare_error", row)
+        self.assertIn("not 1 x 1", row["compare_error"])
 
 
 if __name__ == "__main__":
