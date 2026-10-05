@@ -11,6 +11,7 @@ of them ship in the published crates.
 | `cross_section_reference.py` | Independent 2-D skin-effect reference for a rectangular trace: per-unit-length internal impedance vs frequency, as JSON. Oracle for `fasterhenry/tests/width_graded_skin_validation.rs`. | CI (`ci.yml`); `docs/validation.md` |
 | `bench_table.py` | Reads criterion's JSON output and regenerates the dated results table between the `bench-table` markers in `docs/benchmarks.md`. | `bench.yml` (manual workflow) |
 | `fasthenry_compare.py` | Head-to-head against a locally built FastHenry: runs each `.inp` deck through both tools, compares the port impedance matrices per frequency (relative Frobenius error, ports matched by name), and times both. Prints numbers, fixed failure categories and exit codes only — never deck text, port names or either tool's output — so its table and JSON can be committed. The FastHenry binary and decks stay outside the repo (`CONTRIBUTING.md`). | Operator, by hand (#74); `docs/benchmarks.md` |
+| `test_fasthenry_compare.py` | Unit tests for `fasthenry_compare.py`'s Zc.mat parsing and port matching (`python3 -m unittest test_fasthenry_compare`, run from this directory). | Operator, by hand |
 | `test_bench_table.py` | Unit tests for `bench_table.py`'s table formatting (`python3 -m unittest test_bench_table`, run from this directory). | `bench.yml` |
 
 Each script's module docstring — or, for the shell script, its `--help` — has

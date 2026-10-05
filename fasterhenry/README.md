@@ -15,8 +15,8 @@ none of its code.
   are cut into filaments (uniform, surface-graded, or graded to the skin
   depth at a frequency of interest), assembled into a loop-basis mesh
   system, and solved for the port impedance matrix over a frequency sweep.
-- **Ground planes** as meshed conductors, with rectangular holes and graded
-  contact regions under via landings.
+- **Ground planes** as meshed conductors, with rectangular, point and circular
+  holes and graded contact regions under via landings.
 - **Coupling truncation**: declare which groups of segments couple and skip
   the mutual inductance of the rest.
 - **Two solvers.** The default is a dense complex LU, parallel across all
