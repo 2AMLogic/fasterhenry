@@ -27,6 +27,15 @@ breaking changes to the API or the command-line interface; patch releases
   `--fasthenry-compat`, one empty coordinate field in a node reference
   (`N1 (, 2, 0)`) now reads as 0 (before the offset) with a line-numbered
   warning; natively it is still an error.
+- `--fasthenry-compat`: `.units` reads as FastHenry does (issue #144). A
+  deck with no `.units` is in metres, with a line-numbered warning; several
+  `.units` lines are honoured, each from its own line onward (values already
+  read, `.default` fields included, keep their unit); and the long spellings
+  FastHenry reads correctly (`meter(s)`, `metre(s)`, `kilometer(s)`,
+  `kilometre(s)`, `inch`, `inches`) are accepted with a warning. Spellings
+  FastHenry silently misreads — `millimeter…`/`milli…` (as mils) and
+  `micron…`/`micrometer…` (as metres) — are an error naming the misreading
+  and the documented unit. Default mode is unchanged.
 - Deck reader: a line-numbered **warning** for a corner-point `G`
   statement's `hole point`, `hole circle`, `hole rect`, `contact rect` or
   `contact decay_rect` clause that lies **wholly outside** the plane's

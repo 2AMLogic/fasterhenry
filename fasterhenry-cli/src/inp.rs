@@ -459,7 +459,15 @@
 //!   (coordinates, `w`, `h`) scale with the unit; **conductivity and
 //!   resistivity are per deck unit** — `sigma=5.8e4` under `.units mm` is
 //!   copper (5.8e4 S/mm = 5.8e7 S/m), and so is `rho=1.7241e-5`
-//!   (Ω·mm = 1.7241e-8 Ω·m). `rho=r` is exactly `sigma=1/r`.
+//!   (Ω·mm = 1.7241e-8 Ω·m). `rho=r` is exactly `sigma=1/r`. Under
+//!   [`ParseOptions::fasthenry_compat`] (issue #144) a missing `.units` is
+//!   metres with a [`ParseWarning`]; `.units` may repeat, each applying
+//!   from its own line onward (a value already read — `.default` fields
+//!   included — keeps the unit it was written in); and the long spellings
+//!   FastHenry reads correctly (`meter(s)`, `metre(s)`, `kilometer(s)`,
+//!   `kilometre(s)`, `inch`, `inches`) are accepted with a warning, while
+//!   those it misreads (`millimeter…`/`milli…` as mils, `micron…`/
+//!   `micrometer…` as metres) are an error naming the misreading.
 //! * **`nwinc`/`nhinc` and `rw`/`rh` cut the cross-section into
 //!   filaments.** `nwinc` filaments go across the width and `nhinc` across
 //!   the height (default 1 each). `rw` and `rh` are the ratio of adjacent
@@ -691,6 +699,49 @@ fn unit_factor(unit: &str, line: usize) -> Result<f64, ParseError> {
 
 /// The accepted `.units` spellings, for error messages.
 const UNITS: &str = "km, m, cm, mm, um, in, mils";
+
+/// [`unit_factor`] under [`ParseOptions::fasthenry_compat`] (issue #144):
+/// also the long spellings FastHenry reads *correctly* — `meter(s)`,
+/// `metre(s)`, `kilometer(s)`, `kilometre(s)`, `inch`, `inches` — each with
+/// a [`ParseWarning`] naming the documented spelling. Spellings FastHenry
+/// silently *misreads* are an error naming the misreading, so a deck that
+/// FastHenry solves at the wrong scale is not solved at it here either:
+/// `millimeter`/`millimetre`/`milli…` (FastHenry reads mils) and
+/// `micron…`/`micrometer`/`micrometre…` (FastHenry reads metres).
+fn compat_unit_factor(unit: &str, line: usize) -> Result<(f64, Option<ParseWarning>), ParseError> {
+    let unknown = match unit_factor(unit, line) {
+        Ok(factor) => return Ok((factor, None)),
+        Err(error) => error,
+    };
+    let lower = unit.to_ascii_lowercase();
+    let misread = |reads: &str, documented: &str| {
+        err(
+            line,
+            format!(
+                "'.units {unit}' is not a documented unit, and FastHenry misreads it as {reads}, which would scale every length wrongly; write '.units {documented}' (supported: {UNITS})"
+            ),
+        )
+    };
+    if lower.starts_with("milli") {
+        return Err(misread("mils (2.54e-5 m)", "mm"));
+    }
+    if lower.starts_with("micron") || lower.starts_with("micromet") {
+        return Err(misread("metres", "um"));
+    }
+    let (factor, documented) = match lower.as_str() {
+        "meter" | "meters" | "metre" | "metres" => (1.0, "m"),
+        "kilometer" | "kilometers" | "kilometre" | "kilometres" => (1e3, "km"),
+        "inch" | "inches" => (0.0254, "in"),
+        _ => return Err(unknown),
+    };
+    let warning = ParseWarning {
+        line,
+        message: format!(
+            "'.units {unit}' is not one of the documented units ({UNITS}); reading it as '{documented}', as FastHenry does"
+        ),
+    };
+    Ok((factor, Some(warning)))
+}
 
 /// Rejects a line that gives its conductivity both ways: `sigma=` and
 /// `rho=` among the same line's `<field>=<value>` tokens.
@@ -3122,6 +3173,13 @@ pub struct ParseOptions {
     /// independent of `.units` (unlike an explicit `sigma=`, which is per
     /// deck unit), and raises a [`ParseWarning`] on the statement's line.
     /// Off, that is a line-numbered error (issue #142).
+    ///
+    /// On, `.units` reads as FastHenry does (issue #144): a deck without
+    /// one is in metres, with a [`ParseWarning`] on the first line that
+    /// needs a unit; a repeated `.units` applies from its own line onward;
+    /// and FastHenry's correctly read long spellings (`meters`, `inches`, …)
+    /// are accepted with a warning, while the spellings FastHenry misreads
+    /// (`millimeter`, `micron`, …) are rejected naming the misreading.
     pub fasthenry_compat: bool,
 }
 
@@ -3292,6 +3350,9 @@ struct DeckBuilder {
     /// Whether the deck is read under [`ParseOptions::fasthenry_compat`]:
     /// among other things, a conductor naming no conductivity is copper
     /// (with a warning) rather than an error.
+    ///
+    /// Likewise: `.units` is optional (metres, with a warning), repeatable,
+    /// and reads FastHenry's long spellings.
     compat: bool,
 }
 
@@ -3313,6 +3374,23 @@ impl DeckBuilder {
         }
         let head = tokens[0];
         let keyword = head.to_ascii_lowercase();
+        // Under compat, a deck with no `.units` before its first line that
+        // needs a unit is in metres, as FastHenry reads it — said out loud
+        // on that line (issue #144). A later `.units` still applies from
+        // its own line onward.
+        if self.compat
+            && self.unit.is_none()
+            && (matches!(keyword.as_str(), ".default" | ".hole" | ".contact")
+                || matches!(keyword.chars().next(), Some('n' | 'e' | 'g')))
+        {
+            self.unit = Some(1.0);
+            self.warnings.push(ParseWarning {
+                line: number,
+                message: format!(
+                    "no .units directive before this line; reading lengths in metres, as FastHenry does (write '.units m' to say so, or one of {UNITS})"
+                ),
+            });
+        }
         // The unit in force for *this* line: a line that needs one and was
         // read before `.units` is rejected by the method that reads it.
         let factor = self.unit.unwrap_or(1.0);
@@ -3382,10 +3460,22 @@ impl DeckBuilder {
         }
     }
 
-    /// `.units km|m|cm|mm|um|in|mils` — mandatory, and at most once.
+    /// `.units km|m|cm|mm|um|in|mils` — mandatory, and at most once; under
+    /// [`ParseOptions::fasthenry_compat`], any number of times, each from
+    /// its own line onward, and in the long spellings of
+    /// [`compat_unit_factor`].
     fn apply_units(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
         if tokens.len() != 2 {
             return Err(err(number, "expected .units <unit>"));
+        }
+        if self.compat {
+            // Forward only: every value read so far (nodes, `.default`
+            // fields, segments, planes) is already stored in metres and
+            // S/m, so a new factor cannot reach back to it.
+            let (factor, warning) = compat_unit_factor(tokens[1], number)?;
+            self.warnings.extend(warning);
+            self.unit = Some(factor);
+            return Ok(());
         }
         if self.unit.is_some() {
             return Err(err(number, "duplicate .units directive"));
@@ -3948,7 +4038,10 @@ impl DeckBuilder {
         if !self.ended {
             return Err(err(last_number, "deck has no .end directive"));
         }
-        if self.unit.is_none() {
+        // Under compat a missing `.units` is metres, set (with a warning)
+        // by the first line that needed a unit; a deck with no such line
+        // has nothing for a unit to scale.
+        if self.unit.is_none() && !self.compat {
             return Err(err(
                 last_number,
                 format!(
@@ -4469,9 +4562,12 @@ e1 n1 n2 w=1e-3 h=1e-4 sigma=5.8e7
     #[test]
     fn compat_mode_ignores_directive_like_first_line() {
         // Line 1 is skipped whatever it holds: a `.units` there is swallowed,
-        // so the deck then lacks `.units` — the documented cost of the mode.
-        let error = parse_compat(COMPAT_BODY).expect_err(".units on line 1 is the title");
-        assert!(error.message.contains(".units"), "{error}");
+        // so the deck then lacks `.units` and reads in metres, with a warning
+        // (issue #144) — the documented cost of the mode.
+        let (deck, warnings) = units_compat(COMPAT_BODY).expect(".units on line 1 is the title");
+        assert_eq!(deck.title.as_deref(), Some(".units m"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("no .units"), "{warnings:?}");
         // A `*` comment or a `.title` on line 1 is likewise just title text.
         let deck = parse_compat(&format!("* comment-looking title\n{COMPAT_BODY}")).unwrap();
         assert_eq!(deck.title.as_deref(), Some("* comment-looking title"));
@@ -8494,5 +8590,154 @@ G1 x1=0 y1=0 z1=0 x2=16 y2=0 z2=0 x3=16 y3=8 z3=0
                 "{warnings:?}"
             );
         }
+    }
+
+    /// Compat mode, reporting (issue #144's tests).
+    fn units_compat(text: &str) -> Result<(Deck, Vec<ParseWarning>), ParseError> {
+        parse_with_options_reporting(text, COMPAT)
+    }
+
+    /// A titled compat deck: a 10-unit bar under `.units {unit}`.
+    fn units_deck(unit: &str) -> String {
+        format!("title\n{}", conductivity_deck(unit, "sigma=1", ""))
+    }
+
+    /// Issue #144: under compat the long spellings FastHenry reads
+    /// correctly are accepted, at the documented unit's factor, each with a
+    /// warning on the `.units` line naming the documented spelling; case
+    /// is ignored.
+    #[test]
+    fn compat_units_accepts_long_spellings_with_a_warning() {
+        for (spelling, documented) in [
+            ("meter", "m"),
+            ("Meters", "m"),
+            ("metre", "m"),
+            ("METRES", "m"),
+            ("kilometer", "km"),
+            ("kilometres", "km"),
+            ("inch", "in"),
+            ("Inches", "in"),
+        ] {
+            let (deck, warnings) =
+                units_compat(&units_deck(spelling)).unwrap_or_else(|error| panic!("{error}"));
+            let (expected, none) = units_compat(&units_deck(documented)).unwrap();
+            assert!(none.is_empty(), "{documented}: {none:?}");
+            assert_eq!(deck.geometry, expected.geometry, "{spelling}");
+            assert_eq!(warnings.len(), 1, "{spelling}: {warnings:?}");
+            assert_eq!(warnings[0].line, 2, "{spelling}");
+            assert!(
+                warnings[0]
+                    .message
+                    .contains(&format!("reading it as '{documented}'")),
+                "{spelling}: {}",
+                warnings[0].message
+            );
+        }
+        // The documented seven (and `mil`) warn about nothing.
+        for unit in ["km", "m", "cm", "mm", "um", "in", "mils", "mil", "MM"] {
+            let (_, warnings) = units_compat(&units_deck(unit)).unwrap();
+            assert!(warnings.is_empty(), "{unit}: {warnings:?}");
+        }
+        let (deck, _) = units_compat(&units_deck("inches")).unwrap();
+        let segment = deck.geometry.segment(0).unwrap();
+        assert!((segment.length() - 0.254).abs() < 1e-15);
+    }
+
+    /// Spellings FastHenry silently misreads are errors naming the
+    /// misreading and the documented spelling, not reproduced.
+    #[test]
+    fn compat_units_rejects_spellings_fasthenry_misreads() {
+        for (spelling, reads, documented) in [
+            ("millimeter", "mils", "mm"),
+            ("Millimeters", "mils", "mm"),
+            ("millimetre", "mils", "mm"),
+            ("milli", "mils", "mm"),
+            ("micron", "metres", "um"),
+            ("microns", "metres", "um"),
+            ("micrometer", "metres", "um"),
+            ("micrometres", "metres", "um"),
+        ] {
+            let error = units_compat(&units_deck(spelling)).expect_err(spelling);
+            assert_eq!(error.line, 2, "{spelling}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("FastHenry misreads it as {reads}")),
+                "{spelling}: {error}"
+            );
+            assert!(
+                error.message.contains(&format!("'.units {documented}'")),
+                "{spelling}: {error}"
+            );
+        }
+        // Anything else stays the native unknown-unit error.
+        for spelling in ["centimeter", "nm", "ft", "c", "u", "i"] {
+            let error = units_compat(&units_deck(spelling)).expect_err(spelling);
+            assert!(
+                error.message.contains("unknown length unit"),
+                "{spelling}: {error}"
+            );
+        }
+    }
+
+    /// Under compat a deck with no `.units` is in metres, with one warning
+    /// on the first line that needs a unit.
+    #[test]
+    fn compat_missing_units_is_metres_with_a_warning() {
+        let with = units_deck("m");
+        let without = with.replacen(".units m\n", "", 1);
+        let (deck, warnings) = units_compat(&without).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(deck.geometry, units_compat(&with).unwrap().0.geometry);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 2);
+        assert!(warnings[0].message.contains("metres"), "{warnings:?}");
+    }
+
+    /// Under compat each `.units` applies from its own line onward: values
+    /// already read — nodes, `.default` fields, segments — keep the unit
+    /// they were written in, and later lines take the new one.
+    #[test]
+    fn compat_repeated_units_apply_forward() {
+        let text = "\
+title
+.units mm
+.default z=0 w=1 h=1 sigma=5.8e4
+n1 x=0 y=0
+.units m
+n2 x=0.01 y=0
+e1 n1 n2
+e2 n1 n2 sigma=5.8e7 w=1e-3 h=1e-3
+.units cm
+n3 x=2 y=0
+e3 n2 n3
+.external n1 n3
+.freq fmin=1 fmax=1 ndec=1
+.end
+";
+        let (deck, warnings) = units_compat(text).unwrap_or_else(|error| panic!("{error}"));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let e1 = deck.geometry.segment(0).unwrap();
+        // n2 at 0.01 m, w/h and sigma from the mm-era `.default`: 1 mm and
+        // 5.8e4 S/mm = 5.8e7 S/m, not re-scaled by the later `.units m`.
+        assert!((e1.length() - 0.01).abs() < 1e-15);
+        assert!((e1.width - 1e-3).abs() < 1e-18);
+        assert!((e1.sigma - 5.8e7).abs() < 1e-3);
+        // An explicit sigma after `.units m` is per metre.
+        let e2 = deck.geometry.segment(1).unwrap();
+        assert!((e2.sigma - 5.8e7).abs() < 1e-3);
+        // n3 at 2 cm.
+        let e3 = deck.geometry.segment(2).unwrap();
+        assert!((e3.length() - 0.01).abs() < 1e-15);
+
+        // Native mode is unchanged: a second `.units`, a missing `.units`
+        // and a long spelling are each still an error.
+        let error = parse(text.replacen("title\n", "", 1).as_str()).unwrap_err();
+        assert_eq!(error.line, 4);
+        assert!(error.message.contains("duplicate .units"), "{error}");
+        let native = conductivity_deck("m", "sigma=1", "");
+        let error = parse(&native.replacen(".units m\n", "", 1)).unwrap_err();
+        assert!(error.message.contains("before .units"), "{error}");
+        let error = parse(&native.replacen(".units m", ".units meters", 1)).unwrap_err();
+        assert!(error.message.contains("unknown length unit"), "{error}");
     }
 }
