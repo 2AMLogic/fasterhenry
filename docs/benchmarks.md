@@ -261,6 +261,53 @@ are the two curves, and the inflection is the ~3 000-filament crossover
 (with the default handover at 10 000 marked separately). Drawing it is
 #27's own scope; the numbers it needed are here.
 
+## FastHenry example corpus (#74)
+
+Every `.inp` deck shipped in the `examples/` directory of the public
+ediloren/FastHenry2 mirror (`363e43e`), run through both tools with
+`tools/fasthenry_compare.py`. Only numbers and deck file names are recorded
+here; no deck text is in this repository. FastHenry was built natively
+(macOS arm64, `-std=gnu89 -fcommon`) outside the tree and run with its
+defaults. fasterhenry ran `--fasthenry-compat`, 0.1.1 + #139. Host: Apple M3
+Ultra, 28 threads. 2026-10-05.
+
+**Coverage: 3 of 19 decks parse.** (A 20th deck, `tree_sample`, needs a
+hierarchy file the corpus doesn't ship, and FastHenry fails on it too.)
+Each failure is the *first* error in that deck, so fixing one may expose
+another:
+
+| issue | gap | decks stopped |
+|---|---|---|
+| #141 | whitespace around `=` on `N`/`E`/`.default` lines | msm, trace_over_mesh_new, vias |
+| #142 | no conductivity given (FastHenry: copper) | 30pin, broken, holey_gp, simple_gp, together, together_nonuni |
+| #143 | `file=NONE` plane with no initial grid (FastHenry: one root cell) | nonuni01, template |
+| #144 | `.units meters` and other long spellings | hole, onebargp |
+| #145 | `decay_rect` cell ≥ rectangle width (FastHenry: clamps) | 3d_example2, 3d_example2_coarse |
+| #146 | `relx`/`rely`/`relz` plane offsets | gpexamp_copper |
+
+**Where both tools run**, agreement is relative Frobenius error of the port
+impedance matrix, ports matched by name, at every frequency both report:
+
+| deck | filaments | FastHenry | fasterhenry (28 thr) | fasterhenry (1 thr) | rel. err, lowest f | worst rel. err |
+|---|---|---|---|---|---|---|
+| pin-con2seg | 30 | 0.09 s | 0.016 s | 0.011 s | 2.7e-6 (10 Hz) | 1.2e-3 (21.5 MHz) |
+| pin-con7 | 735 | 6.2 s | 0.33 s | 4.1 s | 4.2e-7 (1 Hz) | 1.2e-2 (1 THz) |
+| pin-connect | 2625 | 5.3 s | 1.1 s | 10.1 s | 4.3e-7 (1 Hz) | 4.3e-7 (one frequency) |
+
+The pattern matches "Speed" above: about 5–19× faster wall-clock on this host
+(it is under background load, and the ratio moved by up to 1.5× between
+runs), from parallelism; slower per thread at 2.6 k filaments. The worst-case
+1.2e-2 at 1 THz on pin-con7 has not been attributed yet. FastHenry ran its
+default multipole + GMRES path, and a direct-solve rerun (`-sludecomp
+-aoff`) would separate its approximation error from ours.
+
+Rerun once a gap closes:
+
+```bash
+python3 tools/fasthenry_compare.py --fasthenry <fasthenry> \
+  --fasterhenry target/release/fasterhenry --single-thread <FastHenry2>/examples/*.inp
+```
+
 ## Deck dialect notes (for the record)
 
 Both tools read the common core (`.units`, `.default` with `w/h/nwinc/

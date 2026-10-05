@@ -775,3 +775,44 @@ fn contact_rect_touching_the_plane_edge_is_dropped_and_solves() {
         assert!(!result.impedance_ohm.is_empty());
     }
 }
+
+/// Issue #142 end to end: under `--fasthenry-compat` a 1 m, 1 cm² bar with
+/// no conductivity anywhere is copper at 5.8e7 S/m, whatever the deck unit,
+/// so its DC resistance is 1 / (5.8e7 · 1e-4) = 1.72414e-4 Ω in `m` and
+/// `mm` alike. Without the flag the same deck is still rejected.
+#[test]
+fn fasthenry_compat_defaults_a_bar_to_copper_in_any_unit() {
+    let compat = ParseOptions {
+        fasthenry_compat: true,
+    };
+    for (unit, length, side) in [("m", 1.0, 0.01), ("mm", 1000.0, 10.0)] {
+        let text = format!(
+            "\
+copper bar with no sigma
+.units {unit}
+n1 x=0 y=0 z=0
+n2 x={length} y=0 z=0
+e1 n1 n2 w={side} h={side}
+.external n1 n2
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+        );
+        let (deck, warnings) =
+            fasterhenry_cli::inp::parse_with_options_reporting(&text, compat).expect(unit);
+        assert_eq!(warnings.len(), 1, "{unit}: {warnings:?}");
+        assert_eq!(warnings[0].line, 5, "{unit}");
+        let dc = run(&fasterhenry_cli::Problem::from(deck), Some(vec![0.0])).unwrap();
+        let resistance = dc.impedance_ohm[0][(0, 0)].re;
+        assert!(
+            (resistance - 1.72414e-4).abs() < 1e-9,
+            "{unit}: R = {resistance:e}"
+        );
+
+        let error =
+            fasterhenry_cli::inp::parse(&text.replacen("copper bar with no sigma\n", "", 1))
+                .expect_err("native mode keeps the missing-conductivity error");
+        assert_eq!(error.line, 4, "{unit}");
+        assert!(error.message.contains("has no conductivity"), "{error}");
+    }
+}

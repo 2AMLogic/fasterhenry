@@ -115,7 +115,8 @@ pub struct RunArgs {
     /// as the public FastHenry format does, for third-party decks whose
     /// line 1 is prose. Off by default: line 1 is parsed like any other
     /// and `.title <text>` sets the title. A later `.title` is still
-    /// honored in this mode.
+    /// honored in this mode. Also gives a segment or ground plane with no
+    /// conductivity FastHenry's copper default (5.8e7 S/m), with a warning.
     #[arg(long)]
     pub fasthenry_compat: bool,
 }
