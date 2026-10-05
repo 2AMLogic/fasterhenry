@@ -35,7 +35,10 @@
 //! Conductivity is given either as `sigma=` or as its reciprocal, the
 //! resistivity `rho=` (which must be positive); naming both on one line —
 //! continuation lines included — is an error, while a per-line value in
-//! either form overrides a `.default` in either form.
+//! either form overrides a `.default` in either form. A segment or plane
+//! with no conductivity from its line or `.default` is an error, unless
+//! [`ParseOptions::fasthenry_compat`] is set: then it is copper, 5.8e7 S/m
+//! *physical* (independent of `.units`), with a [`ParseWarning`].
 //!
 //! Where this reader knowingly departs from the public format description —
 //! `.title` as an explicit directive rather than an always-ignored first
@@ -621,7 +624,9 @@ fn err(line: usize, message: impl Into<String>) -> ParseError {
 /// A parse **warning**: something the deck says that this reader accepts
 /// but that is almost certainly not what was meant — today, a `hole` or
 /// rectangular `contact` clause wholly outside its ground plane's
-/// footprint (issue #105; see the [module documentation](self)).
+/// footprint (issue #105; see the [module documentation](self)), or, under
+/// [`ParseOptions::fasthenry_compat`], a segment or plane defaulted to
+/// copper for want of a conductivity (issue #142).
 ///
 /// A warning never changes the parsed [`Deck`]: [`parse`] and
 /// [`parse_with_options`] discard them, and [`parse_reporting`] /
@@ -631,7 +636,8 @@ fn err(line: usize, message: impl Into<String>) -> ParseError {
 pub struct ParseWarning {
     /// The 1-based **physical** line of the clause the warning is about —
     /// the continuation (`+`) line it was written on, not the line its
-    /// statement started on.
+    /// statement started on. A warning about a whole statement (a copper
+    /// default) is on the line the statement starts on.
     pub line: usize,
     /// What the clause does not do, and why.
     pub message: String,
@@ -682,6 +688,24 @@ fn one_conductivity(fields: &[&str], line: usize) -> Result<(), ParseError> {
         ));
     }
     Ok(())
+}
+
+/// The conductivity FastHenry gives a segment or ground plane that names
+/// none (on its line or via `.default`): copper, 5.8e7 S/m. Used only under
+/// [`ParseOptions::fasthenry_compat`] (issue #142). It is a *physical*
+/// value, independent of `.units` — unlike an explicit `sigma=`, which is
+/// per deck unit — so it is stored as is, already in S/m.
+const COPPER_SIGMA: f64 = 5.8e7;
+
+/// The warning for a conductor given [`COPPER_SIGMA`] by default: `what` is
+/// `"segment"` or `"ground plane"`, `line` the statement's own line.
+fn copper_warning(what: &str, head: &str, line: usize) -> ParseWarning {
+    ParseWarning {
+        line,
+        message: format!(
+            "{what} '{head}' has no conductivity; using copper (5.8e7 S/m, FastHenry default)"
+        ),
+    }
 }
 
 /// Per-line field defaults set by `.default`; lengths are already scaled to
@@ -1497,6 +1521,7 @@ fn parse_plane_statement(
     unit: f64,
     defaults: &Defaults,
     line: usize,
+    fasthenry_compat: bool,
 ) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
     // The tokens are rejoined with single spaces, so token `k` starts at
     // the sum of the earlier tokens' lengths plus one separator each.
@@ -1525,7 +1550,14 @@ fn parse_plane_statement(
         statement.clause_seq = order;
         statement.apply_item(item)?;
     }
-    statement.finish()
+    // Under compat, a plane naming no conductivity is copper (issue #142),
+    // said out loud on the statement's own line, ahead of its clauses.
+    let copper = (fasthenry_compat && statement.sigma.is_none()).then(|| {
+        statement.sigma = Some(COPPER_SIGMA);
+        copper_warning("ground plane", head, line)
+    });
+    let (spec, nodes, warnings) = statement.finish()?;
+    Ok((spec, nodes, copper.into_iter().chain(warnings).collect()))
 }
 
 /// A FastHenry-form `G` statement under construction: what each clause of
@@ -2900,6 +2932,13 @@ pub struct ParseOptions {
     /// written for this reader that also carries a prose first line reads
     /// the same either way — whereas disabling it would turn a line this
     /// reader otherwise accepts into an error for no gain in safety.
+    ///
+    /// On, a segment or ground plane (either grammar) given no conductivity
+    /// — none on its line, none via `.default sigma=`/`rho=` — takes
+    /// FastHenry's default, copper at 5.8e7 S/m, as a physical value
+    /// independent of `.units` (unlike an explicit `sigma=`, which is per
+    /// deck unit), and raises a [`ParseWarning`] on the statement's line.
+    /// Off, that is a line-numbered error (issue #142).
     pub fasthenry_compat: bool,
 }
 
@@ -2934,6 +2973,7 @@ pub fn parse_with_options_reporting(
     let folded = fold_lines(text, options)?;
     let mut deck = DeckBuilder {
         title: folded.title,
+        fasthenry_compat: options.fasthenry_compat,
         ..DeckBuilder::default()
     };
     for (number, tokens, token_lines) in &folded.lines {
@@ -3066,6 +3106,9 @@ struct DeckBuilder {
     ended: bool,
     /// Every [`ParseWarning`] raised so far, in deck order.
     warnings: Vec<ParseWarning>,
+    /// [`ParseOptions::fasthenry_compat`]: a conductor naming no
+    /// conductivity is copper (with a warning) rather than an error.
+    fasthenry_compat: bool,
 }
 
 impl DeckBuilder {
@@ -3483,6 +3526,7 @@ impl DeckBuilder {
                 }
             }
         }
+        let sigma = self.copper_default(sigma, "segment", head, number);
         let (w, h, sigma) = match (w, h, sigma) {
             (Some(w), Some(h), Some(sigma)) => (w, h, sigma),
             (None, _, _) => {
@@ -3548,6 +3592,24 @@ impl DeckBuilder {
         Ok(())
     }
 
+    /// `sigma` as resolved from a line and `.default`, or — under
+    /// [`ParseOptions::fasthenry_compat`] only — [`COPPER_SIGMA`] with a
+    /// warning on `number` when neither gave one (issue #142). Outside
+    /// compat a missing conductivity stays `None`, for the caller's error.
+    fn copper_default(
+        &mut self,
+        sigma: Option<f64>,
+        what: &str,
+        head: &str,
+        number: usize,
+    ) -> Option<f64> {
+        if sigma.is_none() && self.fasthenry_compat {
+            self.warnings.push(copper_warning(what, head, number));
+            return Some(COPPER_SIGMA);
+        }
+        sigma
+    }
+
     /// A `G` statement, in either grammar. The two are told apart by the
     /// shape of the first token after the name: a bare number starts the
     /// extension form, anything else (`x1=…`) the FastHenry corner-point
@@ -3593,6 +3655,7 @@ impl DeckBuilder {
             factor,
             &self.defaults,
             number,
+            self.fasthenry_compat,
         )?;
         self.warnings.extend(warnings);
         let index = self.planes.len();
@@ -3657,6 +3720,7 @@ impl DeckBuilder {
                 }
             }
         }
+        let sigma = self.copper_default(sigma, "ground plane", head, number);
         let corners: Vec<f64> = corners.into_iter().flatten().collect();
         let [x1, y1, z1, x2, y2, z2, thickness] = [
             corners[0], corners[1], corners[2], corners[3], corners[4], corners[5], corners[6],
@@ -7906,5 +7970,122 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         assert_eq!(warnings[0].line, 6);
         let (_, warnings) = parse_warned(&footprint_deck(""));
         assert!(warnings.is_empty());
+    }
+
+    /// Compat mode: parse and report, panicking on a parse error.
+    fn parse_compat_warned(text: &str) -> (Deck, Vec<ParseWarning>) {
+        parse_with_options_reporting(
+            text,
+            ParseOptions {
+                fasthenry_compat: true,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Issue #142: under compat, a segment with no conductivity anywhere is
+    /// copper at 5.8e7 S/m *physical*, whatever the deck unit, with one
+    /// warning on its own line.
+    #[test]
+    fn compat_defaults_a_segment_to_copper_independent_of_units() {
+        for unit in ["m", "mm", "mils"] {
+            let text = format!("title\n{}", conductivity_deck(unit, "", ""));
+            let (deck, warnings) = parse_compat_warned(&text);
+            assert_eq!(
+                deck.geometry.segment(0).unwrap().sigma,
+                COPPER_SIGMA,
+                "{unit}"
+            );
+            assert_eq!(warnings.len(), 1, "{unit}: {warnings:?}");
+            assert_eq!(warnings[0].line, 6, "{unit}");
+            assert_eq!(
+                warnings[0].message,
+                "segment 'e1' has no conductivity; using copper (5.8e7 S/m, FastHenry default)"
+            );
+        }
+    }
+
+    /// An explicit conductivity, on the line or in `.default`, still wins
+    /// under compat, stays per deck unit, and raises no warning.
+    #[test]
+    fn compat_copper_default_yields_to_any_given_conductivity() {
+        for (default_fields, segment_fields) in
+            [("sigma=5.8e4", ""), ("rho=0.5", ""), ("", "sigma=2")]
+        {
+            let text = format!(
+                "title\n{}",
+                conductivity_deck("mm", default_fields, segment_fields)
+            );
+            let (deck, warnings) = parse_compat_warned(&text);
+            let plain = parse_ok(&conductivity_deck("mm", default_fields, segment_fields));
+            assert_eq!(
+                deck.geometry, plain.geometry,
+                "{default_fields}{segment_fields}"
+            );
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
+        // sigma=5.8e7 under mm is 1000x copper, not copper.
+        let (deck, _) = parse_compat_warned(&format!(
+            "title\n{}",
+            conductivity_deck("mm", "", "sigma=5.8e7")
+        ));
+        assert_eq!(deck.geometry.segment(0).unwrap().sigma, 5.8e10);
+    }
+
+    /// Without compat, a missing conductivity is still a line-numbered
+    /// error, for a segment and for both plane grammars.
+    #[test]
+    fn native_mode_still_rejects_a_missing_conductivity() {
+        let error = parse(&conductivity_deck("mm", "", "")).unwrap_err();
+        assert_eq!(error.line, 5);
+        assert!(error.message.contains("has no conductivity"), "{error}");
+        for statement in [
+            "Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0 thick=0.04 seg1=5 seg2=3",
+            "Gp 0 0 0 10 6 0 0.04 nx=5 ny=3",
+        ] {
+            let text = plane_deck(statement, "").replace(".default sigma=5.8e4", "");
+            let text = text.replace("Ev Nt Nb w=0.2 h=0.2", "Ev Nt Nb w=0.2 h=0.2 sigma=5.8e4");
+            let error = parse(&text).unwrap_err();
+            assert_eq!(error.line, 3, "{statement}");
+            assert!(error
+                .message
+                .contains("ground plane 'Gp' has no conductivity"));
+        }
+    }
+
+    /// Under compat, a plane of either grammar with no conductivity is
+    /// copper, with one warning on the statement's line — ahead of the
+    /// clause warnings of a corner-point statement — and `.default`
+    /// still applies to planes.
+    #[test]
+    fn compat_defaults_a_ground_plane_to_copper() {
+        for statement in [
+            "Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0 thick=0.04 seg1=5 seg2=3\n+ hole point (50, 3, 0)",
+            "Gp 0 0 0 10 6 0 0.04 nx=5 ny=3",
+        ] {
+            let native = plane_deck(statement, "")
+                .replace(".default sigma=5.8e4", "")
+                .replace("Ev Nt Nb w=0.2 h=0.2", "Ev Nt Nb w=0.2 h=0.2 sigma=5.8e4");
+            let (deck, warnings) = parse_compat_warned(&format!("title\n{native}"));
+            assert_eq!(deck.geometry.segment(0).unwrap().sigma, COPPER_SIGMA, "{statement}");
+            assert_eq!(warnings[0].line, 4, "{statement}: {warnings:?}");
+            assert_eq!(
+                warnings[0].message,
+                "ground plane 'Gp' has no conductivity; using copper (5.8e7 S/m, FastHenry default)"
+            );
+            if statement.contains("hole") {
+                assert_eq!(warnings.len(), 2, "{warnings:?}");
+                assert_eq!(warnings[1].line, 5);
+            } else {
+                assert_eq!(warnings.len(), 1, "{warnings:?}");
+            }
+            // `.default` still reaches the plane, and silences the warning.
+            let (deck, warnings) = parse_compat_warned(&format!("title\n{}", plane_deck(statement, "")));
+            assert_eq!(deck.geometry.segment(0).unwrap().sigma, 5.8e7, "{statement}");
+            assert!(
+                warnings.iter().all(|warning| !warning.message.contains("copper")),
+                "{warnings:?}"
+            );
+        }
     }
 }
