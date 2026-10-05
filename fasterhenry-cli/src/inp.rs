@@ -1488,8 +1488,12 @@ fn parse_plane_statement(
             .unwrap_or(line)
     };
     let mut statement = PlaneStatement::new(head, unit, defaults, line);
-    for (at, item) in scan_plane_items(&body.join(" "), line)? {
+    for (order, (at, item)) in scan_plane_items(&body.join(" "), line)?
+        .into_iter()
+        .enumerate()
+    {
         statement.clause_line = physical_line(at);
+        statement.clause_seq = order;
         statement.apply_item(item)?;
     }
     statement.finish()
@@ -1502,6 +1506,10 @@ fn parse_plane_statement(
 /// Holes and contacts are kept raw until the plane's own geometry is known,
 /// because their `z` is checked against the plane's slab and some of them
 /// are sized against its background cell.
+/// Where a hole or rectangular contact clause was written: its physical line
+/// and its position among the statement's items, in source order.
+type ClauseAt = (usize, usize);
+
 #[derive(Default)]
 struct PlaneStatement<'a> {
     /// The statement's head (`G<name>`), quoted in errors.
@@ -1514,6 +1522,10 @@ struct PlaneStatement<'a> {
     /// a clause is written on — recorded with each hole and rectangular
     /// contact for the warning [`PlaneStatement::finish`] may raise about it.
     clause_line: usize,
+    /// The position of the item being applied among the statement's items,
+    /// in source order. A physical line cannot order two clauses written on
+    /// the same continuation line; this can.
+    clause_seq: usize,
     /// Corner points, indexed [point][axis]; `None` until the deck sets it.
     corners: [[Option<f64>; 3]; 3],
     /// `thick=`, metres (its magnitude).
@@ -1536,20 +1548,20 @@ struct PlaneStatement<'a> {
     nodes: Vec<PlaneNode>,
     /// `hole rect (x1, y1, z1, x2, y2, z2)` corners, each with the clause's
     /// physical line (as for every hole and rectangular contact below).
-    hole_rects: Vec<([[f64; 3]; 2], usize)>,
+    hole_rects: Vec<([[f64; 3]; 2], ClauseAt)>,
     /// `hole point (x, y, z)`.
-    hole_points: Vec<([f64; 3], usize)>,
+    hole_points: Vec<([f64; 3], ClauseAt)>,
     /// `hole circle (x, y, z, r)`: the centre and radius.
-    hole_circles: Vec<([f64; 3], f64, usize)>,
+    hole_circles: Vec<([f64; 3], f64, ClauseAt)>,
     /// The six-value `contact rect (x1, y1, z1, x2, y2, z2)` corners. Its
     /// documented seven-value spelling is a `contact_decays` entry instead
     /// (issue #95).
-    contact_rects: Vec<([[f64; 3]; 2], usize)>,
+    contact_rects: Vec<([[f64; 3]; 2], ClauseAt)>,
     /// `contact decay_rect` and the documented seven-value `contact rect`,
     /// plus the decay half of each `contact connection` — each with the
     /// clause's own name, for errors raised once the plane's geometry is
     /// known.
-    contact_decays: Vec<(&'static str, DecayRect, usize)>,
+    contact_decays: Vec<(&'static str, DecayRect, ClauseAt)>,
     /// `contact point` / `contact line`, with the clause's own name.
     contact_lines: Vec<(&'static str, RefineLine)>,
     /// `contact trace` parallel to x or y: five `contact line`s once its
@@ -1734,7 +1746,8 @@ impl<'a> PlaneStatement<'a> {
         name: Option<String>,
         values: &[String],
     ) -> Result<(), ParseError> {
-        let (unit, line, clause_line) = (self.unit, self.line, self.clause_line);
+        let (unit, line) = (self.unit, self.line);
+        let clause_line: ClauseAt = (self.clause_line, self.clause_seq);
         let what = format!("'{kind} {shape}'");
         // Only the named contact areas take a node name; anywhere
         // else it is a mistake to report, not a token to drop.
@@ -1828,7 +1841,8 @@ impl<'a> PlaneStatement<'a> {
         if radius < 0.0 {
             return Err(err(line, format!("{what}: r={radius} metres must be >= 0")));
         }
-        self.hole_circles.push((centre, radius, self.clause_line));
+        self.hole_circles
+            .push((centre, radius, (self.clause_line, self.clause_seq)));
         Ok(())
     }
 
@@ -1906,7 +1920,7 @@ impl<'a> PlaneStatement<'a> {
                 cell: [widths[0] / ratio, widths[1] / ratio],
                 limit: [None, None],
             },
-            self.clause_line,
+            (self.clause_line, self.clause_seq),
         ));
         Ok(())
     }
@@ -2145,7 +2159,7 @@ impl<'a> PlaneStatement<'a> {
     /// off the plane), but neither is an error.
     fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
         let frame = self.frame()?;
-        let mut warnings = Vec::new();
+        let mut warnings: Vec<(usize, ParseWarning)> = Vec::new();
         let PlaneStatement {
             head,
             nhinc,
@@ -2172,46 +2186,55 @@ impl<'a> PlaneStatement<'a> {
         holes.reserve(hole_rects.len() + hole_points.len() + hole_circles.len());
         // A hole wholly outside the footprint is accepted — it removes
         // nothing, exactly as before — but said out loud (issue #105).
-        for (rect, clause_line) in hole_rects {
+        for (rect, (clause_line, order)) in hole_rects {
             let (lo, hi) = frame.footprint("'hole rect'", rect)?;
             if frame.misses_rect(lo, hi) {
-                warnings.push(frame.outside_warning(
-                    clause_line,
-                    "'hole rect'",
-                    &format!(
-                        "spanning ({}, {}) to ({}, {}) metres",
-                        lo[0], lo[1], hi[0], hi[1]
+                warnings.push((
+                    order,
+                    frame.outside_warning(
+                        clause_line,
+                        "'hole rect'",
+                        &format!(
+                            "spanning ({}, {}) to ({}, {}) metres",
+                            lo[0], lo[1], hi[0], hi[1]
+                        ),
+                        "removes nothing",
                     ),
-                    "removes nothing",
                 ));
             }
             holes.push(Hole::Rect { lo, hi });
         }
-        for (point, clause_line) in hole_points {
+        for (point, (clause_line, order)) in hole_points {
             frame.in_slab("'hole point'", point)?;
             if !frame.contains(point) {
-                warnings.push(frame.outside_warning(
-                    clause_line,
-                    "'hole point'",
-                    &format!("at ({}, {}) metres", point[0], point[1]),
-                    "removes nothing",
+                warnings.push((
+                    order,
+                    frame.outside_warning(
+                        clause_line,
+                        "'hole point'",
+                        &format!("at ({}, {}) metres", point[0], point[1]),
+                        "removes nothing",
+                    ),
                 ));
             }
             holes.push(Hole::Point {
                 at: [point[0], point[1]],
             });
         }
-        for (centre, radius, clause_line) in hole_circles {
+        for (centre, radius, (clause_line, order)) in hole_circles {
             frame.in_slab("'hole circle'", centre)?;
             if frame.misses_circle([centre[0], centre[1]], radius) {
-                warnings.push(frame.outside_warning(
-                    clause_line,
-                    "'hole circle'",
-                    &format!(
-                        "centred at ({}, {}) metres with r={radius} metres",
-                        centre[0], centre[1]
+                warnings.push((
+                    order,
+                    frame.outside_warning(
+                        clause_line,
+                        "'hole circle'",
+                        &format!(
+                            "centred at ({}, {}) metres with r={radius} metres",
+                            centre[0], centre[1]
+                        ),
+                        "removes nothing",
                     ),
-                    "removes nothing",
                 ));
             }
             holes.push(Hole::Circle {
@@ -2226,33 +2249,39 @@ impl<'a> PlaneStatement<'a> {
         // clause carries (slab, degeneracy, decay limits) still runs first.
         let mut contacts =
             Vec::with_capacity(contact_rects.len() + contact_decays.len() + contact_lines.len());
-        for (rect, clause_line) in contact_rects {
+        for (rect, (clause_line, order)) in contact_rects {
             let (lo, hi) = frame.footprint("'contact rect'", rect)?;
             if frame.misses_rect(lo, hi) {
-                warnings.push(frame.outside_warning(
-                    clause_line,
-                    "'contact rect'",
-                    &format!(
-                        "spanning ({}, {}) to ({}, {}) metres",
-                        lo[0], lo[1], hi[0], hi[1]
+                warnings.push((
+                    order,
+                    frame.outside_warning(
+                        clause_line,
+                        "'contact rect'",
+                        &format!(
+                            "spanning ({}, {}) to ({}, {}) metres",
+                            lo[0], lo[1], hi[0], hi[1]
+                        ),
+                        "refines nothing and is ignored",
                     ),
-                    "refines nothing and is ignored",
                 ));
                 continue;
             }
             contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
         }
-        for (what, decay, clause_line) in contact_decays {
+        for (what, decay, (clause_line, order)) in contact_decays {
             let region = frame.decay_contact(what, &decay)?;
             if frame.misses_rect(region.lo, region.hi) {
-                warnings.push(frame.outside_warning(
-                    clause_line,
-                    what,
-                    &format!(
-                        "spanning ({}, {}) to ({}, {}) metres",
-                        region.lo[0], region.lo[1], region.hi[0], region.hi[1]
+                warnings.push((
+                    order,
+                    frame.outside_warning(
+                        clause_line,
+                        what,
+                        &format!(
+                            "spanning ({}, {}) to ({}, {}) metres",
+                            region.lo[0], region.lo[1], region.hi[0], region.hi[1]
+                        ),
+                        "refines nothing and is ignored",
                     ),
-                    "refines nothing and is ignored",
                 ));
                 continue;
             }
@@ -2308,7 +2337,12 @@ impl<'a> PlaneStatement<'a> {
                 nhinc,
             },
             nodes,
-            warnings,
+            {
+                // Source-clause order, not the shape-grouped order the
+                // clauses were assembled in; the sort is stable.
+                warnings.sort_by_key(|(order, _)| *order);
+                warnings.into_iter().map(|(_, warning)| warning).collect()
+            },
         ))
     }
 }
@@ -7486,6 +7520,100 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         assert!(warnings[1].message.contains("'hole circle'"));
         assert!(warnings[2].message.contains("'contact rect'"));
         assert!(warnings[3].message.contains("'contact decay_rect'"));
+    }
+
+    /// Warnings come back in source-clause order, not in the order the
+    /// parser's per-shape groups happen to be walked (issue #136).
+    #[test]
+    fn warnings_follow_source_clause_order_across_shapes() {
+        // Reverse of the grouped order: contact decay, contact rect, circle,
+        // rect, point — each on its own physical line.
+        let (_, warnings) = parse_warned(&footprint_deck(
+            "\
++ contact decay_rect (5, 30, 0, 2, 2, 1, 1, -1, -1)
++ contact rect (40, 2, 0, 42, 4, 0)
++ hole circle (-5, 3, 0, 1)
++ hole rect (20, 1, 0, 30, 2, 0)
++ hole point (50, 3, 0)",
+        ));
+        let found: Vec<(usize, &str)> = warnings
+            .iter()
+            .map(|warning| {
+                let clause = [
+                    "'contact decay_rect'",
+                    "'contact rect'",
+                    "'hole circle'",
+                    "'hole rect'",
+                    "'hole point'",
+                ]
+                .into_iter()
+                .find(|clause| warning.message.starts_with(clause))
+                .expect("a known clause");
+                (warning.line, clause)
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (5, "'contact decay_rect'"),
+                (6, "'contact rect'"),
+                (7, "'hole circle'"),
+                (8, "'hole rect'"),
+                (9, "'hole point'"),
+            ],
+            "{warnings:?}"
+        );
+    }
+
+    /// The motivating permutation: a point hole before a rectangle hole.
+    #[test]
+    fn hole_point_warning_precedes_a_later_hole_rect_warning() {
+        let (_, warnings) = parse_warned(&footprint_deck(
+            "+ hole point (50, 3, 0)\n+ hole rect (20, 1, 0, 30, 2, 0)",
+        ));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].message.starts_with("'hole point'"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].message.starts_with("'hole rect'"),
+            "{warnings:?}"
+        );
+        assert_eq!((warnings[0].line, warnings[1].line), (5, 6));
+    }
+
+    /// Unlike shapes sharing one physical line keep their token order.
+    #[test]
+    fn same_line_unlike_shapes_keep_token_order() {
+        let (_, warnings) = parse_warned(&footprint_deck(
+            "+ contact rect (40, 2, 0, 42, 4, 0) hole circle (-5, 3, 0, 1) hole point (50, 3, 0) hole rect (20, 1, 0, 30, 2, 0)",
+        ));
+        let clauses: Vec<&str> = warnings
+            .iter()
+            .map(|warning| warning.message.split(" at ").next().unwrap_or(""))
+            .collect();
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        assert!(
+            warnings.iter().all(|warning| warning.line == 5),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[0].message.starts_with("'contact rect'"),
+            "{clauses:?}"
+        );
+        assert!(
+            warnings[1].message.starts_with("'hole circle'"),
+            "{clauses:?}"
+        );
+        assert!(
+            warnings[2].message.starts_with("'hole point'"),
+            "{clauses:?}"
+        );
+        assert!(
+            warnings[3].message.starts_with("'hole rect'"),
+            "{clauses:?}"
+        );
     }
 
     /// The test is intersection with the plane's **closed** footprint: a
