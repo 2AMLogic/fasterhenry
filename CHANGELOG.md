@@ -14,6 +14,29 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- Deck reader: a line-numbered **warning** for a corner-point `G`
+  statement's `hole point`, `hole circle`, `hole rect`, `contact rect` or
+  `contact decay_rect` clause that lies **wholly outside** the plane's
+  footprint (issue #105). Such a clause was silently accepted and changed
+  nothing — the typical result of a coordinate typo or a wrong `.units`
+  scale. It is still accepted, and the mesh is unchanged, but
+  `fasterhenry` now prints `warning: line N: '<clause>' … lies wholly
+  outside ground plane '<name>' …` on stderr, once per offending clause,
+  naming the clause's own physical (continuation) line; stdout is
+  unchanged. The test is intersection with the closed footprint: a circle
+  or rectangle that overhangs an edge, reaches over a corner, or merely
+  touches the boundary does not warn, and neither does an in-footprint
+  clause that happens to change nothing. The stricter clauses keep their
+  errors (`contact point` / `line` / `trace` off the plane; a `contact
+  equiv_rect` / `contact connection` whose node is off the plane or that
+  covers no live cell). Library: `inp::ParseWarning`,
+  `inp::parse_reporting`, `inp::parse_with_options_reporting`,
+  `read_inputs_reporting` and `read_inputs_reporting_with` return the
+  warnings; `parse`, `parse_with_options`, `read_inputs` and
+  `read_inputs_with` are unchanged and discard them, and nothing in the
+  library prints. See `docs/fasthenry-compat.md`, "Decision: a hole or
+  contact rectangle off its plane is accepted with a warning".
+
 - Deck reader: the **documented** `contact rect (x, y, z, xwidth, ywidth,
   xcell, ycell)` spelling on a corner-point `G` ground-plane statement
   (issue #95, found while implementing `contact decay_rect` for #80). Until
@@ -290,6 +313,14 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader: a corner-point `G` statement's `contact rect` or `contact
+  decay_rect` wholly outside the plane's footprint is no longer a plane
+  assembly error on line 0 ("contact region … lies outside the plane
+  footprint"); it refines nothing, so it is now dropped with the
+  line-numbered warning above, consistent with the holes (issue #105). No
+  deck that parsed before changes meaning. A rectangle that only touches
+  the footprint, and the `.contact` extension directive, keep the existing
+  error.
 - Deck reader: `file=NONE` on a corner-point `G` ground-plane statement is
   now **accepted** as the no-op it is, and a *named* file is rejected for the
   right reason (issue #122, found while implementing #113). The public

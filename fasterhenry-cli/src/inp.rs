@@ -197,6 +197,34 @@
 //!   removed — a closed boundary, unlike `hole rect`'s open one). Both take
 //!   the shape's own `z`, checked against the plane's slab like every other
 //!   clause here.
+//! * **A hole or contact rectangle wholly off the plane is accepted with a
+//!   warning** (issue #105; the decision and its reasoning are in
+//!   `docs/fasthenry-compat.md`). Its `z` is checked against the slab as
+//!   above, but its **xy** is only tested for intersection with the plane's
+//!   *closed* footprint, and a clause that misses it entirely raises one
+//!   [`ParseWarning`] naming the clause, the plane and the clause's own
+//!   physical (continuation) line:
+//!     * `hole point` — the point is outside the footprint;
+//!     * `hole circle` — the closed disc does not reach the footprint at
+//!       all (a centre off the plane whose radius still reaches over an
+//!       edge or corner is fine);
+//!     * `hole rect`, `contact rect` (either spelling) and `contact
+//!       decay_rect` — the rectangle does not intersect the footprint
+//!       (partial overhang, or merely touching the boundary, is fine).
+//!
+//!   A hole like that removes nothing, exactly as before; a contact region
+//!   like that refines nothing and is dropped rather than handed to the
+//!   plane library, which rejects a region off the plane. The warning is
+//!   only about *disjointness*: an in-footprint clause that happens to
+//!   change nothing (a circle between cell centres, a hole inside another
+//!   hole, a contact the background mesh already meets) raises none. The
+//!   stricter clauses keep their errors — `contact point` / `line` /
+//!   `trace` ends off the plane, and a `contact equiv_rect` or `contact
+//!   connection` whose node is off the plane or that covers no live cell
+//!   (so a `contact connection`'s decay half never reaches the warning).
+//!   [`parse`] and [`parse_with_options`] discard warnings;
+//!   [`parse_reporting`] and [`parse_with_options_reporting`] return them,
+//!   and this module never prints one.
 //! * **`hole user1` … `user7`** are rejected by name, on the statement's
 //!   own line, and that rejection is **permanent** — not a shape awaiting
 //!   implementation (issue #99; the decision and its reasoning are in
@@ -588,6 +616,31 @@ fn err(line: usize, message: impl Into<String>) -> ParseError {
     }
 }
 
+/// A parse **warning**: something the deck says that this reader accepts
+/// but that is almost certainly not what was meant — today, a `hole` or
+/// rectangular `contact` clause wholly outside its ground plane's
+/// footprint (issue #105; see the [module documentation](self)).
+///
+/// A warning never changes the parsed [`Deck`]: [`parse`] and
+/// [`parse_with_options`] discard them, and [`parse_reporting`] /
+/// [`parse_with_options_reporting`] return them alongside the deck. This
+/// module never prints one; the command-line binary does, on stderr.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseWarning {
+    /// The 1-based **physical** line of the clause the warning is about —
+    /// the continuation (`+`) line it was written on, not the line its
+    /// statement started on.
+    pub line: usize,
+    /// What the clause does not do, and why.
+    pub message: String,
+}
+
+impl std::fmt::Display for ParseWarning {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "line {}: {}", self.line, self.message)
+    }
+}
+
 /// The `.units` directive's length unit, as a factor to metres.
 /// Case-insensitive, like every other directive; `mil` is accepted as a
 /// synonym of the documented `mils`.
@@ -884,13 +937,16 @@ fn read_list(
 /// whitespace around `=`, and value lists in parentheses separated by
 /// commas, whitespace, or both. Continuation (`+`) lines have already been
 /// folded into one token list by [`parse`], so the whole statement arrives
-/// here as one string carrying one line number.
-fn scan_plane_items(body: &str, line: usize) -> Result<Vec<PlaneItem>, ParseError> {
+/// here as one string carrying one line number (used for errors); each item
+/// is returned with the character offset in `body` it starts at, which
+/// [`parse_plane_statement`] maps back onto the item's physical line.
+fn scan_plane_items(body: &str, line: usize) -> Result<Vec<(usize, PlaneItem)>, ParseError> {
     let chars: Vec<char> = body.chars().collect();
     let mut at = 0usize;
     let mut items = Vec::new();
     loop {
         skip_space(&chars, &mut at);
+        let start = at;
         let Some(&here) = chars.get(at) else {
             return Ok(items);
         };
@@ -932,12 +988,15 @@ fn scan_plane_items(body: &str, line: usize) -> Result<Vec<PlaneItem>, ParseErro
                 }
             };
             let values = read_list(&chars, &mut at, &what, line)?;
-            items.push(PlaneItem::Clause {
-                kind: word.to_ascii_lowercase(),
-                shape: shape.to_ascii_lowercase(),
-                name,
-                values,
-            });
+            items.push((
+                start,
+                PlaneItem::Clause {
+                    kind: word.to_ascii_lowercase(),
+                    shape: shape.to_ascii_lowercase(),
+                    name,
+                    values,
+                },
+            ));
             continue;
         }
         let mut probe = at;
@@ -950,13 +1009,13 @@ fn scan_plane_items(body: &str, line: usize) -> Result<Vec<PlaneItem>, ParseErro
                 if value.is_empty() {
                     return Err(err(line, format!("'{word}=' has no value")));
                 }
-                items.push(PlaneItem::Field(word.to_ascii_lowercase(), value));
+                items.push((start, PlaneItem::Field(word.to_ascii_lowercase(), value)));
             }
             Some(&'(') => {
                 at = probe;
                 let what = format!("in-plane node '{word}'");
                 let values = read_list(&chars, &mut at, &what, line)?;
-                items.push(PlaneItem::Node(word, values));
+                items.push((start, PlaneItem::Node(word, values)));
             }
             _ => {
                 return Err(err(
@@ -1397,15 +1456,40 @@ fn cells_no_coarser_than(span: f64, cell: f64) -> usize {
 /// [`PlaneStatement`] (one method per clause kind), which then checks the
 /// plane's geometry ([`PlaneStatement::frame`]) and assembles the plane
 /// against it ([`PlaneStatement::finish`]).
+///
+/// `body` is the statement's tokens after its head, and `body_lines` the
+/// physical line each of those tokens was written on (continuation lines
+/// included), so that a warning about one clause names the line the clause
+/// is on. Errors keep reporting the statement's own `line`.
 fn parse_plane_statement(
     head: &str,
-    body: &str,
+    body: &[&str],
+    body_lines: &[usize],
     unit: f64,
     defaults: &Defaults,
     line: usize,
-) -> Result<(PlaneSpec, Vec<PlaneNode>), ParseError> {
+) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
+    // The tokens are rejoined with single spaces, so token `k` starts at
+    // the sum of the earlier tokens' lengths plus one separator each.
+    let mut token_starts = Vec::with_capacity(body.len());
+    let mut offset = 0usize;
+    for token in body {
+        token_starts.push(offset);
+        offset += token.chars().count() + 1;
+    }
+    // An item starts inside the last token starting at or before it (an
+    // item may begin mid-token, as in `…0)hole rect (…)`), and a token never
+    // spans two physical lines.
+    let physical_line = |at: usize| -> usize {
+        let token = token_starts.partition_point(|&start| start <= at);
+        token
+            .checked_sub(1)
+            .and_then(|index| body_lines.get(index).copied())
+            .unwrap_or(line)
+    };
     let mut statement = PlaneStatement::new(head, unit, defaults, line);
-    for item in scan_plane_items(body, line)? {
+    for (at, item) in scan_plane_items(&body.join(" "), line)? {
+        statement.clause_line = physical_line(at);
         statement.apply_item(item)?;
     }
     statement.finish()
@@ -1426,6 +1510,10 @@ struct PlaneStatement<'a> {
     unit: f64,
     /// The line the statement was declared on (for errors).
     line: usize,
+    /// The physical line of the item being applied — the continuation line
+    /// a clause is written on — recorded with each hole and rectangular
+    /// contact for the warning [`PlaneStatement::finish`] may raise about it.
+    clause_line: usize,
     /// Corner points, indexed [point][axis]; `None` until the deck sets it.
     corners: [[Option<f64>; 3]; 3],
     /// `thick=`, metres (its magnitude).
@@ -1446,21 +1534,22 @@ struct PlaneStatement<'a> {
     nhinc: usize,
     /// `N<name> (x, y, z)` declarations, in statement order.
     nodes: Vec<PlaneNode>,
-    /// `hole rect (x1, y1, z1, x2, y2, z2)` corners.
-    hole_rects: Vec<[[f64; 3]; 2]>,
+    /// `hole rect (x1, y1, z1, x2, y2, z2)` corners, each with the clause's
+    /// physical line (as for every hole and rectangular contact below).
+    hole_rects: Vec<([[f64; 3]; 2], usize)>,
     /// `hole point (x, y, z)`.
-    hole_points: Vec<[f64; 3]>,
+    hole_points: Vec<([f64; 3], usize)>,
     /// `hole circle (x, y, z, r)`: the centre and radius.
-    hole_circles: Vec<([f64; 3], f64)>,
+    hole_circles: Vec<([f64; 3], f64, usize)>,
     /// The six-value `contact rect (x1, y1, z1, x2, y2, z2)` corners. Its
     /// documented seven-value spelling is a `contact_decays` entry instead
     /// (issue #95).
-    contact_rects: Vec<[[f64; 3]; 2]>,
+    contact_rects: Vec<([[f64; 3]; 2], usize)>,
     /// `contact decay_rect` and the documented seven-value `contact rect`,
     /// plus the decay half of each `contact connection` — each with the
     /// clause's own name, for errors raised once the plane's geometry is
     /// known.
-    contact_decays: Vec<(&'static str, DecayRect)>,
+    contact_decays: Vec<(&'static str, DecayRect, usize)>,
     /// `contact point` / `contact line`, with the clause's own name.
     contact_lines: Vec<(&'static str, RefineLine)>,
     /// `contact trace` parallel to x or y: five `contact line`s once its
@@ -1645,7 +1734,7 @@ impl<'a> PlaneStatement<'a> {
         name: Option<String>,
         values: &[String],
     ) -> Result<(), ParseError> {
-        let (unit, line) = (self.unit, self.line);
+        let (unit, line, clause_line) = (self.unit, self.line, self.clause_line);
         let what = format!("'{kind} {shape}'");
         // Only the named contact areas take a node name; anywhere
         // else it is a mistake to report, not a token to drop.
@@ -1665,10 +1754,11 @@ impl<'a> PlaneStatement<'a> {
         match (kind, shape) {
             ("hole", "rect") => {
                 self.hole_rects
-                    .push(rect_corners(values, &what, unit, line)?);
+                    .push((rect_corners(values, &what, unit, line)?, clause_line));
             }
             ("hole", "point") => {
-                self.hole_points.push(triple(values, &what, unit, line)?);
+                self.hole_points
+                    .push((triple(values, &what, unit, line)?, clause_line));
             }
             ("hole", "circle") => self.apply_hole_circle(&what, values)?,
             // Two spellings of one clause, told apart by value count
@@ -1680,10 +1770,11 @@ impl<'a> PlaneStatement<'a> {
                 7 => self.contact_decays.push((
                     "'contact rect'",
                     contact_rect_values(values, &what, unit, line)?,
+                    clause_line,
                 )),
                 6 => self
                     .contact_rects
-                    .push(rect_corners(values, &what, unit, line)?),
+                    .push((rect_corners(values, &what, unit, line)?, clause_line)),
                 got => {
                     return Err(err(
                         line,
@@ -1696,6 +1787,7 @@ impl<'a> PlaneStatement<'a> {
             ("contact", "decay_rect") => self.contact_decays.push((
                 "'contact decay_rect'",
                 decay_rect_values(values, &what, unit, line)?,
+                clause_line,
             )),
             ("contact", "point") => {
                 self.contact_lines.push((
@@ -1736,7 +1828,7 @@ impl<'a> PlaneStatement<'a> {
         if radius < 0.0 {
             return Err(err(line, format!("{what}: r={radius} metres must be >= 0")));
         }
-        self.hole_circles.push((centre, radius));
+        self.hole_circles.push((centre, radius, self.clause_line));
         Ok(())
     }
 
@@ -1814,6 +1906,7 @@ impl<'a> PlaneStatement<'a> {
                 cell: [widths[0] / ratio, widths[1] / ratio],
                 limit: [None, None],
             },
+            self.clause_line,
         ));
         Ok(())
     }
@@ -2044,8 +2137,15 @@ impl<'a> PlaneStatement<'a> {
 
     /// Checks the geometry, places every hole, contact, and in-plane node
     /// against it, and assembles the [`PlaneSpec`] plus its in-plane nodes.
-    fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>), ParseError> {
+    ///
+    /// Also returns one [`ParseWarning`] per hole or rectangular contact
+    /// clause wholly outside the plane's closed footprint (issue #105): such
+    /// a hole is kept (it removes nothing), and such a contact region is
+    /// dropped (it refines nothing, and the library would reject a region
+    /// off the plane), but neither is an error.
+    fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
         let frame = self.frame()?;
+        let mut warnings = Vec::new();
         let PlaneStatement {
             head,
             nhinc,
@@ -2070,32 +2170,93 @@ impl<'a> PlaneStatement<'a> {
             Vec::new()
         };
         holes.reserve(hole_rects.len() + hole_points.len() + hole_circles.len());
-        for rect in hole_rects {
+        // A hole wholly outside the footprint is accepted — it removes
+        // nothing, exactly as before — but said out loud (issue #105).
+        for (rect, clause_line) in hole_rects {
             let (lo, hi) = frame.footprint("'hole rect'", rect)?;
+            if frame.misses_rect(lo, hi) {
+                warnings.push(frame.outside_warning(
+                    clause_line,
+                    "'hole rect'",
+                    &format!(
+                        "spanning ({}, {}) to ({}, {}) metres",
+                        lo[0], lo[1], hi[0], hi[1]
+                    ),
+                    "removes nothing",
+                ));
+            }
             holes.push(Hole::Rect { lo, hi });
         }
-        for point in hole_points {
+        for (point, clause_line) in hole_points {
             frame.in_slab("'hole point'", point)?;
+            if !frame.contains(point) {
+                warnings.push(frame.outside_warning(
+                    clause_line,
+                    "'hole point'",
+                    &format!("at ({}, {}) metres", point[0], point[1]),
+                    "removes nothing",
+                ));
+            }
             holes.push(Hole::Point {
                 at: [point[0], point[1]],
             });
         }
-        for (centre, radius) in hole_circles {
+        for (centre, radius, clause_line) in hole_circles {
             frame.in_slab("'hole circle'", centre)?;
+            if frame.misses_circle([centre[0], centre[1]], radius) {
+                warnings.push(frame.outside_warning(
+                    clause_line,
+                    "'hole circle'",
+                    &format!(
+                        "centred at ({}, {}) metres with r={radius} metres",
+                        centre[0], centre[1]
+                    ),
+                    "removes nothing",
+                ));
+            }
             holes.push(Hole::Circle {
                 centre: [centre[0], centre[1]],
                 radius,
             });
         }
 
+        // A contact region wholly outside the footprint refines nothing; it
+        // is dropped with a warning rather than handed to the library, which
+        // rejects a region off the plane (issue #105). Every check the
+        // clause carries (slab, degeneracy, decay limits) still runs first.
         let mut contacts =
             Vec::with_capacity(contact_rects.len() + contact_decays.len() + contact_lines.len());
-        for rect in contact_rects {
+        for (rect, clause_line) in contact_rects {
             let (lo, hi) = frame.footprint("'contact rect'", rect)?;
+            if frame.misses_rect(lo, hi) {
+                warnings.push(frame.outside_warning(
+                    clause_line,
+                    "'contact rect'",
+                    &format!(
+                        "spanning ({}, {}) to ({}, {}) metres",
+                        lo[0], lo[1], hi[0], hi[1]
+                    ),
+                    "refines nothing and is ignored",
+                ));
+                continue;
+            }
             contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
         }
-        for (what, decay) in contact_decays {
-            contacts.push(frame.decay_contact(what, &decay)?);
+        for (what, decay, clause_line) in contact_decays {
+            let region = frame.decay_contact(what, &decay)?;
+            if frame.misses_rect(region.lo, region.hi) {
+                warnings.push(frame.outside_warning(
+                    clause_line,
+                    what,
+                    &format!(
+                        "spanning ({}, {}) to ({}, {}) metres",
+                        region.lo[0], region.lo[1], region.hi[0], region.hi[1]
+                    ),
+                    "refines nothing and is ignored",
+                ));
+                continue;
+            }
+            contacts.push(region);
         }
         for (what, refine) in contact_lines {
             if let Some(region) = frame.refine_contact(what, &refine)? {
@@ -2147,6 +2308,7 @@ impl<'a> PlaneStatement<'a> {
                 nhinc,
             },
             nodes,
+            warnings,
         ))
     }
 }
@@ -2265,6 +2427,51 @@ impl PlaneFrame<'_> {
             ));
         }
         Ok((lo, hi))
+    }
+
+    /// Whether the rectangle `lo`…`hi` is **wholly disjoint** from the
+    /// plane's closed footprint (within the tolerance): a rectangle that
+    /// overhangs an edge, or merely touches the boundary, is not.
+    fn misses_rect(&self, lo: [f64; 2], hi: [f64; 2]) -> bool {
+        (0..2).any(|axis| {
+            hi[axis] < self.lo[axis] - self.tolerance || lo[axis] > self.hi[axis] + self.tolerance
+        })
+    }
+
+    /// Whether the closed disc of `radius` about `centre` is **wholly
+    /// disjoint** from the plane's closed footprint (within the
+    /// tolerance). A centre off the plane is not enough: the disc may still
+    /// reach over an edge or a corner.
+    fn misses_circle(&self, centre: [f64; 2], radius: f64) -> bool {
+        // The distance from the centre to the nearest point of the
+        // footprint, per axis zero when the centre is within that axis's
+        // extent.
+        let gap = |axis: usize| {
+            (self.lo[axis] - centre[axis])
+                .max(centre[axis] - self.hi[axis])
+                .max(0.0)
+        };
+        gap(0).hypot(gap(1)) > radius + self.tolerance
+    }
+
+    /// The warning for a `hole` / rectangular `contact` clause on
+    /// `clause_line` that is wholly outside this plane's footprint: `what`
+    /// is the clause, `shape` where it is, and `effect` what that means for
+    /// the mesh.
+    fn outside_warning(
+        &self,
+        clause_line: usize,
+        what: &str,
+        shape: &str,
+        effect: &str,
+    ) -> ParseWarning {
+        ParseWarning {
+            line: clause_line,
+            message: format!(
+                "{what} {shape} lies wholly outside ground plane '{}' (x {} to {}, y {} to {} metres), so it {effect}; check its coordinates and the deck's .units",
+                self.head, self.lo[0], self.hi[0], self.lo[1], self.hi[1]
+            ),
+        }
     }
 
     /// Whether `point`'s xy lies on the plane, within the tolerance.
@@ -2595,16 +2802,36 @@ pub fn parse(text: &str) -> Result<Deck, ParseError> {
 
 /// Parses a whole deck under `options`. See the [module documentation](self)
 /// for the subset and [`ParseOptions`] for what each option changes.
+///
+/// Any [`ParseWarning`]s are discarded; see [`parse_with_options_reporting`]
+/// to receive them.
 pub fn parse_with_options(text: &str, options: ParseOptions) -> Result<Deck, ParseError> {
+    parse_with_options_reporting(text, options).map(|(deck, _)| deck)
+}
+
+/// [`parse`], returning the deck together with its [`ParseWarning`]s, in
+/// deck order. Nothing is printed: reporting them is the caller's choice.
+pub fn parse_reporting(text: &str) -> Result<(Deck, Vec<ParseWarning>), ParseError> {
+    parse_with_options_reporting(text, ParseOptions::default())
+}
+
+/// [`parse_with_options`], returning the deck together with its
+/// [`ParseWarning`]s, in deck order. The deck is exactly the one
+/// [`parse_with_options`] returns; nothing is printed.
+pub fn parse_with_options_reporting(
+    text: &str,
+    options: ParseOptions,
+) -> Result<(Deck, Vec<ParseWarning>), ParseError> {
     let folded = fold_lines(text, options)?;
     let mut deck = DeckBuilder {
         title: folded.title,
         ..DeckBuilder::default()
     };
-    for &(number, ref tokens) in &folded.lines {
-        deck.apply_line(number, tokens)?;
+    for (number, tokens, token_lines) in &folded.lines {
+        deck.apply_line(*number, tokens, token_lines)?;
     }
-    deck.finish(folded.last_number)
+    let warnings = std::mem::take(&mut deck.warnings);
+    deck.finish(folded.last_number).map(|deck| (deck, warnings))
 }
 
 /// A deck's lines ready for dispatch: `*` comments and blank lines dropped,
@@ -2617,9 +2844,10 @@ struct FoldedDeck<'a> {
     /// The number of the last physical line of the file, for the deck-level
     /// errors that belong to no directive (a missing `.end`, `.units`).
     last_number: usize,
-    /// Each surviving line: the number of its *first* physical line, and its
-    /// whitespace-separated tokens with every continuation appended.
-    lines: Vec<(usize, Vec<&'a str>)>,
+    /// Each surviving line: the number of its *first* physical line, its
+    /// whitespace-separated tokens with every continuation appended, and
+    /// the physical line each of those tokens was written on.
+    lines: Vec<(usize, Vec<&'a str>, Vec<usize>)>,
 }
 
 /// Reads the raw text into [`FoldedDeck`] — everything
@@ -2642,7 +2870,7 @@ fn fold_lines(text: &str, options: ParseOptions) -> Result<FoldedDeck<'_>, Parse
 
     // Fold `+` continuation lines into their first line, keeping the first
     // line's number for error reporting; `*` comments and blank lines drop.
-    let mut lines: Vec<(usize, Vec<&str>)> = Vec::new();
+    let mut lines: Vec<(usize, Vec<&str>, Vec<usize>)> = Vec::new();
     for (index, raw) in raw_lines {
         let number = index + 1;
         last_number = number;
@@ -2653,16 +2881,19 @@ fn fold_lines(text: &str, options: ParseOptions) -> Result<FoldedDeck<'_>, Parse
         let tokens: Vec<&str> = trimmed.split_whitespace().collect();
         if let Some(continuation) = tokens[0].strip_prefix('+') {
             match lines.last_mut() {
-                Some((_, previous)) => {
+                Some((_, previous, previous_lines)) => {
                     if !continuation.is_empty() {
                         previous.push(continuation);
+                        previous_lines.push(number);
                     }
                     previous.extend_from_slice(&tokens[1..]);
+                    previous_lines.resize(previous.len(), number);
                 }
                 None => return Err(err(number, "deck starts with a '+' continuation line")),
             }
         } else {
-            lines.push((number, tokens));
+            let token_lines = vec![number; tokens.len()];
+            lines.push((number, tokens, token_lines));
         }
     }
 
@@ -2724,13 +2955,23 @@ struct DeckBuilder {
     alias_lines: HashMap<usize, usize>,
     /// Whether `.end` has been read (content after it is an error).
     ended: bool,
+    /// Every [`ParseWarning`] raised so far, in deck order.
+    warnings: Vec<ParseWarning>,
 }
 
 impl DeckBuilder {
     /// Dispatches one folded line to the method that reads it. Every method
     /// it calls takes the line number it was read on, so that the error it
     /// raises carries the deck's own line rather than the parser's.
-    fn apply_line(&mut self, number: usize, tokens: &[&str]) -> Result<(), ParseError> {
+    ///
+    /// `token_lines` is the physical line each token was written on; only a
+    /// FastHenry-form `G` statement needs it, for its clause warnings.
+    fn apply_line(
+        &mut self,
+        number: usize,
+        tokens: &[&str],
+        token_lines: &[usize],
+    ) -> Result<(), ParseError> {
         if self.ended {
             return Err(err(number, "content after .end"));
         }
@@ -2747,7 +2988,7 @@ impl DeckBuilder {
         match keyword.chars().next() {
             Some('n') => self.apply_node(tokens, factor, number),
             Some('e') => self.apply_segment(tokens, factor, number),
-            Some('g') => self.apply_ground_plane(tokens, factor, number),
+            Some('g') => self.apply_ground_plane(tokens, token_lines, factor, number),
             _ => Err(err(
                 number,
                 format!("unrecognized line '{head}' (expected N…, E…, or a .directive)"),
@@ -3191,6 +3432,7 @@ impl DeckBuilder {
     fn apply_ground_plane(
         &mut self,
         tokens: &[&str],
+        token_lines: &[usize],
         factor: f64,
         number: usize,
     ) -> Result<(), ParseError> {
@@ -3204,7 +3446,7 @@ impl DeckBuilder {
             .get(1)
             .is_some_and(|token| token.parse::<f64>().is_err())
         {
-            return self.apply_plane_corner_form(tokens, factor, number);
+            return self.apply_plane_corner_form(tokens, token_lines, factor, number);
         }
         self.apply_plane_extent_form(tokens, factor, number)
     }
@@ -3215,13 +3457,21 @@ impl DeckBuilder {
     fn apply_plane_corner_form(
         &mut self,
         tokens: &[&str],
+        token_lines: &[usize],
         factor: f64,
         number: usize,
     ) -> Result<(), ParseError> {
         let head = tokens[0];
         one_conductivity(&tokens[1..], number)?;
-        let (spec, plane_nodes_here) =
-            parse_plane_statement(head, &tokens[1..].join(" "), factor, &self.defaults, number)?;
+        let (spec, plane_nodes_here, warnings) = parse_plane_statement(
+            head,
+            &tokens[1..],
+            token_lines.get(1..).unwrap_or_default(),
+            factor,
+            &self.defaults,
+            number,
+        )?;
+        self.warnings.extend(warnings);
         let index = self.planes.len();
         for (name, position, equipotential) in plane_nodes_here {
             self.positions.push(position);
@@ -7092,5 +7342,246 @@ e1 n1 n2 w=1 h=0.1 sigma=5.8e4 nwinc=3 nhinc=3 rw=2 rh=2
         let frequencies = frequency_sweep(1e3, 1e6, 10, 6).unwrap();
         assert_eq!(frequencies.len(), 31);
         assert_eq!(frequencies[30], 1e6);
+    }
+
+    // ---- Issue #105: hole / rectangular contact clauses wholly outside
+    // their plane's footprint are accepted with a line-numbered warning.
+
+    /// The 10 × 6 mm plane every footprint test below uses, on line 3 with
+    /// its parameters on line 4; `clauses` follow as further continuation
+    /// lines from line 5 on.
+    fn footprint_deck(clauses: &str) -> String {
+        plane_deck(
+            &format!(
+                "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
+{clauses}"
+            ),
+            "",
+        )
+    }
+
+    /// The deck and its warnings, panicking on a parse error.
+    fn parse_warned(text: &str) -> (Deck, Vec<ParseWarning>) {
+        parse_reporting(text).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// The deck without any clause, for "the mesh is unchanged" checks.
+    fn bare_footprint_deck() -> Deck {
+        let (deck, warnings) = parse_warned(&footprint_deck(""));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        deck
+    }
+
+    /// Exactly one warning, on `line`, naming `clause` and the plane.
+    fn assert_one_warning(warnings: &[ParseWarning], line: usize, clause: &str) {
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let warning = &warnings[0];
+        assert_eq!(warning.line, line, "{warning}");
+        assert!(warning.message.contains(clause), "{warning}");
+        assert!(warning.message.contains("ground plane 'Gp'"), "{warning}");
+        assert!(warning.message.contains("wholly outside"), "{warning}");
+        assert!(warning.to_string().starts_with(&format!("line {line}: ")));
+    }
+
+    #[test]
+    fn disjoint_hole_point_warns_on_its_own_line() {
+        let (deck, warnings) = parse_warned(&footprint_deck("+ hole point (50, 3, 0)"));
+        assert_one_warning(&warnings, 5, "'hole point'");
+        assert!(warnings[0].message.contains("removes nothing"));
+        // Accepted, and the mesh is exactly the plane's without it.
+        assert_eq!(deck.geometry, bare_footprint_deck().geometry);
+        // The non-reporting entry point returns the very same deck.
+        assert_eq!(
+            parse(&footprint_deck("+ hole point (50, 3, 0)")).unwrap(),
+            deck
+        );
+    }
+
+    #[test]
+    fn disjoint_hole_circle_warns_on_its_own_line() {
+        // The nearest footprint point to (12, 8) is the corner (10, 6),
+        // 2.83 mm away: a 2 mm circle misses the plane.
+        let (deck, warnings) = parse_warned(&footprint_deck("+ hole circle (12, 8, 0, 2)"));
+        assert_one_warning(&warnings, 5, "'hole circle'");
+        assert_eq!(deck.geometry, bare_footprint_deck().geometry);
+    }
+
+    #[test]
+    fn disjoint_hole_rect_warns_on_its_own_line() {
+        let (deck, warnings) = parse_warned(&footprint_deck("+ hole rect (20, 1, 0, 30, 2, 0)"));
+        assert_one_warning(&warnings, 5, "'hole rect'");
+        assert_eq!(deck.geometry, bare_footprint_deck().geometry);
+    }
+
+    #[test]
+    fn disjoint_contact_rects_warn_and_are_dropped() {
+        for clause in [
+            // The documented seven-value spelling…
+            "+ contact rect (50, 3, 0, 2, 2, 1, 1)",
+            // …and this reader's six-value two-corner one.
+            "+ contact rect (40, 2, 0, 42, 4, 0)",
+        ] {
+            let (deck, warnings) = parse_warned(&footprint_deck(clause));
+            assert_one_warning(&warnings, 5, "'contact rect'");
+            assert!(warnings[0].message.contains("refines nothing"));
+            // Dropped, not handed to the library (which would reject it):
+            // the deck is the plane's own.
+            assert_eq!(deck, bare_footprint_deck(), "{clause}");
+        }
+    }
+
+    #[test]
+    fn disjoint_contact_decay_rect_warns_and_is_dropped() {
+        let (deck, warnings) = parse_warned(&footprint_deck(
+            "+ contact decay_rect (50, 3, 0, 2, 2, 1, 1, -1, -1)",
+        ));
+        assert_one_warning(&warnings, 5, "'contact decay_rect'");
+        assert_eq!(deck, bare_footprint_deck());
+    }
+
+    /// A `contact connection` is a `contact equiv_rect` plus a `contact
+    /// decay_rect` over one rectangle, and its tie half already requires
+    /// the contact area's node — the rectangle's centre — to lie on the
+    /// plane. A connection wholly off the plane therefore keeps that
+    /// existing error rather than downgrading to a warning: its decay half
+    /// can never be disjoint while the deck still parses.
+    #[test]
+    fn disjoint_contact_connection_keeps_its_error() {
+        let error = parse_reporting(&footprint_deck(
+            "+ contact connection Npad (50, 3, 0, 2, 2, 2)",
+        ))
+        .unwrap_err();
+        assert_eq!(error.line, 3);
+        assert!(
+            error.message.contains("is outside ground plane 'Gp'"),
+            "{error}"
+        );
+    }
+
+    /// Every wholly-disjoint clause gets its own warning with its own
+    /// physical line — two on one continuation line both name that line —
+    /// and the clauses that touch the plane add none.
+    #[test]
+    fn one_warning_per_disjoint_clause_with_its_physical_line() {
+        let (_, warnings) = parse_warned(&footprint_deck(
+            "\
++ hole point (50, 3, 0)
++ hole rect (4, 2, 0, 6, 4, 0)
+* a comment line still counts
++ hole circle (-5, 3, 0, 1) contact rect (40, 2, 0, 42, 4, 0)
++ contact decay_rect (5, 30, 0, 2, 2, 1, 1, -1, -1)",
+        ));
+        let found: Vec<(usize, bool)> = warnings
+            .iter()
+            .map(|warning| (warning.line, warning.message.contains("Gp")))
+            .collect();
+        assert_eq!(
+            found,
+            [(5, true), (8, true), (8, true), (9, true)],
+            "{warnings:?}"
+        );
+        assert!(warnings[0].message.contains("'hole point'"));
+        assert!(warnings[1].message.contains("'hole circle'"));
+        assert!(warnings[2].message.contains("'contact rect'"));
+        assert!(warnings[3].message.contains("'contact decay_rect'"));
+    }
+
+    /// The test is intersection with the plane's **closed** footprint: a
+    /// shape overhanging an edge, reaching over a corner, or merely touching
+    /// the boundary is not disjoint, and raises no warning.
+    #[test]
+    fn shapes_meeting_the_footprint_do_not_warn() {
+        for clause in [
+            // Partial overhang across the x = 10 edge.
+            "+ hole rect (9, 1, 0, 12, 2, 0)",
+            "+ contact rect (9, 2, 0, 12, 4, 0)",
+            "+ contact decay_rect (10, 3, 0, 2, 2, 1, 1, -1, -1)",
+            // A rectangle touching the x = 10 edge, and one touching only
+            // the (10, 6) corner.
+            "+ hole rect (10, 1, 0, 12, 2, 0)",
+            "+ hole rect (10, 6, 0, 12, 8, 0)",
+            // A centre off the plane whose circle reaches over an edge…
+            "+ hole circle (11, 3, 0, 2)",
+            // …over the (10, 6) corner, 2.83 mm from (12, 8)…
+            "+ hole circle (12, 8, 0, 3)",
+            // …or exactly touches the x = 0 edge.
+            "+ hole circle (-1, 3, 0, 1)",
+            // A point exactly on the boundary.
+            "+ hole point (10, 6, 0)",
+        ] {
+            let (_, warnings) = parse_warned(&footprint_deck(clause));
+            assert!(warnings.is_empty(), "{clause}: {warnings:?}");
+        }
+    }
+
+    /// Scope guard: only *disjoint* clauses warn. In-footprint clauses that
+    /// happen to change nothing — a hole inside another hole, a circle
+    /// between cell centres, a contact already met by the background mesh —
+    /// are not the off-plane typo this diagnostic exists for.
+    #[test]
+    fn in_footprint_clauses_that_change_nothing_do_not_warn() {
+        let (_, warnings) = parse_warned(&footprint_deck(
+            "\
++ hole rect (4, 2, 0, 6, 4, 0)
++ hole point (5, 3.9, 0)
++ hole circle (2, 3, 0, 0.1)
++ hole rect (4.5, 2.5, 0, 5.5, 3.5, 0)
++ contact point (5, 3, 0, 5, 5)
++ contact rect (1, 1, 0, 1.5, 1.5, 1, 1)
++ contact rect (1, 1, 0, 1.5, 1.5, 1, 1)",
+        ));
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// The stricter clauses keep their errors: an off-plane `contact
+    /// point` / `line` / `trace` locus and a named contact area catching no
+    /// live cell are still rejected, not downgraded to warnings.
+    #[test]
+    fn stricter_off_plane_errors_are_unchanged() {
+        for clause in [
+            "+ contact point (50, 3, 0, 0.5, 0.5)",
+            "+ contact line (1, 1, 0, 50, 1, 0, 0.5, 0.5)",
+            "+ contact trace (1, 1, 0, 50, 1, 0, 0.5, 1)",
+        ] {
+            let error = parse_reporting(&footprint_deck(clause)).unwrap_err();
+            assert!(
+                error.message.contains("is outside ground plane 'Gp'"),
+                "{clause}: {error}"
+            );
+        }
+        let error = parse_reporting(&footprint_deck(
+            "+ contact equiv_rect Npad (2, 2, 0, 0.5, 0.5)",
+        ))
+        .unwrap_err();
+        assert!(error.message.contains("covers no live cell"), "{error}");
+    }
+
+    /// `parse` / `parse_with_options` keep their signatures and return the
+    /// same deck the reporting entry points do; a deck without a disjoint
+    /// clause reports nothing.
+    #[test]
+    fn reporting_entry_points_match_the_plain_ones() {
+        let text = footprint_deck("+ hole rect (20, 1, 0, 30, 2, 0)");
+        let plain: Result<Deck, ParseError> = parse(&text);
+        let with: Result<Deck, ParseError> = parse_with_options(&text, ParseOptions::default());
+        let (deck, warnings) =
+            parse_with_options_reporting(&text, ParseOptions::default()).unwrap();
+        assert_eq!(plain.unwrap(), deck);
+        assert_eq!(with.unwrap(), deck);
+        assert_eq!(warnings.len(), 1);
+        // fasthenry_compat shifts nothing: line numbers are physical.
+        let compat = format!("a title line\n{text}");
+        let (_, warnings) = parse_with_options_reporting(
+            &compat,
+            ParseOptions {
+                fasthenry_compat: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(warnings[0].line, 6);
+        let (_, warnings) = parse_warned(&footprint_deck(""));
+        assert!(warnings.is_empty());
     }
 }

@@ -313,3 +313,61 @@ fn the_first_argument_picks_the_form() {
         assert!(error.to_string().contains("--bogus"), "{error}");
     }
 }
+
+/// A deck whose `hole point` lies wholly outside its ground plane still
+/// solves (issue #105): the run succeeds, stdout is the very JSON result the
+/// deck without the clause produces, and stderr carries one `warning:` line
+/// naming the clause, the plane and the clause's own physical line.
+#[test]
+fn a_hole_off_its_plane_solves_with_a_line_numbered_warning() {
+    let directory = scratch("hole-off-plane-warning");
+    let original = std::fs::read_to_string(fixture("plane_fasthenry.inp")).unwrap();
+    // The fixture's `G` statement starts on line 19; its `hole rect` clause
+    // is the continuation on line 21. Add a point far off the plane on a
+    // continuation line of its own right after it, which is line 22.
+    let anchor = "+ hole rect (0.5, 4.5, 0, 1.5, 5.5, 0)\n";
+    assert!(original.contains(anchor), "fixture changed");
+    let line = original[..original.find(anchor).unwrap()].lines().count() + 2;
+    assert_eq!(line, 22);
+    let warned = original.replace(anchor, &format!("{anchor}+ hole point (50, 3, 0)\n"));
+    std::fs::write(directory.join("plain.inp"), &original).unwrap();
+    std::fs::write(directory.join("warned.inp"), &warned).unwrap();
+
+    let plain = fasterhenry(&directory, &["run", "plain.inp"]);
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    assert!(
+        !stderr(&plain).contains("warning:"),
+        "the unchanged deck warns about nothing: {}",
+        stderr(&plain)
+    );
+
+    let output = fasterhenry(&directory, &["run", "warned.inp"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    // Byte-identical but for the wall-clock timings.
+    let result = |stdout: &[u8]| {
+        let mut json: serde_json::Value = serde_json::from_slice(stdout).expect("stdout is JSON");
+        json["provenance"]
+            .as_object_mut()
+            .expect("provenance")
+            .remove("timing");
+        json
+    };
+    assert_eq!(
+        result(&output.stdout),
+        result(&plain.stdout),
+        "a hole that removes nothing must not change the result"
+    );
+    let text = stderr(&output);
+    let warnings: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("warning:"))
+        .collect();
+    assert_eq!(warnings.len(), 1, "{text}");
+    let warning = warnings[0];
+    assert!(
+        warning.starts_with(&format!("warning: line {line}: ")),
+        "{warning}"
+    );
+    assert!(warning.contains("'hole point'"), "{warning}");
+    assert!(warning.contains("ground plane 'Gplane'"), "{warning}");
+}

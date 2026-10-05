@@ -28,14 +28,41 @@ pub fn read_inputs(path: &Path) -> Result<Problem, String> {
 /// [`read_inputs`], reading a deck under `options` (for example
 /// [`inp::ParseOptions::fasthenry_compat`]). JSON problem documents ignore
 /// `options`.
+///
+/// Any deck parse warnings are discarded; see [`read_inputs_reporting_with`]
+/// to receive them.
 pub fn read_inputs_with(path: &Path, options: inp::ParseOptions) -> Result<Problem, String> {
+    read_inputs_reporting_with(path, options).map(|(problem, _)| problem)
+}
+
+/// [`read_inputs`], returning the problem together with the deck's parse
+/// warnings (see [`read_inputs_reporting_with`]).
+pub fn read_inputs_reporting(path: &Path) -> Result<(Problem, Vec<String>), String> {
+    read_inputs_reporting_with(path, inp::ParseOptions::default())
+}
+
+/// [`read_inputs_with`], returning the problem together with the deck's
+/// parse warnings — each an [`inp::ParseWarning`] rendered as `line N:
+/// <message>`, in deck order — the way [`run_reporting`] returns the
+/// solve's warnings. A JSON problem document has none. Nothing is printed:
+/// the binary prints them on stderr.
+pub fn read_inputs_reporting_with(
+    path: &Path,
+    options: inp::ParseOptions,
+) -> Result<(Problem, Vec<String>), String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("inp") | Some("fh") => inp::parse_with_options(&text, options)
-            .map(Problem::from)
+        Some("inp") | Some("fh") => inp::parse_with_options_reporting(&text, options)
+            .map(|(deck, warnings)| {
+                (
+                    Problem::from(deck),
+                    warnings.iter().map(ToString::to_string).collect(),
+                )
+            })
             .map_err(|error| error.to_string()),
         _ => serde_json::from_str(&text)
+            .map(|problem| (problem, Vec::new()))
             .map_err(|error| format!("invalid problem document: {error}")),
     }
 }
@@ -154,5 +181,49 @@ mod tests {
         use clap::CommandFactory;
         crate::cli::Cli::command().debug_assert();
         crate::cli::BareCli::command().debug_assert();
+    }
+
+    /// The reporting read path returns a deck's parse warnings as `line N:
+    /// …` strings alongside the very problem the plain path returns, whose
+    /// signatures are unchanged (issue #105).
+    #[test]
+    fn read_inputs_reporting_returns_parse_warnings() {
+        use crate::{read_inputs, read_inputs_reporting, read_inputs_with, Problem};
+        use std::path::Path;
+
+        let directory = std::env::temp_dir().join(format!(
+            "fasterhenry-cli-lib-{}-reporting",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("deck.inp");
+        std::fs::write(
+            &path,
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole point (50, 3, 0)
+Nt x=5 y=3 z=0.5
+Nb x=5 y=3 z=0
+Ev Nt Nb w=0.2 h=0.2
+.external Nt Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        )
+        .unwrap();
+        let plain: fn(&Path) -> Result<Problem, String> = read_inputs;
+        let with: fn(&Path, crate::inp::ParseOptions) -> Result<Problem, String> = read_inputs_with;
+        let (problem, warnings) = read_inputs_reporting(&path).unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("line 5: 'hole point'"),
+            "{warnings:?}"
+        );
+        assert_eq!(plain(&path).unwrap(), problem);
+        assert_eq!(with(&path, Default::default()).unwrap(), problem);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

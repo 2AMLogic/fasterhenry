@@ -8,7 +8,7 @@
 use fasterhenry_cli::cli::{Invocation, RunArgs};
 use fasterhenry_cli::inp::ParseOptions;
 use fasterhenry_cli::spice::write_spice_subckt;
-use fasterhenry_cli::{read_inputs_with, run_reporting_with, solver_for};
+use fasterhenry_cli::{read_inputs_reporting_with, run_reporting_with, solver_for};
 
 fn main() -> anyhow::Result<()> {
     let invocation = Invocation::parse();
@@ -27,7 +27,13 @@ fn main() -> anyhow::Result<()> {
     } = invocation.into_args();
 
     let options = ParseOptions { fasthenry_compat };
-    let problem = read_inputs_with(&input, options).map_err(|m| anyhow::anyhow!("{m}"))?;
+    let (problem, parse_warnings) =
+        read_inputs_reporting_with(&input, options).map_err(|m| anyhow::anyhow!("{m}"))?;
+    // A clause the deck states but that cannot touch the mesh (a hole or
+    // contact wholly off its plane) is accepted, and said so on stderr.
+    for warning in &parse_warnings {
+        eprintln!("warning: {warning}");
+    }
     let override_frequencies = match &freq {
         Some(values) => Some(decade_frequencies(values[0], values[1], values[2])?),
         None => None,
