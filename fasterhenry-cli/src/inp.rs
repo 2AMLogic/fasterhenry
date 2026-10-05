@@ -422,11 +422,26 @@
 //!   `file=NONE contact initial_grid (n1, n2)` spelling reads as written; a
 //!   *named* file is rejected by name, as the input this reader does not
 //!   read.
+//! * **`relx=` / `rely=` / `relz=`** (default 0) are the documented
+//!   offset (User's Guide §1.3.9; issue #146): it is added to every
+//!   in-plane coordinate the statement carries — each `N<name> (x, y, z)`
+//!   node reference, each `hole` shape's points or centre, and each
+//!   `contact` clause's points, ends or centre — but **not** to the corner
+//!   points `x1…z3`, so the mesh is unchanged while what lands on it moves.
+//!   A deck with `relx=0.3` reads exactly as the same deck with those
+//!   coordinates written 0.3 larger. Only coordinates move: widths, cell
+//!   sizes and radii do not. The keys apply wherever they stand in the
+//!   statement (a `relx` after the clauses still moves them), and a
+//!   repeated key's last value wins for every point. A `relz` that lifts a
+//!   clause out of the plane's slab is the same error it would be written
+//!   out. Under [`ParseOptions::fasthenry_compat`], one empty coordinate
+//!   field in a node reference (`N1 (, 10.1, 10.1)`) reads as 0 before the
+//!   offset, with a warning; natively it is an error, and two empty fields
+//!   are an error in both modes.
 //! * The remaining documented plane parameters are rejected by name too,
 //!   each with the reason and the alternative: `rh` (plane filaments are
-//!   uniform), `segwid1`/`segwid2` (bar widths follow
-//!   the cells), and `relx`/`rely`/`relz` (name the in-plane nodes
-//!   instead). Nothing on a `G` statement is silently ignored.
+//!   uniform) and `segwid1`/`segwid2` (bar widths follow the cells).
+//!   Nothing on a `G` statement is silently ignored.
 //!
 //! # Semantics
 //!
@@ -946,11 +961,18 @@ fn read_word(chars: &[char], at: &mut usize) -> String {
 }
 
 /// A parenthesised value list, separated by commas and/or whitespace.
+///
+/// With `keep_empty`, a comma-delimited field holding nothing — `(,1,2)`,
+/// `(1,,2)` or `(1,2,)` — is kept as an empty string rather than skipped,
+/// so the caller can say what it means (issue #146: an in-plane node
+/// reference's empty coordinate). Without it, such a field is skipped, as
+/// it always has been.
 fn read_list(
     chars: &[char],
     at: &mut usize,
     what: &str,
     line: usize,
+    keep_empty: bool,
 ) -> Result<Vec<String>, ParseError> {
     skip_space(chars, at);
     if chars.get(*at) != Some(&'(') {
@@ -961,15 +983,29 @@ fn read_list(
     }
     *at += 1;
     let mut values = Vec::new();
+    // Whether the current comma-delimited field has no value yet, and
+    // whether any comma has been seen (a bare `()` has no empty field).
+    let mut field_empty = true;
+    let mut saw_comma = false;
     loop {
         skip_space(chars, at);
         match chars.get(*at) {
             None => return Err(err(line, format!("{what} has an unterminated '('"))),
             Some(&')') => {
                 *at += 1;
+                if keep_empty && saw_comma && field_empty {
+                    values.push(String::new());
+                }
                 return Ok(values);
             }
-            Some(&',') => *at += 1,
+            Some(&',') => {
+                *at += 1;
+                if keep_empty && field_empty {
+                    values.push(String::new());
+                }
+                field_empty = true;
+                saw_comma = true;
+            }
             Some(&other) => {
                 let word = read_word(chars, at);
                 if word.is_empty() {
@@ -979,6 +1015,7 @@ fn read_list(
                     ));
                 }
                 values.push(word);
+                field_empty = false;
             }
         }
     }
@@ -1040,7 +1077,7 @@ fn scan_plane_items(body: &str, line: usize) -> Result<Vec<(usize, PlaneItem)>, 
                     (!name.is_empty()).then_some(name)
                 }
             };
-            let values = read_list(&chars, &mut at, &what, line)?;
+            let values = read_list(&chars, &mut at, &what, line, false)?;
             items.push((
                 start,
                 PlaneItem::Clause {
@@ -1067,7 +1104,7 @@ fn scan_plane_items(body: &str, line: usize) -> Result<Vec<(usize, PlaneItem)>, 
             Some(&'(') => {
                 at = probe;
                 let what = format!("in-plane node '{word}'");
-                let values = read_list(&chars, &mut at, &what, line)?;
+                let values = read_list(&chars, &mut at, &what, line, true)?;
                 items.push((start, PlaneItem::Node(word, values)));
             }
             _ => {
@@ -1520,8 +1557,8 @@ fn parse_plane_statement(
     body_lines: &[usize],
     unit: f64,
     defaults: &Defaults,
+    compat: bool,
     line: usize,
-    fasthenry_compat: bool,
 ) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
     // The tokens are rejoined with single spaces, so token `k` starts at
     // the sum of the earlier tokens' lengths plus one separator each.
@@ -1541,18 +1578,23 @@ fn parse_plane_statement(
             .and_then(|index| body_lines.get(index).copied())
             .unwrap_or(line)
     };
-    let mut statement = PlaneStatement::new(head, unit, defaults, line);
-    for (order, (at, item)) in scan_plane_items(&body.join(" "), line)?
-        .into_iter()
-        .enumerate()
-    {
+    let mut statement = PlaneStatement::new(head, unit, defaults, compat, line);
+    let items = scan_plane_items(&body.join(" "), line)?;
+    // `relx`/`rely`/`relz` apply to every coordinate on the statement,
+    // wherever they are written, so they are read first (issue #146).
+    for (_, item) in &items {
+        if let PlaneItem::Field(key, raw) = item {
+            statement.apply_offset(key, raw)?;
+        }
+    }
+    for (order, (at, item)) in items.into_iter().enumerate() {
         statement.clause_line = physical_line(at);
         statement.clause_seq = order;
         statement.apply_item(item)?;
     }
     // Under compat, a plane naming no conductivity is copper (issue #142),
     // said out loud on the statement's own line, ahead of its clauses.
-    let copper = (fasthenry_compat && statement.sigma.is_none()).then(|| {
+    let copper = (compat && statement.sigma.is_none()).then(|| {
         statement.sigma = Some(COPPER_SIGMA);
         copper_warning("ground plane", head, line)
     });
@@ -1631,6 +1673,16 @@ struct PlaneStatement<'a> {
     /// `contact equiv_rect` / `contact connection`: the named contact areas,
     /// each becoming one `Equipotential` and one in-plane node.
     contact_equivs: Vec<EquivRect>,
+    /// `(relx, rely, relz)`, metres: the documented offset added to every
+    /// in-plane node, hole and contact coordinate on the statement — never
+    /// to the corner points (issue #146). Read before any other item, so it
+    /// applies wherever it is written; a repeated key's last value wins.
+    offset: [f64; 3],
+    /// Whether the deck is read under [`ParseOptions::fasthenry_compat`].
+    compat: bool,
+    /// Warnings raised while the items are applied (before the plane's
+    /// geometry is known), each with its clause's source order.
+    warnings: Vec<(usize, ParseWarning)>,
 }
 
 /// The checked geometry of a FastHenry-form `G` statement, which every
@@ -1661,11 +1713,12 @@ struct PlaneFrame<'a> {
 }
 
 impl<'a> PlaneStatement<'a> {
-    fn new(head: &'a str, unit: f64, defaults: &Defaults, line: usize) -> Self {
+    fn new(head: &'a str, unit: f64, defaults: &Defaults, compat: bool, line: usize) -> Self {
         PlaneStatement {
             head,
             unit,
             line,
+            compat,
             sigma: defaults.sigma,
             nhinc: 1,
             ..PlaneStatement::default()
@@ -1733,14 +1786,8 @@ impl<'a> PlaneStatement<'a> {
                     ),
                 ));
             }
-            "relx" | "rely" | "relz" => {
-                return Err(err(
-                    line,
-                    format!(
-                        "ground plane '{head}': '{key}' (a reference point for the plane's internal node numbering) is not supported; name the in-plane nodes you need with 'N<name> (x, y, z)'"
-                    ),
-                ));
-            }
+            // Read by `apply_offset` before any other item (issue #146).
+            "relx" | "rely" | "relz" => {}
             "file" => {
                 // `file=` is an *input*: the file holding the plane's
                 // nonuniform-discretization hierarchy, with `file=NONE`
@@ -1774,7 +1821,7 @@ impl<'a> PlaneStatement<'a> {
                 return Err(err(
                     line,
                     format!(
-                        "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, rho, nhinc)"
+                        "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, rho, nhinc, relx, rely, relz)"
                     ),
                 ));
             }
@@ -1782,7 +1829,37 @@ impl<'a> PlaneStatement<'a> {
         Ok(())
     }
 
+    /// A `relx=` / `rely=` / `relz=` field, read before every other item
+    /// of the statement: the documented offset (FastHenry User's Guide
+    /// §1.3.9) added to every in-plane node, hole and contact coordinate,
+    /// but not to the corner points. A repeated key's last value wins.
+    /// Any other field is left to [`PlaneStatement::apply_field`].
+    fn apply_offset(&mut self, key: &str, raw: &str) -> Result<(), ParseError> {
+        let axis = match key {
+            "relx" => 0,
+            "rely" => 1,
+            "relz" => 2,
+            _ => return Ok(()),
+        };
+        self.offset[axis] = parse_number(raw, self.line)? * self.unit;
+        Ok(())
+    }
+
+    /// `point` moved by the statement's `relx`/`rely`/`relz` offset.
+    fn shift(&self, point: [f64; 3]) -> [f64; 3] {
+        [
+            point[0] + self.offset[0],
+            point[1] + self.offset[1],
+            point[2] + self.offset[2],
+        ]
+    }
+
     /// An `N<name> (x, y, z)` in-plane node declaration.
+    ///
+    /// One empty coordinate field (`(, y, z)`) reads as 0 — before the
+    /// offset — under [`ParseOptions::fasthenry_compat`], with a warning;
+    /// it is an error otherwise, and more than one is an error in both
+    /// modes (issue #146).
     fn apply_node(&mut self, name: String, values: &[String]) -> Result<(), ParseError> {
         if !name.starts_with(['n', 'N']) {
             return Err(err(
@@ -1793,7 +1870,43 @@ impl<'a> PlaneStatement<'a> {
             ));
         }
         let what = format!("in-plane node '{name}'");
-        let position = triple(values, &what, self.unit, self.line)?;
+        let empty: Vec<usize> = (0..values.len())
+            .filter(|&index| values[index].is_empty())
+            .collect();
+        let mut filled = values.to_vec();
+        if let Some(&index) = empty.first() {
+            let axis = ['x', 'y', 'z'].get(index).copied().unwrap_or('?');
+            if !self.compat {
+                return Err(err(
+                    self.line,
+                    format!(
+                        "{what} has an empty coordinate field; write every coordinate (x, y, z) — an empty field reads as 0 only under --fasthenry-compat"
+                    ),
+                ));
+            }
+            if values.len() != 3 || empty.len() > 1 {
+                return Err(err(
+                    self.line,
+                    format!(
+                        "{what} needs 3 coordinates (x, y, z) with at most one empty field, got {} value(s) of which {} empty",
+                        values.len(),
+                        empty.len()
+                    ),
+                ));
+            }
+            filled[index] = "0".to_string();
+            self.warnings.push((
+                self.clause_seq,
+                ParseWarning {
+                    line: self.clause_line,
+                    message: format!(
+                        "ground plane '{}': {what} has an empty {axis} coordinate, read as 0 (before the statement's relx/rely/relz offset)",
+                        self.head
+                    ),
+                },
+            ));
+        }
+        let position = self.shift(triple(&filled, &what, self.unit, self.line)?);
         self.nodes.push((name, position, None));
         Ok(())
     }
@@ -1827,12 +1940,12 @@ impl<'a> PlaneStatement<'a> {
         }
         match (kind, shape) {
             ("hole", "rect") => {
-                self.hole_rects
-                    .push((rect_corners(values, &what, unit, line)?, clause_line));
+                let corners = rect_corners(values, &what, unit, line)?.map(|c| self.shift(c));
+                self.hole_rects.push((corners, clause_line));
             }
             ("hole", "point") => {
-                self.hole_points
-                    .push((triple(values, &what, unit, line)?, clause_line));
+                let point = self.shift(triple(values, &what, unit, line)?);
+                self.hole_points.push((point, clause_line));
             }
             ("hole", "circle") => self.apply_hole_circle(&what, values)?,
             // Two spellings of one clause, told apart by value count
@@ -1841,14 +1954,16 @@ impl<'a> PlaneStatement<'a> {
             // two opposite corners as `hole rect` spells them, taking the
             // default 2 × 2 cells at ratio 2.
             ("contact", "rect") => match values.len() {
-                7 => self.contact_decays.push((
-                    "'contact rect'",
-                    contact_rect_values(values, &what, unit, line)?,
-                    clause_line,
-                )),
-                6 => self
-                    .contact_rects
-                    .push((rect_corners(values, &what, unit, line)?, clause_line)),
+                7 => {
+                    let mut decay = contact_rect_values(values, &what, unit, line)?;
+                    decay.centre = self.shift(decay.centre);
+                    self.contact_decays
+                        .push(("'contact rect'", decay, clause_line));
+                }
+                6 => {
+                    let corners = rect_corners(values, &what, unit, line)?.map(|c| self.shift(c));
+                    self.contact_rects.push((corners, clause_line));
+                }
                 got => {
                     return Err(err(
                         line,
@@ -1858,26 +1973,26 @@ impl<'a> PlaneStatement<'a> {
                     ))
                 }
             },
-            ("contact", "decay_rect") => self.contact_decays.push((
-                "'contact decay_rect'",
-                decay_rect_values(values, &what, unit, line)?,
-                clause_line,
-            )),
+            ("contact", "decay_rect") => {
+                let mut decay = decay_rect_values(values, &what, unit, line)?;
+                decay.centre = self.shift(decay.centre);
+                self.contact_decays
+                    .push(("'contact decay_rect'", decay, clause_line));
+            }
             ("contact", "point") => {
-                self.contact_lines.push((
-                    "'contact point'",
-                    refine_line_values(values, false, &what, unit, line)?,
-                ));
+                let mut refine = refine_line_values(values, false, &what, unit, line)?;
+                refine.ends = refine.ends.map(|end| self.shift(end));
+                self.contact_lines.push(("'contact point'", refine));
             }
             ("contact", "line") => {
-                self.contact_lines.push((
-                    "'contact line'",
-                    refine_line_values(values, true, &what, unit, line)?,
-                ));
+                let mut refine = refine_line_values(values, true, &what, unit, line)?;
+                refine.ends = refine.ends.map(|end| self.shift(end));
+                self.contact_lines.push(("'contact line'", refine));
             }
             ("contact", "trace") => {
-                self.contact_traces
-                    .push(refine_trace_values(values, &what, unit, line)?);
+                let mut trace = refine_trace_values(values, &what, unit, line)?;
+                trace.ends = trace.ends.map(|end| self.shift(end));
+                self.contact_traces.push(trace);
             }
             ("contact", "equiv_rect") => self.apply_contact_equiv_rect(what, name, values)?,
             ("contact", "connection") => self.apply_contact_connection(what, name, values)?,
@@ -1897,7 +2012,7 @@ impl<'a> PlaneStatement<'a> {
                 format!("{what} takes 4 values (x, y, z, r), got {}", values.len()),
             ));
         }
-        let centre = triple(&values[..3], what, unit, line)?;
+        let centre = self.shift(triple(&values[..3], what, unit, line)?);
         let radius = parse_number(&values[3], line)? * unit;
         if radius < 0.0 {
             return Err(err(line, format!("{what}: r={radius} metres must be >= 0")));
@@ -1925,6 +2040,7 @@ impl<'a> PlaneStatement<'a> {
             ));
         }
         let (centre, widths) = equiv_rect_values(values, &what, self.unit, line)?;
+        let centre = self.shift(centre);
         let name = contact_node_name(name, &what, "equiv_rect", line)?;
         self.contact_equivs.push(EquivRect {
             what,
@@ -1953,6 +2069,7 @@ impl<'a> PlaneStatement<'a> {
             ));
         }
         let (centre, widths) = equiv_rect_values(values, &what, self.unit, line)?;
+        let centre = self.shift(centre);
         // The documented shorthand: this rectangle tied to
         // one node, plus a `decay_rect` over the same
         // rectangle whose cells are its widths divided by
@@ -2220,7 +2337,6 @@ impl<'a> PlaneStatement<'a> {
     /// off the plane), but neither is an error.
     fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
         let frame = self.frame()?;
-        let mut warnings: Vec<(usize, ParseWarning)> = Vec::new();
         let PlaneStatement {
             head,
             nhinc,
@@ -2234,6 +2350,7 @@ impl<'a> PlaneStatement<'a> {
             contact_lines,
             contact_traces,
             contact_equivs,
+            mut warnings,
             ..
         } = self;
 
@@ -2973,7 +3090,7 @@ pub fn parse_with_options_reporting(
     let folded = fold_lines(text, options)?;
     let mut deck = DeckBuilder {
         title: folded.title,
-        fasthenry_compat: options.fasthenry_compat,
+        compat: options.fasthenry_compat,
         ..DeckBuilder::default()
     };
     for (number, tokens, token_lines) in &folded.lines {
@@ -3106,9 +3223,10 @@ struct DeckBuilder {
     ended: bool,
     /// Every [`ParseWarning`] raised so far, in deck order.
     warnings: Vec<ParseWarning>,
-    /// [`ParseOptions::fasthenry_compat`]: a conductor naming no
-    /// conductivity is copper (with a warning) rather than an error.
-    fasthenry_compat: bool,
+    /// Whether the deck is read under [`ParseOptions::fasthenry_compat`]:
+    /// among other things, a conductor naming no conductivity is copper
+    /// (with a warning) rather than an error.
+    compat: bool,
 }
 
 impl DeckBuilder {
@@ -3603,7 +3721,7 @@ impl DeckBuilder {
         head: &str,
         number: usize,
     ) -> Option<f64> {
-        if sigma.is_none() && self.fasthenry_compat {
+        if sigma.is_none() && self.compat {
             self.warnings.push(copper_warning(what, head, number));
             return Some(COPPER_SIGMA);
         }
@@ -3654,8 +3772,8 @@ impl DeckBuilder {
             token_lines.get(1..).unwrap_or_default(),
             factor,
             &self.defaults,
+            self.compat,
             number,
-            self.fasthenry_compat,
         )?;
         self.warnings.extend(warnings);
         let index = self.planes.len();
@@ -6776,9 +6894,6 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ("nhinc=3 rh=2", "'rh'"),
             ("segwid1=0.5", "'segwid1'"),
             ("segwid2=0.5", "'segwid2'"),
-            ("relx=1", "'relx'"),
-            ("rely=1", "'rely'"),
-            ("relz=1", "'relz'"),
             // Only a *named* discretization hierarchy is rejected; the
             // documented `file=NONE` is accepted as the no-op it is — see
             // `file_none_is_the_documented_no_op_and_a_named_hierarchy_file_is_rejected`.
@@ -7943,6 +8058,173 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         ))
         .unwrap_err();
         assert!(error.message.contains("covers no live cell"), "{error}");
+    }
+
+    /// A deck around one corner-point `G` statement in metres (so every
+    /// coordinate below, and every sum of one with the offset, is exact in
+    /// binary): a 16 × 8 plane meshed 8 × 4, 0.5 thick, with `fields`
+    /// appended to its parameters and every in-plane coordinate written
+    /// moved by `d` — a node reference, every hole shape and every contact
+    /// kind. Ports join two in-plane nodes.
+    fn rel_deck(d: [f64; 3], fields: &str) -> String {
+        let p = |x: f64, y: f64, z: f64| format!("{}, {}, {}", x + d[0], y + d[1], z + d[2]);
+        format!(
+            "\
+.units m
+G1 x1=0 y1=0 z1=0 x2=16 y2=0 z2=0 x3=16 y3=8 z3=0
++ thick=0.5 seg1=8 seg2=4 sigma=1e6 {fields}
++ N1 ({})
++ N2 ({})
++ hole rect ({}, {})
++ hole point ({})
++ hole circle ({}, 0.5)
++ contact rect ({}, 2, 2, 0.5, 0.5)
++ contact rect ({}, {})
++ contact decay_rect ({}, 1, 1, 0.25, 0.25, -1, -1)
++ contact point ({}, 0.5, 0.5)
++ contact line ({}, {}, 0.5, 0.5)
++ contact trace ({}, {}, 0.25, 1)
++ contact equiv_rect Na ({}, 1, 1)
++ contact connection Nb ({}, 1, 1, 2)
+.external N1 N2
+.external Na Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+            p(2.0, 2.0, 0.0),
+            p(14.0, 4.0, 0.0),
+            p(12.0, 6.0, 0.0),
+            p(13.0, 7.0, 0.0),
+            p(14.0, 1.0, 0.0),
+            p(1.0, 7.0, 0.0),
+            p(4.0, 4.0, 0.0),
+            p(8.0, 1.0, 0.0),
+            p(9.0, 2.0, 0.0),
+            p(6.0, 6.0, 0.0),
+            p(10.0, 4.0, 0.0),
+            p(2.0, 5.0, 0.0),
+            p(4.0, 5.0, 0.0),
+            p(8.0, 3.0, 0.0),
+            p(12.0, 3.0, 0.0),
+            p(12.0, 4.0, 0.0),
+            p(4.0, 1.0, 0.0),
+        )
+    }
+
+    /// The documented offset (issue #146): a `relx`/`rely`/`relz` deck is
+    /// exactly the deck with every node-reference, hole and contact
+    /// coordinate written moved by it — and, since that deck's corner
+    /// points are not moved, the corners are unaffected.
+    #[test]
+    fn rel_offset_equals_the_pre_shifted_deck() {
+        const OFFSET: [f64; 3] = [0.5, 0.25, 0.125];
+        let shifted = parse_warned(&rel_deck(OFFSET, ""));
+        let rel = parse_warned(&rel_deck([0.0; 3], "relx=0.5 rely=0.25 relz=0.125"));
+        assert_eq!(rel, shifted);
+        // The offset moved something: the unshifted deck differs.
+        assert_ne!(parse_warned(&rel_deck([0.0; 3], "")).0, rel.0);
+        // Each key moves only its own axis.
+        for (axis, field) in ["relx=0.5", "rely=0.25", "relz=0.125"].iter().enumerate() {
+            let mut d = [0.0; 3];
+            d[axis] = OFFSET[axis];
+            assert_eq!(
+                parse_warned(&rel_deck([0.0; 3], field)),
+                parse_warned(&rel_deck(d, "")),
+                "{field}"
+            );
+        }
+    }
+
+    /// The offset never moves the corner points: on a statement with no
+    /// in-plane coordinate at all, it changes nothing.
+    #[test]
+    fn rel_offset_leaves_the_corner_points_alone() {
+        let deck = |fields: &str| {
+            parse_ok(&plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3 {fields}"
+                ),
+                "",
+            ))
+        };
+        assert_eq!(deck("relx=0.3 rely=-0.2 relz=0.01"), deck(""));
+    }
+
+    /// `relx`/`rely`/`relz` apply wherever they are written in the
+    /// statement — after the clauses too — and a repeated key's last value
+    /// wins for every point, including those written before it.
+    #[test]
+    fn rel_offset_is_position_independent_and_last_wins() {
+        let expected = parse_warned(&rel_deck([0.5, 0.25, 0.0], ""));
+        let after = rel_deck([0.0; 3], "").replace(
+            "\n.external N1 N2",
+            "\n+ rely=0.25 relx=0.5\n.external N1 N2",
+        );
+        assert_eq!(parse_warned(&after), expected);
+        let repeated = rel_deck([0.0; 3], "relx=7 rely=0.25").replace(
+            "\n.external N1 N2",
+            "\n+ relx=3\n+ relx = 0.5\n.external N1 N2",
+        );
+        assert_eq!(parse_warned(&repeated), expected);
+    }
+
+    /// One empty coordinate field in a node reference reads as 0 before the
+    /// offset under `--fasthenry-compat`, with a warning on its own line;
+    /// natively it is an error, and two empty fields are an error in both
+    /// modes (issue #146).
+    #[test]
+    fn empty_node_coordinate_is_zero_in_compat_only() {
+        let deck = |node: &str| {
+            format!(
+                "\
+.units m
+G1 x1=0 y1=0 z1=0 x2=16 y2=0 z2=0 x3=16 y3=8 z3=0
++ thick=0.5 seg1=8 seg2=4 sigma=1e6 relx=2
++ {node}
++ N2 (12, 4, 0)
+.external N1 N2
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+            )
+        };
+        let compat = |text: &str| parse_with_options_reporting(&format!("title\n{text}"), COMPAT);
+        let (expected, none) = compat(&deck("N1 (0, 2, 0)")).unwrap();
+        assert!(none.is_empty(), "{none:?}");
+        for (node, axis) in [
+            ("N1 (, 2, 0)", 'x'),
+            ("N1 (-2, , 0)", 'y'),
+            ("N1 (,2,0)", 'x'),
+            ("N1 (-2,2,)", 'z'),
+        ] {
+            let (got, warnings) = compat(&deck(node)).unwrap_or_else(|e| panic!("{node}: {e}"));
+            assert_eq!(got, expected, "{node}");
+            assert_eq!(warnings.len(), 1, "{node}: {warnings:?}");
+            assert_eq!(warnings[0].line, 5, "{node}: the node's own physical line");
+            assert!(
+                warnings[0]
+                    .message
+                    .contains(&format!("empty {axis} coordinate, read as 0")),
+                "{node}: {}",
+                warnings[0]
+            );
+        }
+        let error = parse(&deck("N1 (, 2, 0)")).unwrap_err();
+        assert_eq!(error.line, 2);
+        assert!(error.message.contains("empty coordinate field"), "{error}");
+        assert!(error.message.contains("--fasthenry-compat"), "{error}");
+        for node in ["N1 (, , 0)", "N1 (,,)", "N1 (, 2)"] {
+            let error = compat(&deck(node)).unwrap_err();
+            assert!(
+                error.message.contains("at most one empty field"),
+                "{node}: {error}"
+            );
+        }
+        // Clause value lists are unchanged: only node references keep an
+        // empty field.
+        assert!(parse(&deck("N1 (-2 2 0)\n+ hole point (3,, 3, 0)")).is_ok());
     }
 
     /// `parse` / `parse_with_options` keep their signatures and return the
