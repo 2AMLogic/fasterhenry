@@ -33,6 +33,7 @@ Status key:
 | `*` starts a comment line | Supported | `inp.rs` drops any line whose trimmed text starts with `*` before it reaches directive parsing. |
 | `+` starts a continuation line | Supported | The rest of a `+` line's tokens append to the previous line; a deck that opens with a `+` line is an error (there is no previous line to continue). |
 | Blank lines | Supported | Dropped like comments, anywhere in the file, including trailing lines after `.end`. |
+| Whitespace around `=` (`k = v`, `k= v`, `k =v`, tabs) | Supported | Issue #141. In every mode, on `N`, `E`, `.default` and `.freq` lines — continuations included — a `key`, `=`, `value` split by spaces or tabs is rejoined into one `key=value` before the line is read, so every spacing parses exactly like `k=v`; `G` lines already allowed it in their own scanner. A dangling `x=` with no value (at the end of the statement, or followed by another assignment) is still a line-numbered error naming the field. |
 | Directive keywords case-insensitive (`.UNITS` = `.units`) | Supported | Matched via `to_ascii_lowercase()`. |
 | Node/element names case-sensitive | Supported | `N1` and `n1` are different nodes; every reference (`.external`, `E` endpoints, `.equiv`) is matched by exact string equality. |
 | `.end` required | Supported, differs | A deck without `.end` is rejected. FastHenry decks conventionally end with `.end`, but this reader treats its absence as an error rather than an implicit end-of-file — consistent with the "no default swallows a mistake" design already applied to `.units`. |
