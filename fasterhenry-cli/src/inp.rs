@@ -2267,7 +2267,10 @@ impl<'a> PlaneStatement<'a> {
                 continue;
             }
             if frame.touches_rect(lo, hi) {
-                warnings.push(frame.touch_warning(clause_line, "'contact rect'", lo, hi));
+                warnings.push((
+                    order,
+                    frame.touch_warning(clause_line, "'contact rect'", lo, hi),
+                ));
                 continue;
             }
             contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
@@ -2290,7 +2293,10 @@ impl<'a> PlaneStatement<'a> {
                 continue;
             }
             if frame.touches_rect(region.lo, region.hi) {
-                warnings.push(frame.touch_warning(clause_line, what, region.lo, region.hi));
+                warnings.push((
+                    order,
+                    frame.touch_warning(clause_line, what, region.lo, region.hi),
+                ));
                 continue;
             }
             contacts.push(region);
