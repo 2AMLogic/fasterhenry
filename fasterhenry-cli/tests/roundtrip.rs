@@ -742,3 +742,36 @@ fn a_truncating_deck_is_dense_only() {
         .unwrap_err()
         .contains(".couples"));
 }
+
+/// Issue #134: a contact rectangle ending on the plane's edge up to float
+/// rounding must neither fail assembly with a zero-length segment on line 0
+/// nor change the plane: it is dropped with a warning on its own line, so
+/// the deck solves exactly as the plane without the clause does.
+#[test]
+fn contact_rect_touching_the_plane_edge_is_dropped_and_solves() {
+    let text = std::fs::read_to_string(fixture("plane_fasthenry.inp")).unwrap();
+    let original = "+ contact rect (5, 3, 0, 2, 2, 1, 1)";
+    assert!(text.contains(original));
+    let without = text.replace(&format!("{original}\n"), "");
+    let baseline = fasterhenry_cli::inp::parse_reporting(&without).expect("baseline parses");
+    assert!(baseline.1.is_empty());
+    let clause_line = text
+        .lines()
+        .position(|line| line == original)
+        .map(|index| index + 1)
+        .unwrap();
+    for replacement in [
+        "+ contact rect (11, 3, 0, 2, 2, 1, 1)",
+        "+ contact rect (11.000000000000002, 3, 0, 2, 2, 1, 1)",
+    ] {
+        let mutated = text.replace(original, replacement);
+        let (deck, warnings) = fasterhenry_cli::inp::parse_reporting(&mutated)
+            .unwrap_or_else(|error| panic!("{replacement}: {error}"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, clause_line);
+        assert_eq!(deck, baseline.0, "{replacement}");
+        let problem = fasterhenry_cli::Problem::from(deck);
+        let result = run(&problem, None).expect("the dropped contact still solves");
+        assert!(!result.impedance_ohm.is_empty());
+    }
+}
