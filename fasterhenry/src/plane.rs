@@ -588,17 +588,29 @@ impl PlaneMesh {
 
 /// The overlap, in metres, below which a contact region's clipped extent
 /// along one plane axis `lo … hi` is a *touch* rather than a region
-/// (issue #134): `1e-9` of the larger of the axis's span and its
-/// coordinate magnitudes. Scale-aware — a plane in any unit, or translated
-/// far from the origin, has rounding noise proportional to its own
-/// coordinates — and far below any refinement worth asking for.
+/// (issue #134). Two independent tolerances, whichever is larger:
+///
+/// - a **shape-relative** term, `1e-9` of the axis's span `|hi − lo|`, so
+///   the threshold follows the plane's own size in any unit; and
+/// - a **coordinate-rounding** term, `32·f64::EPSILON` times the axis's
+///   largest coordinate magnitude `max(|lo|, |hi|)` — a few ULPs of the
+///   coordinates themselves, which is all the noise a translated plane
+///   picks up (the same pattern as the filament grader's extent floor).
+///
+/// Keeping the two apart matters for a small plane far from the origin:
+/// scaling the coordinate magnitude by the shape tolerance (`1e-9·|lo|`)
+/// would, for a 10 mm axis at `1e9` m, demand a ~1 m overlap — wider than
+/// the plane — while the rounding term there is ~7 µm. Either way the
+/// slack stays far below any refinement worth asking for.
 ///
 /// [`GroundPlane::mesh`] rejects a contact whose overlap with the
 /// footprint is no wider than this on either axis as
 /// [`PlaneError::ContactOutsideFootprint`], the same as an exact touch.
 #[must_use]
 pub fn contact_slack(lo: f64, hi: f64) -> f64 {
-    1e-9 * (hi - lo).abs().max(lo.abs()).max(hi.abs())
+    let shape = 1e-9 * (hi - lo).abs();
+    let rounding = 32.0 * f64::EPSILON * lo.abs().max(hi.abs());
+    shape.max(rounding)
 }
 
 /// The fewest uniform cells across `span` whose extent is no larger than
@@ -2038,6 +2050,7 @@ mod tests {
             (1e3, [0.0, 0.0]),
             (1e-3, [0.0, 0.0]),
             (1.0, [5.0, -3.0]),
+            (1.0, [1e9, -1e9]),
         ] {
             let lo = [offset[0], offset[1]];
             let hi = [offset[0] + 10e-3 * scale, offset[1] + 6e-3 * scale];
@@ -2079,8 +2092,10 @@ mod tests {
                             "scale {scale} offset {offset:?} axis {axis} upper {upper} overlap {overlap}: {error}"
                         );
                     }
-                    // A genuinely small refinement survives.
-                    let overlap = 1e-3 * span[axis];
+                    // A genuinely small refinement survives: a thousandth
+                    // of the span, or — far from the origin, where that is
+                    // only a few dozen ULPs — a thousand ULPs of the edge.
+                    let overlap = (1e-3 * span[axis]).max(1e3 * f64::EPSILON * edge.abs());
                     let candidate = plane(region(axis, upper, overlap));
                     let mesh = candidate.mesh().unwrap();
                     for edges in [mesh.x_edges(), mesh.y_edges()] {
@@ -2091,6 +2106,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A small plane translated far from the origin keeps its genuine
+    /// partial overlaps: the touch slack separates shape-relative tolerance
+    /// from coordinate rounding, so it is a few ULPs of the coordinates,
+    /// not a fraction of their magnitude that would exceed the whole span
+    /// (issue #134 review).
+    #[test]
+    fn translated_small_plane_keeps_partial_overlaps() {
+        let lo = [1e9, 1e9];
+        let hi = [1e9 + 10e-3, 1e9 + 6e-3];
+        let slack = contact_slack(lo[0], hi[0]);
+        let span = hi[0] - lo[0];
+        assert!(slack < 1e-3 * span, "slack {slack} vs span {span}");
+        // Still wider than the coordinates' own rounding noise.
+        let ulp = f64::EPSILON * hi[0];
+        assert!(slack > 4.0 * ulp, "slack {slack} vs ulp {ulp}");
+        let plane = |contact: ContactRegion| GroundPlane {
+            lo,
+            hi,
+            z_top: 0.0,
+            thickness: 35e-6,
+            nx: 5,
+            ny: 3,
+            contacts: vec![contact],
+            ..test_plane()
+        };
+        // A meaningful partial overlap (a quarter of the 2 mm contact,
+        // across the hi-x edge) meshes and builds.
+        let partial = ContactRegion::new(
+            [hi[0] - 0.5e-3, lo[1] + 2e-3],
+            [hi[0] + 1.5e-3, lo[1] + 4e-3],
+            [2, 2],
+            2.0,
+        );
+        let candidate = plane(partial);
+        let mesh = candidate.mesh().unwrap();
+        for edges in [mesh.x_edges(), mesh.y_edges()] {
+            assert!(edges.windows(2).all(|w| w[1] > w[0]), "{edges:?}");
+        }
+        let mut geometry = Geometry::new();
+        candidate.build_into(&mut geometry).unwrap();
+        // An ULP-sized sliver across the same edge is still a touch.
+        let below = hi[0] - 2.0 * ulp;
+        assert!(below < hi[0]);
+        let sliver = ContactRegion::new(
+            [below, lo[1] + 2e-3],
+            [below + 2e-3, lo[1] + 4e-3],
+            [2, 2],
+            2.0,
+        );
+        let error = plane(sliver).mesh().unwrap_err();
+        assert!(
+            matches!(error, PlaneError::ContactOutsideFootprint { .. }),
+            "{error}"
+        );
     }
 
     #[test]
