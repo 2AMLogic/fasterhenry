@@ -14,6 +14,14 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- Deck reader: `relx=` / `rely=` / `relz=` on a corner-point `G` statement
+  (issue #146), the documented offset (User's Guide §1.3.9), in every mode.
+  It is added to every node-reference, hole and contact coordinate on the
+  statement but not to the corner points, applies wherever it is written,
+  and a repeated key's last value wins. Previously rejected by name. Under
+  `--fasthenry-compat`, one empty coordinate field in a node reference
+  (`N1 (, 2, 0)`) now reads as 0 (before the offset) with a line-numbered
+  warning; natively it is still an error.
 - Deck reader: a line-numbered **warning** for a corner-point `G`
   statement's `hole point`, `hole circle`, `hole rect`, `contact rect` or
   `contact decay_rect` clause that lies **wholly outside** the plane's
