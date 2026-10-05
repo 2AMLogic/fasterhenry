@@ -131,6 +131,13 @@ cd fasterhenry
 /loom:sweep <issue>
 ```
 
+Merges into `main` are gated on CI: branch protection requires every job in
+`.github/workflows/ci.yml` (clean-room, cargo-deny, cargo-about, the three
+`Rust` legs, and `Package`) to pass. If a PR's checks went green before `main`
+moved, re-run them rather than merging through; `merge-pr.sh` refuses
+required checks older than the base tip. Adding or renaming a CI job means
+updating the required-checks list on `main` to match.
+
 ## License
 
 MIT — see `LICENSE`.
