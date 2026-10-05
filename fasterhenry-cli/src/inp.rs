@@ -2212,10 +2212,6 @@ impl<'a> PlaneStatement<'a> {
         }
     }
 
-    /// Checks the statement's geometry — three corners of an axis-aligned
-    /// rectangle parallel to xy, both cell counts, a positive thickness,
-    /// and a conductivity — and returns the frame the plane's features are
-    /// placed against.
     /// Whether, under `--fasthenry-compat`, this `file=NONE` plane gives no
     /// initial grid at all (no `seg1`/`seg2`, no `contact initial_grid`) and
     /// so meshes as a single root cell (issue #143).
@@ -2226,6 +2222,10 @@ impl<'a> PlaneStatement<'a> {
             && self.initial_grid.is_none()
     }
 
+    /// Checks the statement's geometry — three corners of an axis-aligned
+    /// rectangle parallel to xy, both cell counts, a positive thickness,
+    /// and a conductivity — and returns the frame the plane's features are
+    /// placed against.
     fn frame(&self) -> Result<PlaneFrame<'a>, ParseError> {
         let (head, line) = (self.head, self.line);
         let mut points = [[0.0f64; 3]; 3];
