@@ -117,6 +117,10 @@ def compare(fh_names, fh_sweeps, our_names, our_sweeps):
     # publish a wrong agreement number.
     if not fh_names or sorted(fh_names) != sorted(our_names):
         raise ValueError(f"port names differ: {fh_names} vs {our_names}")
+    # Duplicate labels cannot identify a port: `.index` would map every
+    # repeat to the first one and hide differences in the others.
+    if len(set(fh_names)) != len(fh_names):
+        raise ValueError(f"duplicate port names: {fh_names}")
     perm = [our_names.index(n) for n in fh_names]
     n = len(perm)
     out = []
@@ -144,11 +148,20 @@ def first_error_line(stderr):
     return lines[-1].strip() if lines else ""
 
 
+def resolve_exe(path):
+    """Make a filesystem path absolute against the invoking directory, since
+    each tool runs in a temporary cwd. A bare command name is left alone so
+    PATH lookup still works."""
+    return os.path.abspath(path) if os.sep in path else path
+
+
 def one_deck(deck, args):
     deck = os.path.abspath(deck)
+    fasthenry = resolve_exe(args.fasthenry)
+    fasterhenry = resolve_exe(args.fasterhenry)
     row = {"deck": os.path.basename(deck)}
     with tempfile.TemporaryDirectory() as fh_dir:
-        rc, out, err, secs = run([args.fasthenry, deck], fh_dir, args.timeout)
+        rc, out, err, secs = run([fasthenry, deck], fh_dir, args.timeout)
         zc = os.path.join(fh_dir, "Zc.mat")
         if rc is None:
             row["fasthenry"] = "timeout"
@@ -164,7 +177,7 @@ def one_deck(deck, args):
                 row["fasthenry"] = f"unreadable Zc.mat ({e})"
     with tempfile.TemporaryDirectory() as our_dir:
         js = os.path.join(our_dir, "out.json")
-        cmd = [args.fasterhenry, "--fasthenry-compat", "--json", js, deck]
+        cmd = [fasterhenry, "--fasthenry-compat", "--json", js, deck]
         rc, _, err, secs = run(cmd, our_dir, args.timeout)
         if rc is None:
             row["fasterhenry"] = "timeout"
