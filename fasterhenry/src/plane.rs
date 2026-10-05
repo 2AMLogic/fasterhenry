@@ -586,6 +586,21 @@ impl PlaneMesh {
     }
 }
 
+/// The overlap, in metres, below which a contact region's clipped extent
+/// along one plane axis `lo … hi` is a *touch* rather than a region
+/// (issue #134): `1e-9` of the larger of the axis's span and its
+/// coordinate magnitudes. Scale-aware — a plane in any unit, or translated
+/// far from the origin, has rounding noise proportional to its own
+/// coordinates — and far below any refinement worth asking for.
+///
+/// [`GroundPlane::mesh`] rejects a contact whose overlap with the
+/// footprint is no wider than this on either axis as
+/// [`PlaneError::ContactOutsideFootprint`], the same as an exact touch.
+#[must_use]
+pub fn contact_slack(lo: f64, hi: f64) -> f64 {
+    1e-9 * (hi - lo).abs().max(lo.abs()).max(hi.abs())
+}
+
 /// The fewest uniform cells across `span` whose extent is no larger than
 /// `fine` — `ceil(span / fine)`, at least one.
 ///
@@ -860,7 +875,12 @@ impl GroundPlane {
                 let fine = (contact.hi[axis] - contact.lo[axis]) / contact.cells[axis] as f64;
                 let start = contact.lo[axis].max(self.lo[axis]);
                 let end = contact.hi[axis].min(self.hi[axis]);
-                if end <= start {
+                // An overlap no wider than the footprint's own rounding
+                // noise is a touch, not a region: a band that thin would
+                // lay down edges closer than a float can tell apart (a
+                // zero-length bar at assembly), so it is rejected exactly
+                // as an exact touch (`end == start`) is (issue #134).
+                if end - start <= contact_slack(self.lo[axis], self.hi[axis]) {
                     return Err(PlaneError::ContactOutsideFootprint {
                         lo: contact.lo,
                         hi: contact.hi,
@@ -2005,6 +2025,73 @@ mod tests {
             "the pins come from the band, not from the grading: {:?}",
             ungraded.x_edges()
         );
+    }
+
+    #[test]
+    /// A contact meeting the footprint only at an edge — exactly, or by a
+    /// rounding-sized overlap — is rejected deterministically on every
+    /// edge and axis, at any unit scale and for a translated plane, while
+    /// a genuinely small overlap still refines and builds (issue #134).
+    #[test]
+    fn touching_and_sliver_contacts_are_handled_deterministically() {
+        for (scale, offset) in [
+            (1.0, [0.0, 0.0]),
+            (1e3, [0.0, 0.0]),
+            (1e-3, [0.0, 0.0]),
+            (1.0, [5.0, -3.0]),
+        ] {
+            let lo = [offset[0], offset[1]];
+            let hi = [offset[0] + 10e-3 * scale, offset[1] + 6e-3 * scale];
+            let plane = |contact: ContactRegion| GroundPlane {
+                lo,
+                hi,
+                z_top: 0.0,
+                thickness: 35e-6 * scale,
+                nx: 5,
+                ny: 3,
+                contacts: vec![contact],
+                ..test_plane()
+            };
+            let span = [hi[0] - lo[0], hi[1] - lo[1]];
+            let width = [2e-3 * scale, 2e-3 * scale];
+            // A rectangle on the far side of `edge` of `axis`, reaching
+            // `overlap` back across it; `upper` picks the hi edge.
+            let region = |axis: usize, upper: bool, overlap: f64| {
+                let mut a = [lo[0] + 3e-3 * scale, lo[1] + 2e-3 * scale];
+                let mut b = [a[0] + width[0], a[1] + width[1]];
+                if upper {
+                    a[axis] = hi[axis] - overlap;
+                } else {
+                    a[axis] = lo[axis] + overlap - width[axis];
+                }
+                b[axis] = a[axis] + width[axis];
+                ContactRegion::new(a, b, [2, 2], 2.0)
+            };
+            for axis in 0..2 {
+                for upper in [false, true] {
+                    // Exact touch, rounding noise, and one representable
+                    // neighbour either way of the edge.
+                    let edge = if upper { hi[axis] } else { lo[axis] };
+                    let noise = 4.0 * f64::EPSILON * edge.abs().max(span[axis]);
+                    for overlap in [0.0, noise / 2.0, noise] {
+                        let error = plane(region(axis, upper, overlap)).mesh().unwrap_err();
+                        assert!(
+                            matches!(error, PlaneError::ContactOutsideFootprint { .. }),
+                            "scale {scale} offset {offset:?} axis {axis} upper {upper} overlap {overlap}: {error}"
+                        );
+                    }
+                    // A genuinely small refinement survives.
+                    let overlap = 1e-3 * span[axis];
+                    let candidate = plane(region(axis, upper, overlap));
+                    let mesh = candidate.mesh().unwrap();
+                    for edges in [mesh.x_edges(), mesh.y_edges()] {
+                        assert!(edges.windows(2).all(|w| w[1] > w[0]), "{edges:?}");
+                    }
+                    let mut geometry = Geometry::new();
+                    candidate.build_into(&mut geometry).unwrap();
+                }
+            }
+        }
     }
 
     #[test]

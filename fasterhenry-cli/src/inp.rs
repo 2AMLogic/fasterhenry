@@ -517,7 +517,7 @@ use std::collections::HashMap;
 use fasterhenry::coupling::Coupling;
 use fasterhenry::geometry::{Geometry, Node, NodeId, Segment, SegmentDef, SegmentError};
 use fasterhenry::mesh::Port;
-use fasterhenry::plane::{ContactRegion, Equipotential, GroundPlane, Hole};
+use fasterhenry::plane::{contact_slack, ContactRegion, Equipotential, GroundPlane, Hole};
 use fasterhenry::solve::{AxisGrading, Discretization, Subdivision};
 
 /// A parsed `.inp` deck: everything [`fasterhenry::solve::solve`] needs.
@@ -2240,6 +2240,10 @@ impl<'a> PlaneStatement<'a> {
                 ));
                 continue;
             }
+            if frame.touches_rect(lo, hi) {
+                warnings.push(frame.touch_warning(clause_line, "'contact rect'", lo, hi));
+                continue;
+            }
             contacts.push(ContactRegion::new(lo, hi, [2, 2], 2.0));
         }
         for (what, decay, clause_line) in contact_decays {
@@ -2254,6 +2258,10 @@ impl<'a> PlaneStatement<'a> {
                     ),
                     "refines nothing and is ignored",
                 ));
+                continue;
+            }
+            if frame.touches_rect(region.lo, region.hi) {
+                warnings.push(frame.touch_warning(clause_line, what, region.lo, region.hi));
                 continue;
             }
             contacts.push(region);
@@ -2436,6 +2444,36 @@ impl PlaneFrame<'_> {
         (0..2).any(|axis| {
             hi[axis] < self.lo[axis] - self.tolerance || lo[axis] > self.hi[axis] + self.tolerance
         })
+    }
+
+    /// Whether the rectangle `lo`…`hi` meets the plane's footprint only at its
+    /// boundary: its overlap with the footprint, on some axis, is no wider
+    /// than [`fasterhenry::plane::contact_slack`] — an exact touch or a
+    /// rounding-sized overlap, which carries no two-dimensional region to
+    /// refine (issue #134). Call after `misses_rect`.
+    fn touches_rect(&self, lo: [f64; 2], hi: [f64; 2]) -> bool {
+        (0..2).any(|axis| {
+            hi[axis].min(self.hi[axis]) - lo[axis].max(self.lo[axis])
+                <= contact_slack(self.lo[axis], self.hi[axis])
+        })
+    }
+
+    /// The warning for a contact clause on `clause_line` that only touches
+    /// this plane's footprint boundary (issue #134): it is dropped.
+    fn touch_warning(
+        &self,
+        clause_line: usize,
+        what: &str,
+        lo: [f64; 2],
+        hi: [f64; 2],
+    ) -> ParseWarning {
+        ParseWarning {
+            line: clause_line,
+            message: format!(
+                "{what} spanning ({}, {}) to ({}, {}) metres only touches the boundary of ground plane '{}' (x {} to {}, y {} to {} metres) without a meaningful overlap, so it refines nothing and is ignored; check its coordinates and the deck's .units",
+                lo[0], lo[1], hi[0], hi[1], self.head, self.lo[0], self.hi[0], self.lo[1], self.hi[1]
+            ),
+        }
     }
 
     /// Whether the closed disc of `radius` about `centre` is **wholly
@@ -2677,8 +2715,10 @@ impl PlaneFrame<'_> {
         // other locus has its ends on the footprint): such a region
         // refines no cell of this plane, so it is dropped rather than
         // handed to the library, which rejects a region off the plane.
-        let off_plane = (0..2)
-            .any(|axis| region.1[axis].min(self.hi[axis]) <= region.0[axis].max(self.lo[axis]));
+        let off_plane = (0..2).any(|axis| {
+            region.1[axis].min(self.hi[axis]) - region.0[axis].max(self.lo[axis])
+                <= contact_slack(self.lo[axis], self.hi[axis])
+        });
         (!already_met && !off_plane)
             .then(|| ContactRegion::new(region.0, region.1, region_cells, 2.0))
     }
@@ -7429,6 +7469,54 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             // Dropped, not handed to the library (which would reject it):
             // the deck is the plane's own.
             assert_eq!(deck, bare_footprint_deck(), "{clause}");
+        }
+    }
+
+    // ---- Issue #134: a contact rectangle meeting the footprint only at
+    // its boundary — exactly, or by a rounding-sized overlap — warns on its
+    // own line and is dropped, instead of failing assembly on line 0.
+
+    #[test]
+    fn touching_and_sliver_contacts_warn_and_are_dropped() {
+        for clause in [
+            // Exact touch: seven-value, six-value, decay_rect; both axes,
+            // both edges.
+            "+ contact rect (11, 3, 0, 2, 2, 1, 1)",
+            "+ contact rect (10, 2, 0, 12, 4, 0)",
+            "+ contact rect (-1, 3, 0, 2, 2, 1, 1)",
+            "+ contact rect (-2, 2, 0, 0, 4, 0)",
+            "+ contact rect (5, 7, 0, 2, 2, 1, 1)",
+            "+ contact rect (5, -1, 0, 2, 2, 1, 1)",
+            "+ contact decay_rect (11, 3, 0, 2, 2, 1, 1, -1, -1)",
+            "+ contact decay_rect (5, 7, 0, 2, 2, 1, 1, -1, -1)",
+            // Rounding-sized overlap: 11e-3 - 1e-3 is just below 10e-3.
+            "+ contact rect (11.000000000000002, 3, 0, 2, 2, 1, 1)",
+            "+ contact rect (9.999999999999998, 2, 0, 12, 4, 0)",
+            "+ contact rect (-0.9999999999999998, 3, 0, 2, 2, 1, 1)",
+            "+ contact decay_rect (5, 6.999999999999999, 0, 2, 2, 1, 1, -1, -1)",
+        ] {
+            let (deck, warnings) = parse_warned(&footprint_deck(clause));
+            assert_eq!(warnings.len(), 1, "{clause}: {warnings:?}");
+            assert_eq!(warnings[0].line, 5, "{clause}");
+            assert!(
+                warnings[0].message.contains("only touches the boundary"),
+                "{clause}: {}",
+                warnings[0]
+            );
+            assert_eq!(deck, bare_footprint_deck(), "{clause}");
+        }
+    }
+
+    #[test]
+    fn real_partial_overlap_contacts_still_refine() {
+        for clause in [
+            "+ contact rect (10, 3, 0, 2, 2, 1, 1)",
+            "+ contact rect (9.5, 2, 0, 12, 4, 0)",
+            "+ contact decay_rect (5, 6, 0, 2, 2, 1, 1, -1, -1)",
+        ] {
+            let (deck, warnings) = parse_warned(&footprint_deck(clause));
+            assert!(warnings.is_empty(), "{clause}: {warnings:?}");
+            assert_ne!(deck, bare_footprint_deck(), "{clause}");
         }
     }
 
