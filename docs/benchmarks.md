@@ -290,12 +290,13 @@ impedance matrix, ports matched by name, at every frequency both report:
 
 | deck | filaments | FastHenry | fasterhenry (28 thr) | fasterhenry (1 thr) | rel. err, lowest f | worst rel. err |
 |---|---|---|---|---|---|---|
-| pin-con2seg | 30 | 0.09 s | 0.02 s | 0.01 s | 2.7e-6 (10 Hz) | 1.2e-3 (21.5 MHz) |
-| pin-con7 | 735 | 5.7 s | 0.46 s | 3.5 s | 4.2e-7 (1 Hz) | 1.2e-2 (1 THz) |
-| pin-connect | 2625 | 5.1 s | 0.84 s | 10.0 s | 4.3e-7 (1 Hz) | 4.3e-7 (one frequency) |
+| pin-con2seg | 30 | 0.09 s | 0.016 s | 0.011 s | 2.7e-6 (10 Hz) | 1.2e-3 (21.5 MHz) |
+| pin-con7 | 735 | 6.2 s | 0.33 s | 4.1 s | 4.2e-7 (1 Hz) | 1.2e-2 (1 THz) |
+| pin-connect | 2625 | 5.3 s | 1.1 s | 10.1 s | 4.3e-7 (1 Hz) | 4.3e-7 (one frequency) |
 
-The pattern matches "Speed" above: 6–12× faster wall-clock on this host,
-from parallelism; slower per thread at 2.6 k filaments. The worst-case
+The pattern matches "Speed" above: about 5–19× faster wall-clock on this host
+(it is under background load, and the ratio moved by up to 1.5× between
+runs), from parallelism; slower per thread at 2.6 k filaments. The worst-case
 1.2e-2 at 1 THz on pin-con7 has not been attributed yet. FastHenry ran its
 default multipole + GMRES path, and a direct-solve rerun (`-sludecomp
 -aoff`) would separate its approximation error from ours.

@@ -35,7 +35,7 @@ import tempfile
 import time
 
 _HEADER = re.compile(r"Impedance matrix for frequency = (\S+) (\d+) x (\d+)")
-_ROW = re.compile(r"Row (\d+):\s+(\S+)\s+to\s+(\S+)(?:,\s+port name:\s+(\S+))?")
+_ROW = re.compile(r"Row (\d+):\s+([^\s,]+)\s+to\s+([^\s,]+)(?:,\s+port name:\s+(\S+))?")
 _NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 
 
@@ -113,22 +113,22 @@ def rel_frobenius(ours, ref):
 def compare(fh_names, fh_sweeps, our_names, our_sweeps):
     """Per-frequency relative error, ports aligned by name (FastHenry lists
     them in its own order). Returns [(freq, err)] or raises ValueError."""
-    if fh_names and sorted(fh_names) == sorted(our_names):
-        perm = [our_names.index(n) for n in fh_names]
-    elif len(fh_names or our_names) == len(our_names):
-        perm = list(range(len(our_names)))
-    else:
-        raise ValueError(f"port sets differ: {fh_names} vs {our_names}")
-    ours_by_f = {round(math.log10(f), 6): z for f, z in our_sweeps}
+    # Never fall back to positional matching: a silent misalignment would
+    # publish a wrong agreement number.
+    if not fh_names or sorted(fh_names) != sorted(our_names):
+        raise ValueError(f"port names differ: {fh_names} vs {our_names}")
+    perm = [our_names.index(n) for n in fh_names]
+    n = len(perm)
     out = []
-    for f, ref in fh_sweeps:
-        z = ours_by_f.get(round(math.log10(f), 6))
-        if z is None:
-            # FastHenry prints frequencies to ~6 significant digits.
-            near = min(our_sweeps, key=lambda s: abs(math.log10(s[0] / f)))
-            if abs(near[0] / f - 1) > 1e-4:
-                continue
-            z = near[1]
+    for f, ref in sorted(fh_sweeps, key=lambda s: s[0]):
+        if len(ref) != n or any(len(r) != n for r in ref):
+            raise ValueError(f"FastHenry matrix at {f:g} Hz is not {n} x {n}")
+        # FastHenry prints frequencies to ~6 significant digits; match on
+        # relative distance (absolute at 0 Hz, the DC solve).
+        near = min(our_sweeps, key=lambda s: abs(s[0] - f))
+        if abs(near[0] - f) > 1e-4 * max(abs(f), 1e-12):
+            continue
+        z = near[1]
         aligned = [[z[perm[r]][perm[c]] for c in range(len(perm))] for r in range(len(perm))]
         out.append((f, rel_frobenius(aligned, ref)))
     if not out:
@@ -158,7 +158,10 @@ def one_deck(deck, args):
             row["fasthenry"] = "ok"
             row["fasthenry_s"] = secs
             row["fasthenry_filaments"] = fasthenry_filaments(out + err)
-            fh_names, fh_sweeps = parse_fasthenry_zc(zc)
+            try:
+                fh_names, fh_sweeps = parse_fasthenry_zc(zc)
+            except (ValueError, IndexError) as e:
+                row["fasthenry"] = f"unreadable Zc.mat ({e})"
     with tempfile.TemporaryDirectory() as our_dir:
         js = os.path.join(our_dir, "out.json")
         cmd = [args.fasterhenry, "--fasthenry-compat", "--json", js, deck]
