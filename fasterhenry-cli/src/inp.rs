@@ -30,6 +30,8 @@
 //! Lines beginning with `*` are comments; a line beginning with `+`
 //! continues the previous line. Directives are case-insensitive; node and
 //! element names are case-sensitive alphanumeric tokens (`N1`, `Ea3`).
+//! Whitespace around `=` is insignificant: `x = 1`, `x= 1` and `x =1` read
+//! as `x=1` (a dangling `x=` with no value is still an error).
 //! Conductivity is given either as `sigma=` or as its reciprocal, the
 //! resistivity `rho=` (which must be positive); naming both on one line —
 //! continuation lines included — is an error, while a per-line value in
@@ -770,6 +772,33 @@ fn parse_field(token: &str, line: usize) -> Result<(String, String), ParseError>
         return Err(err(line, format!("empty side of '{token}'")));
     }
     Ok((key.to_ascii_lowercase(), value.to_string()))
+}
+
+/// Rejoins `<field>=<value>` assignments that whitespace split apart:
+/// `k = v`, `k= v` and `k =v` all become the one token `k=v`, as on `G`
+/// lines (issue #141). The head word (`tokens[0]`) is never joined. A
+/// dangling `k=` with no value before the end of the statement is left as
+/// it is, so [`parse_field`] still reports it by name; so is a `k=` followed
+/// by another assignment (`x= y=0`), rather than swallowing it.
+fn join_assignments(tokens: &[&str]) -> Vec<String> {
+    let mut joined: Vec<String> = Vec::with_capacity(tokens.len());
+    for (index, &token) in tokens.iter().enumerate() {
+        if index >= 2 {
+            let last = joined.last_mut().expect("the head word was pushed");
+            // `k=` waiting for its value, and this token is a plain value.
+            if last.ends_with('=') && last.matches('=').count() == 1 && !token.contains('=') {
+                last.push_str(token);
+                continue;
+            }
+            // A key waiting for its `=` (`=` alone or `=v`).
+            if token.starts_with('=') && !last.contains('=') {
+                last.push_str(token);
+                continue;
+            }
+        }
+        joined.push(token.to_string());
+    }
+    joined
 }
 
 fn parse_number(text: &str, line: usize) -> Result<f64, ParseError> {
@@ -3061,6 +3090,20 @@ impl DeckBuilder {
         // read before `.units` is rejected by the method that reads it.
         let factor = self.unit.unwrap_or(1.0);
 
+        // Whitespace around `=` is insignificant on every `<field>=<value>`
+        // line (issue #141); `G` lines do the same in their own scanner.
+        let joined;
+        let joined_refs: Vec<&str>;
+        let tokens: &[&str] = if matches!(keyword.as_str(), ".default" | ".freq")
+            || matches!(keyword.chars().next(), Some('n' | 'e'))
+        {
+            joined = join_assignments(tokens);
+            joined_refs = joined.iter().map(String::as_str).collect();
+            &joined_refs
+        } else {
+            tokens
+        };
+
         if let Some(directive) = keyword.strip_prefix('.') {
             return self.apply_directive(directive, tokens, factor, number);
         }
@@ -4290,6 +4333,64 @@ e1 n1 n2 nwinc=3
             deck.discretization,
             Discretization::Uniform(Subdivision::new(3, 2))
         );
+    }
+
+    /// Whitespace around `=` is insignificant on `N`, `E`, `.default` and
+    /// `.freq` lines, continuations included, in any spacing (issue #141).
+    #[test]
+    fn whitespace_around_equals_is_insignificant() {
+        let unspaced = parse_ok(
+            "\
+.units m
+.default h=0.01
+N1 x=0 y=0 z=0
+N2 x=2 y=0 z=0
+E1 N1 N2 w=0.01 sigma=2.9e7
+.external N1 N2
+.freq fmin=0 fmax=0 ndec=1
+.end
+",
+        );
+        let spaced = parse_ok(
+            "\
+.units m
+.default h = 0.01
+N1 x=0 y =0 z= 0
+N2 x = 2 y = 0 z = 0
+E1 N1 N2 w\t=\t0.01
++ sigma =2.9e7
+.external N1 N2
+.freq fmin = 0 fmax= 0 ndec =1
+.end
+",
+        );
+        assert_eq!(spaced, unspaced);
+        // The reference deck: R = 2 / (2.9e7 · 1e-4) Ω at DC.
+        let result = fasterhenry::solve::solve(
+            &spaced.geometry,
+            &spaced.ports,
+            &spaced.discretization,
+            &spaced.frequencies,
+        )
+        .unwrap();
+        let resistance = result.impedance_ohm[0][(0, 0)].re;
+        let expected = 2.0 / (2.9e7 * 1e-4);
+        assert!(
+            (resistance - expected).abs() < expected * 1e-9,
+            "{resistance} vs {expected}"
+        );
+    }
+
+    /// A dangling `x=` with no value is still a line-numbered error naming
+    /// the field, whether it ends the line or another assignment follows.
+    #[test]
+    fn dangling_assignment_is_still_an_error() {
+        for line in ["N2 x= y=0 z=0", "N2 y=0 z=0 x =", "N2 y=0 z=0 x="] {
+            let deck = format!(".units m\nN1 x=0 y=0 z=0\n{line}\n.end\n");
+            let error = parse(&deck).unwrap_err();
+            assert_eq!(error.line, 3, "{line}: {error}");
+            assert!(error.message.contains("'x='"), "{line}: {error}");
+        }
     }
 
     #[test]
