@@ -2027,7 +2027,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// A contact meeting the footprint only at an edge — exactly, or by a
     /// rounding-sized overlap — is rejected deterministically on every
     /// edge and axis, at any unit scale and for a translated plane, while
