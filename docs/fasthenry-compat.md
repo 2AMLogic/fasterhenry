@@ -571,6 +571,8 @@ cell centre, a hole inside another hole, a contact the background mesh
 already meets — does not warn: those are legitimate decks, and "warn
 whenever the final mesh is unchanged" would be different semantics.
 
+**Touching contacts (issue #134).** A `contact rect` / `contact decay_rect` that meets the footprint only at its boundary — an exact touch, or an overlap no wider than `1e-9` of the larger of the plane axis's span and coordinate magnitude (`fasterhenry::plane::contact_slack`; scale-aware, not a fixed number of metres) — carries no two-dimensional region, and is treated exactly like a disjoint one: dropped with one line-numbered warning (`… only touches the boundary …`) on its own clause line. Before this, a rounding-sized overlap (`11e-3 - 1e-3` lands just below the plane edge) reached the mesher and failed assembly on line 0 with a zero-length segment. The library rejects the same overlaps as `PlaneError::ContactOutsideFootprint`; genuine partial overlaps still refine at the declared resolution. Holes keep their closed-boundary behaviour.
+
 Two consequences worth stating:
 
 - **A wholly-disjoint `contact rect` / `contact decay_rect` used to be an
