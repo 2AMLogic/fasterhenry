@@ -314,9 +314,14 @@
 //!   instead. A zero-length trace has no direction to refine across and is
 //!   an error naming `contact point` instead.
 //!
-//!   A trace **not parallel to x or y** is rejected by name, on the
-//!   statement's own line, and the rejection is a decision rather than
-//!   deferred work (see `docs/fasthenry-compat.md`, "Decision: a diagonal
+//!   A trace **not parallel to x or y** is, under `--fasthenry-compat`
+//!   only, approximated (issue #157): its bounding box, padded by `3w/2` on
+//!   every side, is refined like a `contact rect` with cells
+//!   `(w/2)·scale_factor^min(|tan θ|, |cot θ|)` (θ in the plane's frame, so
+//!   30° and 60° mirror each other), with a line-numbered warning that this
+//!   approximates FastHenry's staircase refinement. Natively it is rejected
+//!   by name, on the statement's own line, and the rejection is a decision
+//!   rather than deferred work (see `docs/fasthenry-compat.md`, "Decision: a diagonal
 //!   `contact trace` is rejected"): the same memo says the cells under a
 //!   diagonal trace are magnified by `scale_factor^|tan θ|` (θ from the x
 //!   axis) and, a paragraph earlier, that the magnification runs from 1 to
@@ -386,7 +391,8 @@
 //!   quietly approximated by one of those. Unlike the user-defined holes,
 //!   these have a public meaning, and each is rejected for its own stated
 //!   reason:
-//!     * `contact trace` **not parallel to x or y** — see its own entry
+//!     * `contact trace` **not parallel to x or y** (natively; compat
+//!       approximates it, issue #157) — see its own entry
 //!       above (issue #110: the public description of the diagonal case
 //!       does not determine the cell size);
 //! * **`contact circle` is rejected by name as well — and it is not a
@@ -1407,8 +1413,15 @@ struct RefineTrace {
     ends: [[f64; 3]; 2],
     /// `trace_width`, metres.
     width: f64,
-    /// The axis the trace runs along: 0 for x, 1 for y.
+    /// The axis the trace runs along: 0 for x, 1 for y. Meaningless for a
+    /// [`diagonal`](Self::diagonal) trace.
     along: usize,
+    /// A trace not parallel to x or y, read only under
+    /// `--fasthenry-compat` (issue #157): refined as its padded bounding
+    /// box by [`PlaneFrame::diagonal_trace_contact`].
+    diagonal: bool,
+    /// `scale_factor` (dimensionless); used only by a diagonal trace.
+    scale: f64,
 }
 
 impl RefineTrace {
@@ -1462,6 +1475,7 @@ fn refine_trace_values(
     what: &str,
     unit: f64,
     line: usize,
+    compat: bool,
 ) -> Result<RefineTrace, ParseError> {
     if values.len() != 8 {
         return Err(err(
@@ -1503,20 +1517,30 @@ fn refine_trace_values(
             ),
         ));
     }
+    let mut diagonal = false;
     let along = if dy <= 1e-9 * dx {
         0
     } else if dx <= 1e-9 * dy {
         1
+    } else if compat {
+        diagonal = true;
+        0
     } else {
         return Err(err(
             line,
             format!(
-                "{what} from ({}, {}) to ({}, {}) metres is not parallel to x or y, and a diagonal 'contact trace' is not supported: the public description says the cells under it are magnified by scale_factor^|tan θ| yet also that the magnification runs from 1 to scale_factor as θ goes from 90° to 45°, which disagree past 45°, and it does not say where a diagonal trace's refining lines go or what cell they ask for along the trace, so this reader will not guess the cell size. Refine under it explicitly with 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' — a diagonal line refines its bounding box to the cell you choose (see docs/fasthenry-compat.md)",
+                "{what} from ({}, {}) to ({}, {}) metres is not parallel to x or y, and a diagonal 'contact trace' is not supported (natively; --fasthenry-compat approximates it by its bounding box): the public description says the cells under it are magnified by scale_factor^|tan θ| yet also that the magnification runs from 1 to scale_factor as θ goes from 90° to 45°, which disagree past 45°, and it does not say where a diagonal trace's refining lines go or what cell they ask for along the trace, so the native reader will not guess the cell size. Refine under it explicitly with 'contact line (x0, y0, z0, x1, y1, z1, xcell, ycell)' — a diagonal line refines its bounding box to the cell you choose (see docs/fasthenry-compat.md)",
                 ends[0][0], ends[0][1], ends[1][0], ends[1][1]
             ),
         ));
     };
-    Ok(RefineTrace { ends, width, along })
+    Ok(RefineTrace {
+        ends,
+        width,
+        along,
+        diagonal,
+        scale,
+    })
 }
 
 /// The fewest uniform cells across `span` whose extent is no larger than
@@ -1990,8 +2014,20 @@ impl<'a> PlaneStatement<'a> {
                 self.contact_lines.push(("'contact line'", refine));
             }
             ("contact", "trace") => {
-                let mut trace = refine_trace_values(values, &what, unit, line)?;
+                let mut trace = refine_trace_values(values, &what, unit, line, self.compat)?;
                 trace.ends = trace.ends.map(|end| self.shift(end));
+                if trace.diagonal {
+                    self.warnings.push((
+                        self.clause_seq,
+                        ParseWarning {
+                            line: self.clause_line,
+                            message: format!(
+                                "ground plane '{}': diagonal 'contact trace' approximated by refining its padded bounding box (a staircase-free tensor-product refinement), not FastHenry's staircase refinement; cells (trace_width/2)·scale_factor^min(|tan θ|, |cot θ|)",
+                                self.head
+                            ),
+                        },
+                    ));
+                }
                 self.contact_traces.push(trace);
             }
             ("contact", "equiv_rect") => self.apply_contact_equiv_rect(what, name, values)?,
@@ -2872,11 +2908,41 @@ impl PlaneFrame<'_> {
         for end in trace.ends {
             self.on_plane("'contact trace'", end)?;
         }
+        if trace.diagonal {
+            return Ok(vec![self.diagonal_trace_contact(trace)?]);
+        }
         Ok(trace
             .lines(self.axis1)
             .iter()
             .filter_map(|refine| self.refine_region(refine))
             .collect())
+    }
+
+    /// The decay rectangle a diagonal `contact trace` stands for under
+    /// `--fasthenry-compat` (issue #157): the trace's bounding box padded by
+    /// `3w/2` on every side, with cells `(w/2)·s^min(|tan θ|, |cot θ|)` on
+    /// both axes — `θ` being the trace's angle in the plane's own frame.
+    /// `min(|tan θ|, |cot θ|)` is `min(|dx|,|dy|)/max(|dx|,|dy|)`, which is
+    /// the same whichever global axis the plane's x runs along and is
+    /// mirror-symmetric (30° and 60° agree). The cell is capped at half the
+    /// rectangle's narrower width so a large `scale_factor` cannot make the
+    /// decay law degenerate. No outward limit, like `contact rect`.
+    fn diagonal_trace_contact(&self, trace: &RefineTrace) -> Result<ContactRegion, ParseError> {
+        let (a, b) = (trace.ends[0], trace.ends[1]);
+        let span = [(b[0] - a[0]).abs(), (b[1] - a[1]).abs()];
+        let ratio = span[0].min(span[1]) / span[0].max(span[1]);
+        let pad = 3.0 * trace.width / 2.0;
+        let global_widths = [span[0] + 2.0 * pad, span[1] + 2.0 * pad];
+        let cell = (trace.width / 2.0 * trace.scale.powf(ratio))
+            .min(global_widths[0].min(global_widths[1]) / 2.0);
+        let decay = DecayRect {
+            centre: [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, a[2]],
+            // Plane coordinates (an involution of the global pair).
+            widths: self.plane_pair(global_widths),
+            cell: [cell, cell],
+            limit: [None, None],
+        };
+        self.decay_contact("'contact trace'", &decay)
     }
 
     /// The region a refinement line asks for: the segment's bounding box,
@@ -5390,6 +5456,11 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
 Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
 + thick=0.04 seg1=5 seg2=3";
 
+    /// `refine_deck` behind the title line compat mode treats as prose.
+    fn compat_refine_deck(clause: &str) -> String {
+        format!("title\n{}", refine_deck(clause))
+    }
+
     /// A deck whose plane is `REFINE_PLANE` carrying one extra clause.
     fn refine_deck(clause: &str) -> String {
         plane_deck(&format!("{REFINE_PLANE}\n+ {clause}"), "")
@@ -5976,6 +6047,60 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
                 );
             }
         }
+    }
+
+    /// Compat mode (issue #157): a diagonal `contact trace` is the
+    /// bounding-box `contact rect` padded by `3w/2`, with cells
+    /// `(w/2)·s^min(|tan θ|, |cot θ|)`. The 30° and 60° mirror images use
+    /// the same cell, and 45° uses the full `s`.
+    #[test]
+    fn compat_diagonal_contact_trace_is_its_padded_bounding_box() {
+        let (w, s) = (0.4f64, 4.0f64);
+        let a = 4.0 / 3.0f64.sqrt(); // 4·tan 30°
+        for (span, k) in [([4.0, a], a / 4.0), ([a, 4.0], a / 4.0), ([3.0, 3.0], 1.0)] {
+            let (x0, y0) = (2.0f64, 1.0f64);
+            let trace = parse_compat(&compat_refine_deck(&format!(
+                "contact trace ({x0}, {y0}, 0, {}, {}, 0, {w}, {s})",
+                x0 + span[0],
+                y0 + span[1]
+            )))
+            .unwrap();
+            let cell = w / 2.0 * s.powf(k);
+            let rect = parse_compat(&compat_refine_deck(&format!(
+                "contact rect ({}, {}, 0, {}, {}, {cell}, {cell})",
+                x0 + span[0] / 2.0,
+                y0 + span[1] / 2.0,
+                span[0] + 3.0 * w,
+                span[1] + 3.0 * w
+            )))
+            .unwrap();
+            assert_same_mesh(&trace, &rect);
+            let plain = parse_ok(&plane_deck(REFINE_PLANE, ""));
+            assert_ne!(trace.geometry, plain.geometry);
+        }
+    }
+
+    /// The compat diagonal trace warns on its own line, naming the
+    /// approximation; natively it stays rejected.
+    #[test]
+    fn compat_diagonal_contact_trace_warns_and_native_still_rejects() {
+        let text = refine_deck("contact trace (1, 1, 0, 5, 3, 0, 0.2, 2)");
+        let (_, warnings) = parse_compat_warned(&format!("title\n{text}"));
+        let warning = warnings
+            .iter()
+            .find(|w| w.message.contains("diagonal 'contact trace' approximated"))
+            .expect("a diagonal trace warns");
+        assert_eq!(warning.line, 4);
+        assert!(warning.message.contains("bounding box"));
+        let error = parse(&text).unwrap_err();
+        assert!(error
+            .message
+            .contains("a diagonal 'contact trace' is not supported"));
+        // An axis-aligned trace does not warn in compat mode.
+        let (_, warnings) = parse_compat_warned(&compat_refine_deck(
+            "contact trace (2, 3, 0, 8, 3, 0, 0.4, 1)",
+        ));
+        assert!(warnings.iter().all(|w| !w.message.contains("diagonal")));
     }
 
     /// Every `contact trace` value the reader cannot honour is rejected by

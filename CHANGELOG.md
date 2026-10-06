@@ -14,6 +14,11 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- Deck reader: under `--fasthenry-compat`, a diagonal `contact trace` is
+  accepted (issue #157) and refined as its bounding box padded by `3w/2`,
+  with cells `(w/2)·scale_factor^min(|tan θ|, |cot θ|)`, and a
+  line-numbered warning that this approximates FastHenry's staircase
+  refinement. Native mode still rejects it.
 - Deck reader: `relx=` / `rely=` / `relz=` on a corner-point `G` statement
   (issue #146), the documented offset (User's Guide §1.3.9), in every mode.
   It is added to every node-reference, hole and contact coordinate on the
