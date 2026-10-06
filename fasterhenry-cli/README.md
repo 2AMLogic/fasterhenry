@@ -42,7 +42,7 @@ Arguments:
 
 Options:
       --freq <FMIN_HZ> <FMAX_HZ> <NDEC>
-          Override the deck's sweep: min Hz, max Hz, points per decade (decade-sampled, log-spaced; FMIN == FMAX runs one frequency)
+          Override the deck's sweep: min Hz, max Hz, points per decade (decade-sampled, log-spaced; NDEC may be fractional but must be > 0; FMIN == FMAX runs one frequency)
 
       --json <OUT_JSON>
           Write the JSON result to this file instead of stdout

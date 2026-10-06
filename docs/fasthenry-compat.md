@@ -82,8 +82,14 @@ Status key:
 
 | Field | Status | Notes |
 |---|---|---|
-| `.freq fmin= fmax= ndec=` | Supported | Log-spaced decade sweep, `ndec` points per decade; see `frequency_sweep` and the module's `# Semantics` section for the exact formula. |
-| `fmin = fmax` | Supported | The single-frequency case, at any `ndec`. |
+| `.freq fmin= fmax= ndec=` | Supported | Log-spaced decade sweep, `ndec` points per decade: `fmin · 10^(k/ndec)` for `k = 0, 1, …` while `k/ndec ≤ log10(fmax/fmin)`; see `frequency_sweep` and the module's `# Semantics` section. The last point is the stepped value, never clamped to `fmax`; where `k/ndec` is a whole number the point is exactly `fmin · 10^q`. `--freq` uses the same rule. |
+| Fractional `ndec` (`ndec=0.5`, `ndec=2.5`) | Supported | Issue #154. The User's Guide says `ndec` need not be an integer, and every mode accepts any `ndec > 0`: `fmin=1e3 fmax=1e7 ndec=0.5` solves 1e3, 1e5, 1e7 Hz; `ndec=0.3` solves 1e3 and 2.15443e6 Hz; `ndec=0.2` solves 1e3 Hz alone. `inp.rs`'s `fractional_ndec_reproduces_the_measured_table` pins the measured table in both modes. |
+| `ndec < 0` | Error | A line-numbered error in every mode (FastHenry never terminates on one). |
+| `ndec = 0` | Error, warns under `--fasthenry-compat` | Native: a line-numbered error. Compat: reads as `ndec=0.01`, as FastHenry does, with a warning on the `.freq` line. |
+| `ndec` omitted | Error, warns under `--fasthenry-compat` | Native: a line-numbered error. Compat: reads as `ndec=1`, with a warning on the `.freq` line. |
+| Points just above `fmax` | Supported, differs | Native keeps a point only when it is ≤ `fmax` (up to rounding). FastHenry keeps it while ≤ 1.001 · `fmax`, so `fmin=1 fmax=9.995 ndec=1` solves 1 and 10 Hz there and 1 Hz here; `--fasthenry-compat` uses FastHenry's 0.1% slack. |
+| `fmin > fmax` | Error, warns under `--fasthenry-compat` | Native: a line-numbered error. Compat: FastHenry's empty sweep (or `fmin` alone when it is within the 0.1% slack of `fmax`), with a warning on the `.freq` line; an empty sweep leaves nothing to solve unless `--freq` overrides it. |
+| `fmin = fmax` | Supported | The single-frequency case, at any `ndec > 0`. |
 | `fmin = 0` | Supported, differs | Allowed only when `fmin = fmax` (the DC solve) — `log10(0)` is undefined, so a genuine log sweep starting at zero has no well-defined first point. Rejected with a line-numbered error rather than silently starting somewhere else. |
 
 ## `.equiv`
