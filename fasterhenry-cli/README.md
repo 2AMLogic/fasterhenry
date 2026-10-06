@@ -199,7 +199,7 @@ the statement itself, alongside `nhinc=` — naming both on one statement,
 continuation lines included, is a line-numbered error, and naming neither
 falls back to the `.default` conductivity. Every other documented plane
 parameter is either mapped or **rejected by name** with the statement's line
-number — `rh`, `segwid1`/`segwid2`, `relx`/`rely`/`relz`, `file`, and every
+number — `rh`, `relx`/`rely`/`relz`, `file`, and every
 hole or contact shape other than
 `rect`. Nothing on a `G` statement is silently ignored.
 `tests/data/plane_fasthenry.inp` and `tests/data/plane_extension.inp` are

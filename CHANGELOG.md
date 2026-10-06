@@ -19,6 +19,10 @@ breaking changes to the API or the command-line interface; patch releases
   with cells `(w/2)·scale_factor^min(|tan θ|, |cot θ|)`, and a
   line-numbered warning that this approximates FastHenry's staircase
   refinement. Native mode still rejects it.
+- `G` planes accept `segwid1=`/`segwid2=` (meshed planes): a per-bar width
+  cap on uniform planes, with a warning when above the spacing; on
+  nonuniform planes an error natively and ignored with a warning under
+  `--fasthenry-compat` (issue #155).
 - Deck reader: `relx=` / `rely=` / `relz=` on a corner-point `G` statement
   (issue #146), the documented offset (User's Guide §1.3.9), in every mode.
   It is added to every node-reference, hole and contact coordinate on the
@@ -199,7 +203,7 @@ breaking changes to the API or the command-line interface; patch releases
   planes is rejected rather than silently attaching to one.
   `nhinc=` is also accepted on the shorthand form.
   Every remaining documented plane parameter is rejected by name, with the
-  statement's line number and the alternative: `rh`, `segwid1`/`segwid2`,
+  statement's line number and the alternative: `rh`,
   `relx`/`rely`/`relz`, `file`, and every hole or contact shape other than `rect` (`point`, `circle`,
   `decay_rect`, `line`, `trace`, `connection`, the `initial_*`/`equiv_*`
   forms and the user-defined `user1…user7`) — nothing on a `G` statement is

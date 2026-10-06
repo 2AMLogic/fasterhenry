@@ -1056,6 +1056,27 @@ impl GroundPlane {
         &self,
         geometry: &mut Geometry,
     ) -> Result<Vec<Vec<Option<NodeId>>>, PlaneError> {
+        self.build_into_narrowed(geometry, [None, None])
+    }
+
+    /// As [`GroundPlane::build_into`], with an optional cap on the width of
+    /// the bars of each direction: `max_width[0]` caps the x-directed bars
+    /// and `max_width[1]` the y-directed ones. A bar's width is
+    /// `min(cap, its cell's extent across)`, so a cap above the cell
+    /// spacing changes nothing; the mesh, nodes and bar count are
+    /// unchanged. This is the meshed-plane (narrowed-bar) form of a uniform
+    /// plane.
+    ///
+    /// # Errors
+    ///
+    /// See [`PlaneError`]; a non-positive cap is rejected by the geometry
+    /// builder as a bad segment width.
+    pub fn build_into_narrowed(
+        &self,
+        geometry: &mut Geometry,
+        max_width: [Option<f64>; 2],
+    ) -> Result<Vec<Vec<Option<NodeId>>>, PlaneError> {
+        let cap = |axis: usize, width: f64| max_width[axis].map_or(width, |cap| cap.min(width));
         let mesh = self.mesh()?;
         let (nx, ny) = (mesh.nx(), mesh.ny());
         let ties = self.ties(&mesh);
@@ -1099,7 +1120,7 @@ impl GroundPlane {
                         geometry.add_segment(SegmentDef::new(
                             here,
                             right,
-                            mesh.dy(j),
+                            cap(0, mesh.dy(j)),
                             self.thickness,
                             self.sigma,
                         ))?;
@@ -1111,7 +1132,7 @@ impl GroundPlane {
                         geometry.add_segment(SegmentDef::new(
                             here,
                             up,
-                            mesh.dx(i),
+                            cap(1, mesh.dx(i)),
                             self.thickness,
                             self.sigma,
                         ))?;
