@@ -326,6 +326,21 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader: **node names are case-insensitive** (issue #156), as the
+  User's Guide documents (§1.1, §1.3), in every mode and every position —
+  node and in-plane node declarations, `E` endpoints, `.external` and
+  `.equiv`. This reverses the earlier case-sensitive decision: a deck that
+  declared both `N1` and `n1` now gets a line-numbered duplicate-definition
+  error naming both spellings, instead of two nodes. A port's default
+  `<+>/<->` label is now lowercased (an explicit label is kept as written).
+  `.equiv` now implements the documented **pseudonyms** (§1.3.7): a name
+  not yet defined becomes a pseudonym for the list's first defined node,
+  usable afterwards as an endpoint or in `.external`; a list with no
+  defined name is an error (`no defined node in .equiv`), and declaring a
+  node under a pseudonym's name is a duplicate error. Previously every
+  `.equiv` name had to be defined already. Under `--fasthenry-compat`,
+  `.equiv x x` (naming one node twice) is a warning and a no-op; natively
+  it is still an error.
 - Deck reader: a corner-point `G` statement's `contact rect` or `contact
   decay_rect` wholly outside the plane's footprint is no longer a plane
   assembly error on line 0 ("contact region … lies outside the plane
