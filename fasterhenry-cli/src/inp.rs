@@ -6090,7 +6090,7 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             .iter()
             .find(|w| w.message.contains("diagonal 'contact trace' approximated"))
             .expect("a diagonal trace warns");
-        assert_eq!(warning.line, 4);
+        assert_eq!(warning.line, 6, "the clause's own physical line");
         assert!(warning.message.contains("bounding box"));
         let error = parse(&text).unwrap_err();
         assert!(error
