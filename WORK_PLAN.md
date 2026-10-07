@@ -4,47 +4,47 @@ Prioritized roadmap of upcoming work, maintained by the Guide role.
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
-## Urgent
-
-*No urgent issues.*
-
-## Ready
-
 Released: **0.1.0** and **0.1.1** on crates.io (2026-09-27). Current
-milestone: **0.2.0 — drop-in FastHenry replacement** (epic #76). #69
-(FastHenry `G` ground-plane syntax) is merged. Remaining, in priority
-order:
+milestone: **0.2.0 — drop-in FastHenry replacement** (epic #76). The deck
+reader, drop-in CLI mode, compat mode and the `cargo-deny` license gate have
+merged; remaining work is the compatibility long tail below.
 
-- **#73**: drop-in CLI mode (`fasterhenry deck.inp` writes `Zc.mat`)
-- **#75**: `cargo-deny` license allowlist gate in CI
-- **#80**: plane hole/contact shapes the plane model cannot represent yet
-- **#83** (triage): compatibility mode for third-party decks (implicit
-  first-line title)
+## Operator Attention: Merge-Risk Holds
+
+- **#160**: chore(tooling): update Loom 0.19.740 and Repo Skills 0.19.8 (conflicting; touches merge/permission tooling)
+- **#159**: docs: repo hygiene pass 2026-10-05 (benchmark figures need human review)
+
+## Ready (`loom:issue`, PR open)
+
+Each has an implementing PR in review:
+
+- **#156**: Deck reader: case-insensitive node names and `.equiv` pseudonyms (PR #164)
+- **#155**: Deck reader: `segwid1`/`segwid2` meshed planes (PR #162)
+- **#154**: Deck reader: fractional `.freq` ndec, compat sweep edge cases (PR #161)
+- **#145**: Compat: clamp a contact cell at or above the rectangle width (PR #152)
+- **#144**: Compat: `.units` spellings, missing and repeated `.units` (PR #153)
+- **#143**: Compat: `file=NONE` plane with no initial grid is a single root cell (PR #151)
 
 ## In Progress
 
-- **#70** — `rho=` and the full `.units` list (PR #82: changes requested, merge conflict)
-- **#71** — `rw`/`rh` filament ratios, `wx`/`wy`/`wz` width direction (PR #85: in review)
-- **#72** — format audit + compatibility table (PR #84: changes requested, merge conflict)
+*None claimed (`loom:building`).*
 
-## Proposed
+## Blocked / Operator-owned
 
-*No proposed issues.*
+- **#74**: real-deck corpus comparison against FastHenry (operator-run; head-to-head tooling merged in PR #147)
+- **#48**: README fleet burndown embed (blocked on 2AMLogic/2am#1088)
+- **#38**: adopt Renovate dependency security policy (open PR)
+- **#16**: Champion merge-risk hold digest (tracking issue, not a work item)
 
 ## Epics
 
-- **#76**: 0.2.0 — drop-in FastHenry replacement. Done: #69. In progress:
-  #70, #71, #72. Next: #73, #75. Operator-run: #74 (real-deck corpus,
-  blocked by #69–#72), #35 (required status checks).
-- **#6**: M0 → release. All four phases have shipped (dense core,
-  physics completeness, pFFT acceleration, crates.io release #9); open
-  only as an operator-owned tracking epic.
+- **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; compatibility follow-ups above are in review.
 
 ## Backlog Balance
 
 | Tier | Count |
 |------|-------|
-| Tier 1 (goal-advancing) | 6 (#6, #70, #71, #72, #73, #76) |
-| Tier 2 (goal-supporting) | 2 (#74, #75) |
+| Tier 1 (goal-advancing) | 6 (#143–#145, #154–#156) |
+| Tier 2 (goal-supporting) | 1 (#74) |
 | Tier 3 (maintenance) | 0 |
-| Unlabelled / triage | 4 (#16, #48 blocked; #80, #83) |
+| Unlabelled / triage | 2 (#16, #48, both blocked) |
