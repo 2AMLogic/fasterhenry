@@ -5,6 +5,8 @@
 //! the explicit `fasterhenry run <deck.inp | problem.json>`, which writes
 //! one only when `--zc-mat` asks for it. See `--help`.
 
+#![forbid(unsafe_code)]
+
 use fasterhenry_cli::cli::{Invocation, RunArgs};
 use fasterhenry_cli::inp::ParseOptions;
 use fasterhenry_cli::spice::write_spice_subckt;

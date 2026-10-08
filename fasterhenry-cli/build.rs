@@ -1,6 +1,8 @@
 // Bakes the source revision into `--version` via FASTERHENRY_GIT_DESCRIBE.
 // Falls back to "unknown" where git is absent (a crates.io tarball build),
 // so the version string stays deterministic there.
+#![forbid(unsafe_code)]
+
 use std::process::Command;
 
 fn describe() -> String {
