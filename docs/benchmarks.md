@@ -34,9 +34,11 @@ contaminates nothing. CI never invokes it.
 Reading it honestly:
 
 - **Wall clock on a many-core machine, fasterhenry's dense path beats
-  FastHenry's multipole on every completed deck** — 3× at small sizes,
-  ~1.2× at 20 k filaments, crossover around 30–50 k where neither
-  finishes comfortably.
+  FastHenry's multipole on every completed deck except the 1 000-filament
+  serpentine, where the two are within noise** (73 ms vs 69 ms) —
+  1.6–3× at a few hundred filaments or fewer, ~2.2× at 5 k, ~1.2× at
+  20 k filaments, crossover around 30–50 k where neither finishes
+  comfortably.
 - **Per thread, FastHenry's multipole is far ahead at scale** (14× at
   20 k filaments single-threaded). Our dense wall-clock advantage is
   parallelism + SIMD + a blocked LU; it is not an algorithmic win.
