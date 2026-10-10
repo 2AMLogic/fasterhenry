@@ -28,8 +28,10 @@
 //! | `.end` | End of deck (required) |
 //!
 //! Lines beginning with `*` are comments; a line beginning with `+`
-//! continues the previous line. Directives are case-insensitive; node and
-//! element names are case-sensitive alphanumeric tokens (`N1`, `Ea3`).
+//! continues the previous line. Directives are case-insensitive, and so are
+//! node names (`N1`, `n1`), wherever they appear — node and in-plane node
+//! declarations, segment endpoints, `.external` and `.equiv` (issue #156;
+//! see the `# Semantics` section).
 //! Whitespace around `=` is insignificant: `x = 1`, `x= 1` and `x =1` read
 //! as `x=1` (a dangling `x=` with no value is still an error).
 //! Conductivity is given either as `sigma=` or as its reciprocal, the
@@ -495,13 +497,30 @@
 //!   point and `fmax` is reached when the decades divide evenly.
 //!   `fmin = fmax` (any `ndec`) is the single-frequency case; `fmin = 0` is
 //!   allowed only there (the DC solve).
-//! * **`.equiv a b …`** makes every later name an alias of `a`: every
-//!   reference — declared before or after the directive — resolves to `a`,
-//!   and the aliased nodes do not appear in the resulting geometry. One
-//!   exception to "the first name wins": if any node in the joined set is an
-//!   in-plane node, the whole set lands on that plane (see above), because
-//!   joining a via's node to a plane node is what wires a deck into a plane
-//!   and the result must not depend on the argument order.
+//! * **Node names are case-insensitive** (User's Guide §1.1; issue #156).
+//!   Every node name is folded to lowercase before it is matched, so `N3`
+//!   declared and `n3` referenced are one node, and declaring `n1` after
+//!   `N1` is a duplicate-name error — never two nodes. Names reach output
+//!   lowercased (a port's default `<+>/<->` label); an explicit
+//!   `.external` label is a label, not a node name, and is kept as written.
+//!   There are no forward references: a segment endpoint, `.external` or
+//!   `.equiv` naming a node first declared on a later line is an error.
+//! * **`.equiv a b …`** joins its nodes: the first name in the list that is
+//!   already **defined** is the canonical node, and every other defined
+//!   name becomes an alias of it — every reference, made before or after
+//!   the directive, resolves to the canonical node, and the aliased nodes
+//!   do not appear in the resulting geometry. A name **not yet defined**
+//!   becomes a *pseudonym* for the canonical node (User's Guide §1.3.7),
+//!   usable from then on as an endpoint or in `.external` like any node
+//!   name, wherever it stands in the list; a list with no defined name is
+//!   an error, and so is declaring a node under a name that is already a
+//!   pseudonym. Naming one node twice (`.equiv x x`, or two names already
+//!   joined) is an error, or under [`ParseOptions::fasthenry_compat`] a
+//!   [`ParseWarning`] and a no-op. One exception to "the first defined name
+//!   wins": if any node in the joined set is an in-plane node, the whole set
+//!   lands on that plane (see above), because joining a via's node to a
+//!   plane node is what wires a deck into a plane and the result must not
+//!   depend on the argument order.
 //! * **`.couples` truncates, and defaults to truncating nothing.** Without a
 //!   `.couples` line — and with `.couples all` — every pair of conductors is
 //!   coupled, exactly as before. A `.couples g1 g2 …` line switches the deck
@@ -509,7 +528,8 @@
 //!   clique: every listed group with every other). Every other pair of groups
 //!   has its mutual inductance dropped without ever being computed. Segments
 //!   take their group from `group=<name>` on the `E` line (case-sensitive,
-//!   like node names); untagged segments and ground planes share one default
+//!   unlike node names: it is this reader's own extension, not a FastHenry
+//!   name); untagged segments and ground planes share one default
 //!   group. Naming a group no segment carries is an error, not a no-op.
 //!   Truncation is a physical approximation — see the `fasterhenry::coupling`
 //!   module documentation for when it is safe; groups closer than their own
@@ -647,7 +667,9 @@ fn err(line: usize, message: impl Into<String>) -> ParseError {
 /// rectangular `contact` clause wholly outside its ground plane's
 /// footprint (issue #105; see the [module documentation](self)), or, under
 /// [`ParseOptions::fasthenry_compat`], a segment or plane defaulted to
-/// copper for want of a conductivity (issue #142).
+/// copper for want of a conductivity (issue #142), an empty in-plane node
+/// coordinate read as 0 (issue #146), or a `.equiv` naming one node twice
+/// (issue #156).
 ///
 /// A warning never changes the parsed [`Deck`]: [`parse`] and
 /// [`parse_with_options`] discard them, and [`parse_reporting`] /
@@ -3043,28 +3065,97 @@ fn corner_slot(key: &str) -> Option<(usize, usize)> {
     Some((point, axis))
 }
 
+/// The key a node name is matched by: node names are case-insensitive
+/// (User's Guide §1.1, "Everything is case INsensitive"; issue #156), so
+/// every name is folded to lowercase before it is stored or looked up. This
+/// is also the spelling a node name takes in output.
+fn node_key(name: &str) -> String {
+    name.to_ascii_lowercase()
+}
+
+/// One known node name: the slot it names, how and where it was first
+/// written (for the duplicate-name error), and whether it is a `.equiv`
+/// pseudonym rather than a declared node.
+struct NameEntry {
+    slot: usize,
+    spelling: String,
+    line: usize,
+    pseudonym: bool,
+}
+
 /// Node names to node slots, with `.equiv` aliases resolved at lookup and
-/// aliased-away slots compacted out of the final geometry.
+/// aliased-away slots compacted out of the final geometry. Names are keyed
+/// by [`node_key`], so `N1` and `n1` are one name.
 #[derive(Default)]
 struct Names {
-    ids: HashMap<String, usize>,
+    ids: HashMap<String, NameEntry>,
     aliases: HashMap<usize, usize>,
 }
 
 impl Names {
-    fn define(&mut self, name: &str, id: usize, line: usize) -> Result<(), ParseError> {
-        if self.ids.contains_key(name) {
-            return Err(err(line, format!("duplicate node name '{name}'")));
+    /// Declares `name` as the node in `slot`. A name already known —
+    /// declared, or made a `.equiv` pseudonym, in any letter case — is a
+    /// duplicate.
+    fn define(&mut self, name: &str, slot: usize, line: usize) -> Result<(), ParseError> {
+        self.insert(name, slot, line, false)
+    }
+
+    /// Makes the not-yet-known `name` a `.equiv` pseudonym for `slot`: it
+    /// names that node from here on, and declaring it later is a duplicate.
+    fn pseudonym(&mut self, name: &str, slot: usize, line: usize) -> Result<(), ParseError> {
+        self.insert(name, slot, line, true)
+    }
+
+    fn insert(
+        &mut self,
+        name: &str,
+        slot: usize,
+        line: usize,
+        pseudonym: bool,
+    ) -> Result<(), ParseError> {
+        let key = node_key(name);
+        if let Some(first) = self.ids.get(&key) {
+            let earlier = if first.pseudonym {
+                format!(
+                    "'{}' became a .equiv pseudonym on line {}, and a pseudonym cannot be declared afterwards",
+                    first.spelling, first.line
+                )
+            } else if first.spelling != name {
+                format!(
+                    "node names are case-insensitive, and '{}' on line {} already names this node",
+                    first.spelling, first.line
+                )
+            } else {
+                format!("first declared on line {}", first.line)
+            };
+            return Err(err(
+                line,
+                format!("duplicate node name '{name}' ({earlier})"),
+            ));
         }
-        self.ids.insert(name.to_string(), id);
+        self.ids.insert(
+            key,
+            NameEntry {
+                slot,
+                spelling: name.to_string(),
+                line,
+                pseudonym,
+            },
+        );
         Ok(())
     }
 
+    /// Whether `name` (in any letter case) is already a node name.
+    fn contains(&self, name: &str) -> bool {
+        self.ids.contains_key(&node_key(name))
+    }
+
     fn lookup(&self, name: &str, line: usize) -> Result<usize, ParseError> {
-        let mut id = *self
+        let mut id = self
             .ids
-            .get(name)
-            .ok_or_else(|| err(line, format!("unknown node '{name}'")))?;
+            .get(&node_key(name))
+            .ok_or_else(|| err(line, format!("unknown node '{name}'")))?
+            .slot;
         while let Some(&target) = self.aliases.get(&id) {
             id = target;
         }
@@ -3122,6 +3213,10 @@ pub struct ParseOptions {
     /// independent of `.units` (unlike an explicit `sigma=`, which is per
     /// deck unit), and raises a [`ParseWarning`] on the statement's line.
     /// Off, that is a line-numbered error (issue #142).
+    ///
+    /// On, a `.equiv` naming one node twice (`.equiv x x`, or two names
+    /// already joined) is a [`ParseWarning`] and changes nothing. Off, it is
+    /// a line-numbered error (issue #156).
     pub fasthenry_compat: bool,
 }
 
@@ -3419,11 +3514,13 @@ impl DeckBuilder {
         }
         let positive = self.names.lookup(tokens[1], number)?;
         let negative = self.names.lookup(tokens[2], number)?;
+        // An explicit label is kept as written; the default one is built from
+        // the node names, which are case-insensitive and so lowercased.
         let name = tokens.get(3).map(|name| name.to_string());
         self.ports.push(Port {
             positive: NodeId(positive),
             negative: NodeId(negative),
-            name: name.or_else(|| Some(format!("{}/{}", tokens[1], tokens[2]))),
+            name: name.or_else(|| Some(format!("{}/{}", node_key(tokens[1]), node_key(tokens[2])))),
         });
         Ok(())
     }
@@ -3456,18 +3553,59 @@ impl DeckBuilder {
         Ok(())
     }
     /// `.equiv N<a> N<b> [N<c> …]` — join two or more nodes into one.
+    ///
+    /// The first *defined* name in the list is the canonical node; every
+    /// other defined name becomes an alias of it. A name not yet defined
+    /// becomes a pseudonym for it (User's Guide §1.3.7; issue #156), so a
+    /// list with no defined name at all has nothing to name and is an
+    /// error. Naming one node twice (`.equiv x x`, or two names already
+    /// joined) is an error, or a warning under
+    /// [`ParseOptions::fasthenry_compat`].
     fn apply_equiv(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
         if tokens.len() < 3 {
             return Err(err(number, "expected .equiv N<a> N<b> [N<c> …]"));
         }
-        let a = self.names.lookup(tokens[1], number)?;
-        for name in &tokens[2..] {
+        let names = &tokens[1..];
+        let Some(first) = names.iter().position(|name| self.names.contains(name)) else {
+            return Err(err(
+                number,
+                format!(
+                    "no defined node in .equiv: none of {} is defined on an earlier line, so there is no node for them to name (a name not yet defined becomes a pseudonym for a defined node in the same list; nodes must be defined before they are referenced)",
+                    names
+                        .iter()
+                        .map(|name| format!("'{name}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        };
+        let canonical = names[first];
+        let a = self.names.lookup(canonical, number)?;
+        for (index, name) in names.iter().enumerate() {
+            if index == first {
+                continue;
+            }
+            if !self.names.contains(name) {
+                self.names.pseudonym(name, a, number)?;
+                continue;
+            }
             let b = self.names.lookup(name, number)?;
             if a == b {
-                return Err(err(
-                    number,
-                    format!(".equiv of node '{}' with itself", tokens[1]),
-                ));
+                let message = if node_key(name) == node_key(canonical) {
+                    format!(".equiv of node '{name}' with itself")
+                } else {
+                    format!(
+                        ".equiv of node '{name}' with itself: '{name}' and '{canonical}' already name one node"
+                    )
+                };
+                if self.compat {
+                    self.warnings.push(ParseWarning {
+                        line: number,
+                        message: format!("{message}; ignored (--fasthenry-compat)"),
+                    });
+                    continue;
+                }
+                return Err(err(number, message));
             }
             self.names.aliases.insert(b, a);
             self.alias_lines.insert(b, number);
@@ -3677,8 +3815,8 @@ impl DeckBuilder {
         for token in &tokens[3..] {
             let (key, raw_value) = parse_field(token, number)?;
             if key == "group" {
-                // A name, not a number, and case-sensitive like the node
-                // names — so it is taken before parse_value.
+                // A name, not a number (and case-sensitive, unlike node
+                // names) — so it is taken before parse_value.
                 group = raw_value;
                 continue;
             }
@@ -6893,6 +7031,288 @@ Ev Nt Nb w=0.2 h=0.2
         assert_eq!(plane_first.geometry, direct.geometry);
         assert_eq!(node_first.geometry, direct.geometry);
         assert_eq!(node_first.ports, direct.ports);
+    }
+
+    /// Node names are case-insensitive in every position (issue #156): node
+    /// declarations, segment endpoints, `.external` and `.equiv` — a deck
+    /// mixing cases reads exactly as the same deck written in lowercase,
+    /// default port label included.
+    #[test]
+    fn node_names_are_case_insensitive_in_every_position() {
+        let mixed = parse_ok(
+            "\
+.units m
+N1 x=0 y=0 z=0
+n2 x=1 y=0 z=0
+N3 x=2 y=0 z=0
+N4 x=2 y=0 z=0
+e1 n1 N2 w=1 h=1 sigma=1
+E2 N2 n3 w=1 h=1 sigma=1
+.equiv n4 N3
+.external N1 n4
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        let lower = parse_ok(
+            "\
+.units m
+n1 x=0 y=0 z=0
+n2 x=1 y=0 z=0
+n3 x=2 y=0 z=0
+n4 x=2 y=0 z=0
+e1 n1 n2 w=1 h=1 sigma=1
+e2 n2 n3 w=1 h=1 sigma=1
+.equiv n4 n3
+.external n1 n4
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        assert_eq!(mixed, lower);
+        // Output names are lowercased; an explicit label is kept as written.
+        assert_eq!(mixed.ports[0].name.as_deref(), Some("n1/n4"));
+        let labelled = parse_ok(
+            "\
+.units m
+N1 x=0 y=0 z=0
+N2 x=1 y=0 z=0
+E1 N1 N2 w=1 h=1 sigma=1
+.external N1 N2 MyPort
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        assert_eq!(labelled.ports[0].name.as_deref(), Some("MyPort"));
+    }
+
+    /// In-plane node names are case-insensitive too: declared in one case
+    /// in the `G` statement, referenced in another from a segment endpoint,
+    /// `.equiv` and `.external`.
+    #[test]
+    fn in_plane_node_names_are_case_insensitive() {
+        let deck = |land: &str, far: &str, refs: [&str; 5]| {
+            let [top, land_ref, far_ref, foot, foot_ref] = refs;
+            format!(
+                "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ {land} (5, 3, 0)
++ {far} (1, 1, 0)
+Nt x=5 y=3 z=0.5
+Ev {top} {land_ref} w=0.2 h=0.2
+{foot} x=1 y=1 z=0.5
+Ew Nt {foot_ref} w=0.2 h=0.2
+.equiv {far_ref} {foot_ref}
+.external {top} {foot_ref}
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+            )
+        };
+        let plain = parse_ok(&deck("Nland", "Nfar", ["Nt", "Nland", "Nfar", "Nb", "Nb"]));
+        let mixed = parse_ok(&deck("NLAND", "nFar", ["nT", "nland", "NFAR", "Nb", "nB"]));
+        assert_eq!(mixed, plain);
+    }
+
+    /// Two names differing only in case are one name, so declaring both is
+    /// a duplicate-definition error — never two nodes (issue #156).
+    #[test]
+    fn case_only_duplicate_node_names_are_errors() {
+        for (first, second) in [("n1", "N1"), ("N1", "n1"), ("Nab", "nAB")] {
+            let error = parse(&format!(
+                "\
+.units m
+{first} x=0 y=0 z=0
+{second} x=1 y=0 z=0
+.end
+"
+            ))
+            .unwrap_err();
+            assert_eq!(error.line, 3, "{first}/{second}: {error}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("duplicate node name '{second}'"))
+                    && error.message.contains("case-insensitive")
+                    && error.message.contains(&format!("'{first}' on line 2")),
+                "{first}/{second}: {error}"
+            );
+        }
+        // An exact repeat is the same error, saying where the first was.
+        let error = parse(".units m\nn1 x=0 y=0 z=0\nn1 x=1 y=0 z=0\n.end\n").unwrap_err();
+        assert_eq!(error.line, 3);
+        assert!(
+            error
+                .message
+                .contains("duplicate node name 'n1' (first declared on line 2)"),
+            "{error}"
+        );
+        // An in-plane node and an ordinary node collide the same way.
+        let error = parse(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ NT (5, 3, 0)",
+            "",
+        ))
+        .unwrap_err();
+        assert_eq!(error.line, 6, "{error}");
+        assert!(
+            error.message.contains("duplicate node name 'Nt'")
+                && error.message.contains("case-insensitive"),
+            "{error}"
+        );
+    }
+
+    /// There are no forward references: a segment endpoint or `.external`
+    /// naming a node declared on a later line is an error.
+    #[test]
+    fn forward_node_references_are_errors() {
+        for line in ["e1 n1 n2 w=1 h=1 sigma=1", ".external n1 N2"] {
+            let error = parse(&format!(
+                "\
+.units m
+n1 x=0 y=0 z=0
+{line}
+n2 x=1 y=0 z=0
+.end
+"
+            ))
+            .unwrap_err();
+            assert_eq!(error.line, 3, "{line}: {error}");
+            // The error quotes the name as the deck wrote it.
+            assert!(
+                error.message.contains("unknown node 'n2'")
+                    || error.message.contains("unknown node 'N2'"),
+                "{line}: {error}"
+            );
+        }
+    }
+
+    /// A deck joining `n3` and `n2` (declared at one point) and then using
+    /// `name` as a later segment endpoint and in `.external`.
+    fn pseudonym_deck(equiv: &str, name: &str) -> String {
+        format!(
+            "\
+.units m
+n1 x=0 y=0 z=0
+n3 x=1 y=0 z=0
+n2 x=1 y=0 z=0
+e1 n1 n3 w=1 h=1 sigma=1
+{equiv}
+n4 x=2 y=0 z=0
+e2 {name} n4 w=1 h=1 sigma=1
+.external n1 {name} port
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+        )
+    }
+
+    /// A `.equiv` name not yet defined becomes a pseudonym for the list's
+    /// defined node, wherever it stands in the list (User's Guide §1.3.7;
+    /// issue #156): usable as a later segment endpoint and in `.external`.
+    #[test]
+    fn equiv_undefined_names_become_pseudonyms() {
+        let reference = parse_ok(&pseudonym_deck(".equiv n3 n2", "n3"));
+        for (equiv, name) in [
+            (".equiv nalias n3 n2", "nalias"), // alias first
+            (".equiv n3 n2 nalias", "nalias"), // alias last
+            (".equiv n3 nalias n2", "nalias"), // alias in the middle
+            (".equiv NAlias n3 n2", "nALIAS"), // and case-insensitive
+        ] {
+            let deck = parse(&pseudonym_deck(equiv, name))
+                .unwrap_or_else(|error| panic!("{equiv}: {error}"));
+            assert_eq!(deck, reference, "{equiv}");
+        }
+        // The User's Guide's own shape: a pseudonym for one defined node.
+        let deck = parse_ok(
+            "\
+.units m
+N1 x=0 y=0 z=0
+N3 x=1 y=0 z=0
+E1 N1 N3 w=1 h=1 sigma=1
+.equiv nin n3
+.external N1 NIN
+.freq fmin=1 fmax=1 ndec=1
+.end
+",
+        );
+        assert_eq!(deck.geometry.nodes().len(), 2);
+        assert_eq!(deck.ports[0].name.as_deref(), Some("n1/nin"));
+    }
+
+    #[test]
+    fn equiv_with_no_defined_node_is_an_error() {
+        let error = parse(&pseudonym_deck(".equiv nx ny", "n3")).unwrap_err();
+        assert_eq!(error.line, 6, "{error}");
+        assert!(
+            error.message.contains("no defined node in .equiv")
+                && error.message.contains("'nx', 'ny'"),
+            "{error}"
+        );
+    }
+
+    /// A pseudonym is a name, so declaring a node under it afterwards — in
+    /// any case — is the duplicate-name error, naming the pseudonym.
+    #[test]
+    fn defining_a_node_after_it_became_a_pseudonym_is_an_error() {
+        for later in ["nalias", "NALIAS"] {
+            let error = parse(&pseudonym_deck(
+                &format!(".equiv nalias n3\n{later} x=5 y=0 z=0"),
+                "n3",
+            ))
+            .unwrap_err();
+            assert_eq!(error.line, 7, "{later}: {error}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("duplicate node name '{later}'"))
+                    && error.message.contains("pseudonym on line 6"),
+                "{later}: {error}"
+            );
+        }
+    }
+
+    /// `.equiv x x` is an error natively and a warning (and a no-op) under
+    /// `--fasthenry-compat` (issue #156).
+    #[test]
+    fn equiv_of_a_node_with_itself_warns_under_compat() {
+        let with = pseudonym_deck(".equiv n3 n2\n.equiv n1 n1", "n3");
+        let error = parse(&with).unwrap_err();
+        assert_eq!(error.line, 7, "{error}");
+        assert!(
+            error.message.contains(".equiv of node 'n1' with itself"),
+            "{error}"
+        );
+
+        let (deck, warnings) =
+            parse_with_options_reporting(&format!("title\n{with}"), COMPAT).unwrap();
+        let reference =
+            parse_compat(&format!("title\n{}", pseudonym_deck(".equiv n3 n2", "n3"))).unwrap();
+        assert_eq!(deck, reference);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 8);
+        assert!(
+            warnings[0].message.contains("with itself"),
+            "{}",
+            warnings[0]
+        );
+
+        // A repeat inside a longer list warns and still joins the rest.
+        let (deck, warnings) = parse_with_options_reporting(
+            &format!("title\n{}", pseudonym_deck(".equiv n3 n3 n2", "n3")),
+            COMPAT,
+        )
+        .unwrap();
+        assert_eq!(deck, reference);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        // Natively that is the same error.
+        let error = parse(&pseudonym_deck(".equiv n3 n3 n2", "n3")).unwrap_err();
+        assert!(error.message.contains("with itself"), "{error}");
     }
 
     /// `.equiv` cannot be used to weld two planes together: the connection
