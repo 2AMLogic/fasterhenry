@@ -19,6 +19,8 @@ Status key:
   something else).
 - **Supported, differs** — intentionally different behavior, with the reason
   below.
+- **Supported (compat only)** — accepted only under `--fasthenry-compat`;
+  natively a line-numbered error.
 - **Deferred** — tracked by a sibling issue in the same epic.
 - **Not supported** — rejected with a line-numbered error; out of scope here.
 - **Not supported, permanent** — rejected with a line-numbered error, and
@@ -601,8 +603,8 @@ Two consequences worth stating:
   Such a region refines nothing, so it is now dropped with the warning
   instead, on its own line, consistent with the holes. No deck that parsed
   before changes meaning. A rectangle that only *touches* the footprint
-  (zero overlap area) is not disjoint by this rule, so it still reaches the
-  library and keeps that existing error.
+  is dropped with its own warning too — see *Touching contacts (issue
+  #134)* above.
 - **The stricter clauses stay errors.** `contact point`, `contact line` and
   `contact trace` name a locus that must lie on the plane, and an off-plane
   end remains a line-numbered error; a `contact equiv_rect` (or the tie half
