@@ -371,3 +371,35 @@ fn a_hole_off_its_plane_solves_with_a_line_numbered_warning() {
     assert!(warning.contains("'hole point'"), "{warning}");
     assert!(warning.contains("ground plane 'Gplane'"), "{warning}");
 }
+
+/// A MAT result small enough to sit entirely in the `BufWriter` fails only
+/// at the final drain. `/dev/full` opens fine (so `File::create` succeeds)
+/// and rejects every write with ENOSPC; before the explicit flush the error
+/// was lost when the writer was dropped and the CLI exited 0.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_final_mat_drain_is_a_nonzero_exit_naming_the_path() {
+    let device = Path::new("/dev/full");
+    if !device.exists() {
+        return;
+    }
+    // The destination opens for writing, so any failure is not at create.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(device)
+        .expect("/dev/full opens for writing");
+
+    let directory = scratch("mat-drain-failure");
+    let deck = fixture("spiral.inp");
+    let output = fasterhenry(
+        &directory,
+        &["run", deck.to_str().unwrap(), "--zc-mat", "/dev/full"],
+    );
+    let message = stderr(&output);
+    assert!(!output.status.success(), "must exit nonzero: {message}");
+    assert!(message.contains("/dev/full"), "names the path: {message}");
+    assert!(
+        message.contains("cannot write") && !message.contains("cannot create"),
+        "fails at the write, not at create: {message}"
+    );
+}
