@@ -65,6 +65,10 @@ fn main() -> anyhow::Result<()> {
         let mut writer = std::io::BufWriter::new(file);
         fasterhenry_cli::mat::write_zc_mat(&mut writer, &result)
             .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", path.display()))?;
+        // A small result can sit entirely in the buffer, and dropping a
+        // `BufWriter` discards a failed final write; drain it explicitly.
+        std::io::Write::flush(&mut writer)
+            .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", path.display()))?;
     }
     if let Some(path) = &spice {
         let index = match spice_freq {
