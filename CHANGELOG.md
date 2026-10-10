@@ -326,6 +326,12 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader: under `--fasthenry-compat`, a `contact decay_rect` or
+  seven-value `contact rect` cell at or above the rectangle's width on an
+  axis is clamped to 0.99 × that width, as FastHenry does, with one
+  line-numbered warning per clamped axis (issue #145). Both axes clamp at
+  `cell >= width`. Natively such a cell is still an error, and a cell ≤ 0
+  is an error in both modes.
 - Deck reader: a corner-point `G` statement's `contact rect` or `contact
   decay_rect` wholly outside the plane's footprint is no longer a plane
   assembly error on line 0 ("contact region … lies outside the plane
