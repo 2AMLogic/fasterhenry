@@ -371,3 +371,172 @@ fn a_hole_off_its_plane_solves_with_a_line_numbered_warning() {
     assert!(warning.contains("'hole point'"), "{warning}");
     assert!(warning.contains("ground plane 'Gplane'"), "{warning}");
 }
+
+/// A one-frequency copy of the spiral deck in `directory`, for the
+/// destination-collision tests: returns its path and its bytes.
+fn deck_in(directory: &Path, name: &str) -> (PathBuf, Vec<u8>) {
+    let bytes = std::fs::read(fixture("spiral.inp")).unwrap();
+    let path = directory.join(name);
+    std::fs::write(&path, &bytes).unwrap();
+    (path, bytes)
+}
+
+/// The run was refused before it touched anything: nonzero exit, nothing on
+/// stdout, and a diagnostic naming every `needle`.
+fn assert_refused(output: &Output, needles: &[&str]) {
+    assert!(!output.status.success(), "should have been refused");
+    assert!(output.stdout.is_empty(), "no sweep should have run");
+    let message = stderr(output);
+    for needle in needles {
+        assert!(message.contains(needle), "missing {needle:?}: {message}");
+    }
+}
+
+const ONE_FREQUENCY: [&str; 4] = ["--freq", "1e6", "1e6", "1"];
+
+/// Every output flag pointed at the input deck itself — directly, through
+/// `.` components, and (on unix) through a symlink or a hard link — is
+/// refused before anything is written, with both roles and paths named, and
+/// the deck's bytes survive (issue #175).
+#[test]
+fn an_output_that_is_the_input_is_refused() {
+    let directory = scratch("output-is-input");
+    std::fs::create_dir(directory.join("sub")).unwrap();
+    let (deck, original) = deck_in(&directory, "deck.inp");
+    let mut aliases = vec![
+        "deck.inp".to_string(),
+        "./deck.inp".to_string(),
+        "sub/../deck.inp".to_string(),
+        deck.to_str().unwrap().to_string(),
+    ];
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("deck.inp", directory.join("symlink.inp")).unwrap();
+        std::fs::hard_link(&deck, directory.join("hardlink.inp")).unwrap();
+        aliases.push("symlink.inp".to_string());
+        aliases.push("hardlink.inp".to_string());
+    }
+    for alias in &aliases {
+        for flag in ["--json", "--zc-mat", "--spice"] {
+            for form in [vec!["deck.inp"], vec!["run", "deck.inp"]] {
+                let mut args = form.clone();
+                args.extend_from_slice(&[flag, alias]);
+                args.extend_from_slice(&ONE_FREQUENCY);
+                let output = fasterhenry(&directory, &args);
+                assert_refused(&output, &[flag, alias, "input", "deck.inp"]);
+                assert_eq!(
+                    std::fs::read(&deck).unwrap(),
+                    original,
+                    "{args:?} changed the deck"
+                );
+                assert!(
+                    !directory.join("Zc.mat").exists(),
+                    "{args:?} wrote Zc.mat before refusing"
+                );
+            }
+        }
+    }
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// A bare invocation's implicit `./Zc.mat` counts: a deck (or JSON document)
+/// named `Zc.mat` in the working directory is refused, as is another output
+/// flag pointed at `Zc.mat` (issue #175).
+#[test]
+fn the_implicit_zc_mat_collides_like_an_explicit_one() {
+    let directory = scratch("implicit-zc-mat");
+    let document = std::fs::read(fixture("spiral.json")).unwrap();
+    std::fs::write(directory.join("Zc.mat"), &document).unwrap();
+    let output = fasterhenry(&directory, &["Zc.mat"]);
+    assert_refused(&output, &["default Zc.mat", "input"]);
+    assert_eq!(std::fs::read(directory.join("Zc.mat")).unwrap(), document);
+    // `run` writes no Zc.mat, so the same input is fine there.
+    let output = fasterhenry(&directory, &["run", "Zc.mat"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(std::fs::read(directory.join("Zc.mat")).unwrap(), document);
+    std::fs::remove_file(directory.join("Zc.mat")).unwrap();
+
+    let (_, _) = deck_in(&directory, "deck.inp");
+    for (flag, alias) in [("--json", "Zc.mat"), ("--spice", "./Zc.mat")] {
+        let mut args = vec!["deck.inp", flag, alias];
+        args.extend_from_slice(&ONE_FREQUENCY);
+        let output = fasterhenry(&directory, &args);
+        assert_refused(&output, &["default Zc.mat", flag, alias]);
+        assert!(!directory.join("Zc.mat").exists());
+    }
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// Two output flags naming one file — directly, through `.` components, or
+/// (on unix) through a symlink or hard link to an existing file — are
+/// refused before either is written; an existing file at the shared path
+/// keeps its bytes (issue #175).
+#[test]
+fn two_outputs_naming_one_file_are_refused() {
+    let directory = scratch("two-outputs-one-file");
+    std::fs::create_dir(directory.join("sub")).unwrap();
+    deck_in(&directory, "deck.inp");
+    let existing = b"previous contents".to_vec();
+    std::fs::write(directory.join("out"), &existing).unwrap();
+    let mut pairs = vec![
+        ("out", "out"),
+        ("out", "./out"),
+        ("out", "sub/../out"),
+        ("new", "./sub/../new"),
+    ];
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("out", directory.join("symlink")).unwrap();
+        std::os::unix::fs::symlink("new", directory.join("dangling")).unwrap();
+        std::fs::hard_link(directory.join("out"), directory.join("hardlink")).unwrap();
+        pairs.push(("out", "symlink"));
+        pairs.push(("out", "hardlink"));
+        pairs.push(("new", "dangling"));
+    }
+    for (first, second) in pairs {
+        for (first_flag, second_flag) in [
+            ("--json", "--zc-mat"),
+            ("--json", "--spice"),
+            ("--zc-mat", "--spice"),
+        ] {
+            let mut args = vec!["run", "deck.inp", first_flag, first, second_flag, second];
+            args.extend_from_slice(&ONE_FREQUENCY);
+            let output = fasterhenry(&directory, &args);
+            assert_refused(
+                &output,
+                &[first_flag, first, second_flag, second, "same file"],
+            );
+            assert_eq!(std::fs::read(directory.join("out")).unwrap(), existing);
+            assert!(!directory.join("new").exists(), "{args:?} wrote new");
+        }
+    }
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// Distinct destinations all get written, and an unrelated existing output
+/// file is still replaced, as it always was (issue #175).
+#[test]
+fn distinct_outputs_are_written_and_replace_unrelated_files() {
+    let directory = scratch("distinct-outputs");
+    let (deck, original) = deck_in(&directory, "deck.inp");
+    std::fs::create_dir(directory.join("sub")).unwrap();
+    for name in ["out.json", "sub/out.cir", "Zc.mat"] {
+        std::fs::write(directory.join(name), b"stale").unwrap();
+    }
+    let mut args = vec!["deck.inp", "--json", "./out.json", "--spice", "sub/out.cir"];
+    args.extend_from_slice(&ONE_FREQUENCY);
+    let output = fasterhenry(&directory, &args);
+    assert!(output.status.success(), "{}", stderr(&output));
+    for name in ["out.json", "sub/out.cir", "Zc.mat"] {
+        assert_ne!(
+            std::fs::read(directory.join(name)).unwrap(),
+            b"stale",
+            "{name} was not replaced"
+        );
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("out.json")).unwrap()).unwrap();
+    assert_eq!(json["frequencies_hz"].as_array().unwrap().len(), 1);
+    assert_eq!(std::fs::read(&deck).unwrap(), original);
+    std::fs::remove_dir_all(&directory).unwrap();
+}

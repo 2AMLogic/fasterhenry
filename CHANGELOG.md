@@ -326,6 +326,16 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- CLI: output destinations are checked before anything is read, solved or
+  written (issue #175). An output (`--json`, `--zc-mat`, the bare form's
+  implicit `./Zc.mat`, or `--spice`) that is the input file, or two outputs
+  that are the same file, is now an error naming both roles and paths;
+  previously the input was overwritten, or the later output silently
+  replaced the earlier one. "The same file" is decided on resolved paths —
+  relative and `.`/`..` spellings, symlinks (including a dangling one), and
+  on unix hard links by device and inode — not on the strings given. An
+  unrelated existing output file is still replaced. No output format or
+  result changes.
 - Deck reader: a corner-point `G` statement's `contact rect` or `contact
   decay_rect` wholly outside the plane's footprint is no longer a plane
   assembly error on line 0 ("contact region … lies outside the plane
