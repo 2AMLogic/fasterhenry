@@ -1667,6 +1667,8 @@ struct PlaneStatement<'a> {
     /// Whether that clause was the meshed form, which additionally punches
     /// the documented checkerboard of holes into the initial grid.
     meshed_grid: bool,
+    /// Whether the statement carried `file=NONE`.
+    file_none: bool,
     /// `sigma=` / `rho=` (S/m), or the `.default` conductivity.
     sigma: Option<f64>,
     /// `nhinc=` (1 unless set).
@@ -1832,6 +1834,7 @@ impl<'a> PlaneStatement<'a> {
                         ),
                     ));
                 }
+                self.file_none = true;
             }
             "nx" | "ny" => {
                 return Err(err(
@@ -2245,6 +2248,16 @@ impl<'a> PlaneStatement<'a> {
         }
     }
 
+    /// Whether, under `--fasthenry-compat`, this `file=NONE` plane gives no
+    /// initial grid at all (no `seg1`/`seg2`, no `contact initial_grid`) and
+    /// so meshes as a single root cell (issue #143).
+    fn single_root_cell(&self) -> bool {
+        self.compat
+            && self.file_none
+            && self.segments == [None, None]
+            && self.initial_grid.is_none()
+    }
+
     /// Checks the statement's geometry — three corners of an axis-aligned
     /// rectangle parallel to xy, both cell counts, a positive thickness,
     /// and a conductivity — and returns the frame the plane's features are
@@ -2300,18 +2313,23 @@ impl<'a> PlaneStatement<'a> {
             }
         };
         let mut cells = [0usize; 2];
-        cells[axis1] = self.segments[0].ok_or_else(|| {
-            err(
-                line,
-                format!("ground plane '{head}' has no 'seg1' (cells along p1→p2)"),
-            )
-        })?;
-        cells[axis2] = self.segments[1].ok_or_else(|| {
-            err(
-                line,
-                format!("ground plane '{head}' has no 'seg2' (cells along p2→p3)"),
-            )
-        })?;
+        if self.single_root_cell() {
+            // `file=NONE` with no grid at all: one root cell (issue #143).
+            cells = [1, 1];
+        } else {
+            cells[axis1] = self.segments[0].ok_or_else(|| {
+                err(
+                    line,
+                    format!("ground plane '{head}' has no 'seg1' (cells along p1→p2)"),
+                )
+            })?;
+            cells[axis2] = self.segments[1].ok_or_else(|| {
+                err(
+                    line,
+                    format!("ground plane '{head}' has no 'seg2' (cells along p2→p3)"),
+                )
+            })?;
+        }
         let thickness = self.thickness.ok_or_else(|| {
             err(
                 line,
@@ -2373,6 +2391,13 @@ impl<'a> PlaneStatement<'a> {
     /// off the plane), but neither is an error.
     fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
         let frame = self.frame()?;
+        let single_root_cell = self.single_root_cell().then(|| ParseWarning {
+            line: self.line,
+            message: format!(
+                "ground plane '{}' has 'file=NONE' and no 'seg1'/'seg2' or 'contact initial_grid': its initial grid is a single cell (as 'contact initial_grid (1, 1)'), refined only by its 'contact' clauses",
+                self.head
+            ),
+        });
         let PlaneStatement {
             head,
             nhinc,
@@ -2389,6 +2414,9 @@ impl<'a> PlaneStatement<'a> {
             mut warnings,
             ..
         } = self;
+        if let Some(warning) = single_root_cell {
+            warnings.push((0, warning));
+        }
 
         // The meshed initial grid's holes are cut into the *initial* grid,
         // before anything else refines it, so they come first.
@@ -6692,6 +6720,51 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             "'file' is an input, not an output option, got: {}",
             error.message
         );
+    }
+
+    /// Issue #143: under compat, `file=NONE` with no initial grid is a single
+    /// root cell, warned about on the `G` line; native mode and a uniform
+    /// plane missing `seg1`/`seg2` stay errors.
+    #[test]
+    fn compat_file_none_without_a_grid_is_a_single_cell() {
+        let opts = ParseOptions {
+            fasthenry_compat: true,
+        };
+        let g = "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04";
+        let compat = |statement: &str| {
+            parse_with_options_reporting(&format!("title\n{}", plane_deck(statement, "")), opts)
+        };
+        let (bare, warnings) = compat(&format!("{g} file=NONE")).unwrap();
+        let explicit = parse_ok(&plane_deck(&format!("{g} contact initial_grid (1, 1)"), ""));
+        assert_eq!(bare.geometry, explicit.geometry);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 4);
+        assert!(warnings[0].message.contains("single cell"));
+
+        // Contact refinements still apply.
+        let refine = "contact rect (5, 3, 0, 4, 4, 1, 1)";
+        let (refined, _) = compat(&format!("{g} file=NONE {refine}")).unwrap();
+        let by_hand = parse_ok(&plane_deck(
+            &format!("{g} contact initial_grid (1, 1) {refine}"),
+            "",
+        ));
+        assert_eq!(refined.geometry, by_hand.geometry);
+        assert_ne!(refined.geometry, bare.geometry);
+
+        // An explicit grid means no warning.
+        let (_, warnings) = compat(&format!("{g} file=NONE seg1=2 seg2=2")).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // Native mode: unchanged error.
+        let error = parse(&plane_deck(&format!("{g} file=NONE"), "")).unwrap_err();
+        assert!(error.message.contains("has no 'seg1'"), "{error}");
+        // Uniform plane missing seg1/seg2, or only one: error in both modes.
+        for body in [g.to_string(), format!("{g} seg1=3"), format!("{g} seg2=3")] {
+            assert!(compat(&body).is_err(), "{body}");
+            assert!(parse(&plane_deck(&body, "")).is_err(), "{body}");
+        }
     }
 
     /// `seg1` counts cells along `p1 → p2` and `seg2` along `p2 → p3`,
