@@ -81,7 +81,8 @@ pub struct RunArgs {
     /// extension).
     pub input: PathBuf,
     /// Override the deck's sweep: min Hz, max Hz, points per decade
-    /// (decade-sampled, log-spaced; FMIN == FMAX runs one frequency).
+    /// (decade-sampled, log-spaced; NDEC may be fractional but must be > 0;
+    /// FMIN == FMAX runs one frequency).
     #[arg(
         long,
         value_names = ["FMIN_HZ", "FMAX_HZ", "NDEC"],

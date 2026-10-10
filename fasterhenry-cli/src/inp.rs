@@ -492,9 +492,20 @@
 //! * **`.freq fmin fmax ndec`** samples `ndec` points per decade,
 //!   log-spaced: `f(k) = fmin · 10^(k/ndec)` for `k = 0 … n−1`, with
 //!   `n = floor(ndec · log10(fmax/fmin)) + 1`; `fmin` is always the first
-//!   point and `fmax` is reached when the decades divide evenly.
+//!   point and `fmax` is reached when the decades divide evenly. `ndec`
+//!   need not be an integer (the public User's Guide says so): any
+//!   `ndec > 0` is accepted, so `fmin=1e3 fmax=1e7 ndec=0.5` solves 1e3,
+//!   1e5 and 1e7 Hz. Where `k/ndec` is a whole number the point is the
+//!   exact `fmin · 10^q`, so round decimal frequencies round-trip bitwise.
+//!   The last point is the stepped one and is never clamped to `fmax`.
 //!   `fmin = fmax` (any `ndec`) is the single-frequency case; `fmin = 0` is
-//!   allowed only there (the DC solve).
+//!   allowed only there (the DC solve). A negative `ndec` is an error in
+//!   every mode. Under [`ParseOptions::fasthenry_compat`] (issue #154) a
+//!   point is kept while `f(k) ≤ 1.001 · fmax` (so `fmin=1 fmax=9.995
+//!   ndec=1` solves 1 and 10 Hz), and three otherwise-errors become
+//!   warnings on the `.freq` line: an omitted `ndec` acts as 1, `ndec=0`
+//!   becomes 0.01, and `fmin > fmax` gives an empty sweep (nothing to
+//!   solve unless `--freq` overrides it).
 //! * **`.equiv a b …`** makes every later name an alias of `a`: every
 //!   reference — declared before or after the directive — resolves to `a`,
 //!   and the aliased nodes do not appear in the resulting geometry. One
@@ -3277,6 +3288,10 @@ struct DeckBuilder {
     ports: Vec<Port>,
     /// The `.freq` sweep in hertz.
     frequencies: Vec<f64>,
+    /// Whether a `.freq` line has been read: under
+    /// [`ParseOptions::fasthenry_compat`] its sweep may be empty, which is
+    /// not the same as a deck with no `.freq` at all.
+    freq_seen: bool,
     /// Every `G` statement, pending assembly.
     planes: Vec<PlaneSpec>,
     /// In-plane nodes declared inside a FastHenry-form `G` statement; see
@@ -3430,7 +3445,7 @@ impl DeckBuilder {
 
     /// `.freq fmin=<v> fmax=<v> ndec=<n>` — the decade sweep, in hertz.
     fn apply_freq(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
-        if tokens.len() != 4 {
+        if !(3..=4).contains(&tokens.len()) {
             return Err(err(number, "expected .freq fmin=<v> fmax=<v> ndec=<n>"));
         }
         let (mut fmin, mut fmax, mut ndec) = (None, None, None);
@@ -3439,7 +3454,14 @@ impl DeckBuilder {
             match key.as_str() {
                 "fmin" => fmin = Some(parse_number(&raw_value, number)?),
                 "fmax" => fmax = Some(parse_number(&raw_value, number)?),
-                "ndec" => ndec = Some(parse_count(&raw_value, "ndec", number)?),
+                "ndec" => {
+                    ndec = Some(parse_number(&raw_value, number).map_err(|_| {
+                        err(
+                            number,
+                            format!("'{raw_value}' is not a valid ndec (a number > 0)"),
+                        )
+                    })?)
+                }
                 other => {
                     return Err(err(
                         number,
@@ -3448,11 +3470,61 @@ impl DeckBuilder {
                 }
             }
         }
-        let (fmin, fmax, ndec) = match (fmin, fmax, ndec) {
-            (Some(fmin), Some(fmax), Some(ndec)) => (fmin, fmax, ndec),
+        let (fmin, fmax) = match (fmin, fmax) {
+            (Some(fmin), Some(fmax)) => (fmin, fmax),
             _ => return Err(err(number, ".freq needs fmin=, fmax= and ndec=")),
         };
-        self.frequencies = frequency_sweep(fmin, fmax, ndec, number)?;
+        let mut warn = |message: String| {
+            self.warnings.push(ParseWarning {
+                line: number,
+                message,
+            });
+        };
+        let ndec = match ndec {
+            Some(ndec) if ndec < 0.0 => {
+                return Err(err(
+                    number,
+                    format!("ndec must be > 0, got {ndec} (a negative ndec steps away from fmax)"),
+                ));
+            }
+            Some(0.0) => {
+                if !self.compat {
+                    return Err(err(
+                        number,
+                        "ndec must be > 0, got 0 (under --fasthenry-compat it reads as 0.01)",
+                    ));
+                }
+                warn(format!(
+                    ".freq ndec=0 has no points per decade; using ndec={COMPAT_ZERO_NDEC} (FastHenry behavior)"
+                ));
+                COMPAT_ZERO_NDEC
+            }
+            Some(ndec) => ndec,
+            None => {
+                if !self.compat {
+                    return Err(err(
+                        number,
+                        ".freq needs fmin=, fmax= and ndec= (an omitted ndec reads as 1 only under --fasthenry-compat)",
+                    ));
+                }
+                warn(".freq has no ndec; using ndec=1 (FastHenry behavior)".to_string());
+                1.0
+            }
+        };
+        if self.compat && fmin.is_finite() && fmax.is_finite() && fmin > fmax && fmax >= 0.0 {
+            if fmin > COMPAT_FMAX_SLACK * fmax {
+                warn(format!(
+                    ".freq fmin ({fmin}) is above fmax ({fmax}): the sweep is empty and there is nothing to solve unless --freq overrides it (FastHenry behavior)"
+                ));
+            } else {
+                warn(format!(
+                    ".freq fmin ({fmin}) is above fmax ({fmax}) but within FastHenry's 0.1% slack; solving fmin alone"
+                ));
+            }
+        }
+        self.frequencies = frequency_sweep(fmin, fmax, ndec, self.compat)
+            .map_err(|message| err(number, message))?;
+        self.freq_seen = true;
         Ok(())
     }
     /// `.equiv N<a> N<b> [N<c> …]` — join two or more nodes into one.
@@ -3959,7 +4031,7 @@ impl DeckBuilder {
         if self.ports.is_empty() {
             return Err(err(0, "deck has no .external port"));
         }
-        if self.frequencies.is_empty() {
+        if !self.freq_seen {
             return Err(err(0, "deck has no .freq sweep"));
         }
         if self.segment_defs.is_empty() && self.planes.is_empty() {
@@ -4353,36 +4425,91 @@ fn live_position(live: usize, positions: &[[f64; 3]], compaction: &[Option<usize
     unreachable!("compaction guarantees a live slot for every resolved id")
 }
 
-/// The `.freq` decade sweep; see the module documentation. Integer decades
-/// use exact `powi` so round decimal frequencies round-trip bitwise.
-fn frequency_sweep(fmin: f64, fmax: f64, ndec: usize, line: usize) -> Result<Vec<f64>, ParseError> {
-    if !(fmin.is_finite() && fmin >= 0.0 && fmax.is_finite() && fmax >= 0.0) {
-        return Err(err(line, "frequencies must be finite and ≥ 0"));
+/// What `ndec=0` reads as under [`ParseOptions::fasthenry_compat`].
+const COMPAT_ZERO_NDEC: f64 = 0.01;
+
+/// Under [`ParseOptions::fasthenry_compat`], a sweep point is kept while it
+/// is at most this multiple of `fmax` (FastHenry's 0.1% slack).
+const COMPAT_FMAX_SLACK: f64 = 1.001;
+
+/// The most points one sweep may hold: a guard against an `ndec` so large
+/// (or so many decades) that the list itself would exhaust memory.
+const MAX_SWEEP_POINTS: f64 = 1e7;
+
+/// The documented `.freq` decade sweep (see the [module
+/// documentation](self)): `fmin · 10^(k/ndec)` for every `k ≥ 0` with
+/// `k/ndec ≤ log10(fmax/fmin)`. `ndec` may be fractional but must be > 0.
+/// The `--freq` override uses this same rule. Errors are messages without a
+/// line, for the caller to place.
+pub fn decade_sweep(fmin: f64, fmax: f64, ndec: f64) -> Result<Vec<f64>, String> {
+    frequency_sweep(fmin, fmax, ndec, false)
+}
+
+/// The `fmin · 10^(k/ndec)` sweep point. Where `k/ndec` is a whole number
+/// `q` it is the exact `fmin · 10^q` (`powi`), so round decimal frequencies
+/// round-trip bitwise.
+fn sweep_point(fmin: f64, k: usize, ndec: f64) -> f64 {
+    let exponent = k as f64 / ndec;
+    let whole = exponent.round();
+    if (exponent - whole).abs() <= 1e-9 * whole.abs().max(1.0) {
+        fmin * 10f64.powi(whole as i32)
+    } else {
+        fmin * 10f64.powf(exponent)
     }
-    if fmax < fmin {
-        return Err(err(line, format!("fmax ({fmax}) is below fmin ({fmin})")));
+}
+
+/// The `.freq` decade sweep; see the module documentation. `ndec` must
+/// already be > 0 (the caller maps the compat `ndec=0`/omitted cases).
+/// `compat` selects FastHenry's inclusion rule — keep `f(k)` while
+/// `f(k) ≤ 1.001 · fmax`, and an empty sweep for `fmin` above that —
+/// instead of the documented one, under which `fmax < fmin` is an error.
+fn frequency_sweep(fmin: f64, fmax: f64, ndec: f64, compat: bool) -> Result<Vec<f64>, String> {
+    if !(fmin.is_finite() && fmin >= 0.0 && fmax.is_finite() && fmax >= 0.0) {
+        return Err("frequencies must be finite and ≥ 0".to_string());
+    }
+    if !(ndec.is_finite() && ndec > 0.0) {
+        return Err(format!("ndec must be > 0, got {ndec}"));
+    }
+    if fmax < fmin && !compat {
+        return Err(format!("fmax ({fmax}) is below fmin ({fmin})"));
     }
     if fmin == fmax {
         return Ok(vec![fmin]);
     }
     if fmin == 0.0 {
-        return Err(err(
-            line,
-            "fmin = 0 is only allowed as the single-frequency case (.freq fmin=0 fmax=0 runs the DC solve)",
+        return Err(
+            "fmin = 0 is only allowed as the single-frequency case (.freq fmin=0 fmax=0 runs the DC solve)"
+                .to_string(),
+        );
+    }
+    let ceiling = if compat {
+        COMPAT_FMAX_SLACK * fmax
+    } else {
+        fmax
+    };
+    if fmin > ceiling {
+        return Ok(Vec::new());
+    }
+    // The last k the rule admits, up to rounding; the documented rule takes
+    // exactly these, compat re-checks each candidate point against its
+    // ceiling (one more is tried in case rounding fell just short).
+    let last = ndec * (ceiling.log10() - fmin.log10());
+    if last + 1.0 > MAX_SWEEP_POINTS {
+        return Err(format!(
+            "the sweep would have about {:.3e} points (at most {MAX_SWEEP_POINTS:e}); lower ndec or narrow fmin..fmax",
+            last + 1.0
         ));
     }
-    let decades = fmax.log10() - fmin.log10();
-    let count = (decades * ndec as f64 + 1.0 + 1e-9).floor() as usize;
-    Ok((0..count)
-        .map(|k| {
-            let (quotient, remainder) = (k / ndec, k % ndec);
-            if remainder == 0 {
-                fmin * 10f64.powi(quotient as i32)
-            } else {
-                fmin * 10f64.powf(k as f64 / ndec as f64)
-            }
-        })
-        .collect())
+    if compat {
+        let candidates = (last + 1e-9).floor() as usize + 2;
+        Ok((0..candidates)
+            .map(|k| sweep_point(fmin, k, ndec))
+            .take_while(|&f| f <= ceiling)
+            .collect())
+    } else {
+        let count = (last + 1e-9).floor() as usize + 1;
+        Ok((0..count).map(|k| sweep_point(fmin, k, ndec)).collect())
+    }
 }
 
 #[cfg(test)]
@@ -7587,10 +7714,159 @@ e1 n1 n2 w=1 h=1 sigma=1
             ("fmin=0 fmax=1e6 ndec=10", "log sweep from zero"),
             ("fmin=-1 fmax=1e6 ndec=10", "negative"),
             ("fmin=1 fmax=1e6", "missing ndec"),
+            ("fmin=1 fmax=1e6 ndec=0", "zero ndec"),
+            ("fmin=1 fmax=1e6 ndec=-1", "negative ndec"),
+            ("fmin=1 fmax=1e6 ndec=abc", "non-numeric ndec"),
         ] {
             let error = parse(&template.replace("{SWEEP}", sweep)).unwrap_err();
             assert_eq!(error.line, 6, "{what}: {}", error.message);
         }
+    }
+
+    /// A deck whose `.freq` line (line 7) is `.freq {sweep}`. Line 1 is a
+    /// `*` comment, so it reads the same with or without compat's title line.
+    fn sweep_deck(sweep: &str) -> String {
+        format!(
+            "\
+* sweep deck
+.units m
+n1 x=0 y=0 z=0
+n2 x=1 y=0 z=0
+e1 n1 n2 w=1 h=1 sigma=1
+.external n1 n2
+.freq {sweep}
+.end
+"
+        )
+    }
+
+    /// The sweep a `.freq` line generates, and the deck's warnings.
+    fn sweep_of(sweep: &str, options: ParseOptions) -> (Vec<f64>, Vec<ParseWarning>) {
+        let (deck, warnings) = parse_with_options_reporting(&sweep_deck(sweep), options)
+            .unwrap_or_else(|error| panic!("{sweep}: {error}"));
+        (deck.frequencies, warnings)
+    }
+
+    /// `got` matches `want` point by point to six significant digits (the
+    /// precision the measured table was recorded at).
+    fn assert_sweep(sweep: &str, got: &[f64], want: &[f64]) {
+        assert_eq!(got.len(), want.len(), "{sweep}: {got:?} vs {want:?}");
+        for (g, w) in got.iter().zip(want) {
+            assert!(((g - w) / w).abs() < 5e-6, "{sweep}: {got:?} vs {want:?}");
+        }
+    }
+
+    /// The measured `.freq` table of issue #154. Every row but the slack
+    /// one generates the same list in both modes.
+    #[test]
+    fn fractional_ndec_reproduces_the_measured_table() {
+        let rows: &[(&str, &[f64])] = &[
+            ("fmin=1e3 fmax=1e7 ndec=0.5", &[1e3, 1e5, 1e7]),
+            ("fmin=1e3 fmax=1e7 ndec=0.3333333", &[1e3, 1e6]),
+            ("fmin=1e3 fmax=1e7 ndec=0.3", &[1e3, 2.15443e6]),
+            ("fmin=1e3 fmax=1e7 ndec=0.2", &[1e3]),
+            (
+                "fmin=1e3 fmax=1e7 ndec=1.5",
+                &[1e3, 4641.59, 21544.3, 1e5, 464159.0, 2.15443e6, 1e7],
+            ),
+            ("fmin=1e3 fmax=1e4 ndec=2.5", &[1e3, 2511.89, 6309.57]),
+            ("fmin=2e3 fmax=1e7 ndec=1", &[2e3, 2e4, 2e5, 2e6]),
+            ("fmin=1e-1 fmax=1e19 ndec=0.05", &[0.1, 1e19]),
+            ("fmin=5e4 fmax=5e4 ndec=0.5", &[5e4]),
+            ("fmin=5e4 fmax=5e4 ndec=7", &[5e4]),
+        ];
+        for options in [ParseOptions::default(), COMPAT] {
+            for (sweep, want) in rows {
+                let (got, warnings) = sweep_of(sweep, options);
+                assert_sweep(sweep, &got, want);
+                assert!(warnings.is_empty(), "{sweep}: {warnings:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn whole_decade_points_are_exact_at_any_ndec() {
+        let (got, _) = sweep_of("fmin=1e3 fmax=1e7 ndec=0.5", ParseOptions::default());
+        assert_eq!(got, vec![1e3, 1e5, 1e7]);
+        let (got, _) = sweep_of("fmin=1e3 fmax=1e7 ndec=1.5", ParseOptions::default());
+        assert_eq!((got[0], got[3], got[6]), (1e3, 1e5, 1e7));
+        // The last point is the stepped value, never clamped to fmax.
+        let (got, _) = sweep_of("fmin=1e3 fmax=9e3 ndec=2.5", ParseOptions::default());
+        assert_eq!(got.len(), 3);
+        assert!(got[2] < 9e3);
+    }
+
+    #[test]
+    fn compat_keeps_points_within_a_tenth_of_a_percent_of_fmax() {
+        let sweep = "fmin=1 fmax=9.995 ndec=1";
+        let (native, _) = sweep_of(sweep, ParseOptions::default());
+        assert_eq!(native, vec![1.0]);
+        let (compat, warnings) = sweep_of(sweep, COMPAT);
+        assert_eq!(compat, vec![1.0, 10.0]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // Just past the slack is out again.
+        let (compat, _) = sweep_of("fmin=1 fmax=9.98 ndec=1", COMPAT);
+        assert_eq!(compat, vec![1.0]);
+    }
+
+    #[test]
+    fn negative_ndec_is_an_error_in_every_mode() {
+        for options in [ParseOptions::default(), COMPAT] {
+            for sweep in ["fmin=1e3 fmax=1e7 ndec=-1", "fmin=1e3 fmax=1e3 ndec=-0.5"] {
+                let error = parse_with_options(&sweep_deck(sweep), options).unwrap_err();
+                assert_eq!(error.line, 7, "{sweep}: {}", error.message);
+                assert!(error.message.contains("ndec"), "{}", error.message);
+            }
+        }
+    }
+
+    #[test]
+    fn compat_reads_zero_ndec_as_a_hundredth_with_a_warning() {
+        let (got, warnings) = sweep_of("fmin=1e3 fmax=1e7 ndec=0", COMPAT);
+        // 0.01 points per decade: the next point is 100 decades on.
+        assert_eq!(got, vec![1e3]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 7);
+        assert!(warnings[0].message.contains("ndec=0.01"), "{warnings:?}");
+    }
+
+    #[test]
+    fn compat_reads_omitted_ndec_as_one_with_a_warning() {
+        let (got, warnings) = sweep_of("fmin=1e3 fmax=1e6", COMPAT);
+        assert_eq!(got, vec![1e3, 1e4, 1e5, 1e6]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 7);
+        assert!(warnings[0].message.contains("ndec=1"), "{warnings:?}");
+    }
+
+    #[test]
+    fn compat_fmin_above_fmax_is_an_empty_sweep_with_a_warning() {
+        let (got, warnings) = sweep_of("fmin=1e6 fmax=1e3 ndec=10", COMPAT);
+        assert!(got.is_empty(), "{got:?}");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 7);
+        assert!(warnings[0].message.contains("empty"), "{warnings:?}");
+        // Above fmax but inside the slack: fmin alone, still flagged.
+        let (got, warnings) = sweep_of("fmin=1.0005e6 fmax=1e6 ndec=10", COMPAT);
+        assert_eq!(got, vec![1.0005e6]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 7);
+    }
+
+    #[test]
+    fn a_deck_without_freq_is_still_an_error_in_compat() {
+        let deck = sweep_deck("fmin=1 fmax=1 ndec=1").replace(".freq fmin=1 fmax=1 ndec=1\n", "");
+        let error = parse_with_options(&deck, COMPAT).unwrap_err();
+        assert!(error.message.contains("no .freq"), "{}", error.message);
+    }
+
+    #[test]
+    fn decade_sweep_matches_the_deck_rule() {
+        assert_eq!(decade_sweep(1e3, 1e7, 0.5).unwrap(), vec![1e3, 1e5, 1e7]);
+        assert!(decade_sweep(1e3, 1e7, -1.0).is_err());
+        assert!(decade_sweep(1e3, 1e7, 0.0).is_err());
+        assert!(decade_sweep(1e6, 1e3, 1.0).is_err());
+        assert!(decade_sweep(1.0, 1e300, 1e6).is_err(), "too many points");
     }
 
     #[test]
@@ -7822,9 +8098,10 @@ e1 n1 n2 w=1 h=0.1 sigma=5.8e4 nwinc=3 nhinc=3 rw=2 rh=2
 
     #[test]
     fn decade_frequencies_hit_round_values_exactly() {
-        let frequencies = frequency_sweep(1e6, 1e9, 1, 6).unwrap();
+        let frequencies = frequency_sweep(1e6, 1e9, 1.0, false).unwrap();
         assert_eq!(frequencies, vec![1e6, 1e7, 1e8, 1e9]);
-        let frequencies = frequency_sweep(1e3, 1e6, 10, 6).unwrap();
+        assert_eq!(frequency_sweep(1e6, 1e9, 1.0, true).unwrap(), frequencies);
+        let frequencies = frequency_sweep(1e3, 1e6, 10.0, false).unwrap();
         assert_eq!(frequencies.len(), 31);
         assert_eq!(frequencies[30], 1e6);
     }
