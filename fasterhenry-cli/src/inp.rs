@@ -446,8 +446,14 @@
 //!   are an error in both modes.
 //! * The remaining documented plane parameters are rejected by name too,
 //!   each with the reason and the alternative: `rh` (plane filaments are
-//!   uniform) and `segwid1`/`segwid2` (bar widths follow the cells).
-//!   Nothing on a `G` statement is silently ignored.
+//!   uniform). Nothing on a `G` statement is silently ignored.
+//! * **`segwid1`/`segwid2`** (the documented meshed plane) cap the width of
+//!   the bars parallel to p1→p2 and to p2→p3 at `min(segwid, cell width
+//!   across the bar)`; the mesh and bar count are unchanged. A value above
+//!   the spacing warns and the full width is used. On a nonuniform plane
+//!   (`file=NONE`, `contact initial_grid`, any `contact` clause) they are
+//!   an error natively and ignored with a warning under
+//!   [`ParseOptions::fasthenry_compat`].
 //!
 //! # Semantics
 //!
@@ -589,6 +595,9 @@ struct PlaneSpec {
     plane: GroundPlane,
     /// Filaments across each plane bar's thickness (`nhinc=`; 1 by default).
     nhinc: usize,
+    /// `segwid1=`/`segwid2=` as caps on the bar width, in global axes:
+    /// `[x-directed bars, y-directed bars]`, metres (`None`: full width).
+    bar_width: [Option<f64>; 2],
 }
 
 /// An in-plane node awaiting assembly: the declared node slot it occupies,
@@ -1667,6 +1676,11 @@ struct PlaneStatement<'a> {
     /// Whether that clause was the meshed form, which additionally punches
     /// the documented checkerboard of holes into the initial grid.
     meshed_grid: bool,
+    /// `segwid1=` / `segwid2=`: bar width (metres) along p1→p2 and along
+    /// p2→p3, each with the clause's physical line and source order.
+    segwid: [Option<(f64, ClauseAt)>; 2],
+    /// Whether `file=NONE` was written (the plane is then nonuniform).
+    file_none: bool,
     /// `sigma=` / `rho=` (S/m), or the `.default` conductivity.
     sigma: Option<f64>,
     /// `nhinc=` (1 unless set).
@@ -1803,12 +1817,17 @@ impl<'a> PlaneStatement<'a> {
                 ));
             }
             "segwid1" | "segwid2" => {
-                return Err(err(
-                    line,
-                    format!(
-                        "ground plane '{head}': '{key}' (an explicit plane-segment width) is not supported; this engine's plane bars take their width from the cell they span (set seg1/seg2, or refine locally with '.contact')"
-                    ),
-                ));
+                let width = parse_number(raw, line)? * unit;
+                if width <= 0.0 {
+                    return Err(err(
+                        line,
+                        format!(
+                            "ground plane '{head}': '{key}' needs a width > 0 (got '{key}={raw}')"
+                        ),
+                    ));
+                }
+                self.segwid[usize::from(key == "segwid2")] =
+                    Some((width, (self.clause_line, self.clause_seq)));
             }
             // Read by `apply_offset` before any other item (issue #146).
             "relx" | "rely" | "relz" => {}
@@ -1824,7 +1843,8 @@ impl<'a> PlaneStatement<'a> {
                 // case, as every other token this reader interprets is. A
                 // *named* file is rejected by name: an input this reader
                 // does not read, not an output it does not write.
-                if !raw.eq_ignore_ascii_case("NONE") {
+                self.file_none = raw.eq_ignore_ascii_case("NONE");
+                if !self.file_none {
                     return Err(err(
                         line,
                         format!(
@@ -1845,7 +1865,7 @@ impl<'a> PlaneStatement<'a> {
                 return Err(err(
                     line,
                     format!(
-                        "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, rho, nhinc, relx, rely, relz)"
+                        "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, segwid1, segwid2, sigma, rho, nhinc, relx, rely, relz)"
                     ),
                 ));
             }
@@ -2373,10 +2393,21 @@ impl<'a> PlaneStatement<'a> {
     /// off the plane), but neither is an error.
     fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
         let frame = self.frame()?;
+        // A plane is nonuniform once anything but `seg1`/`seg2` shapes its
+        // mesh; a meshed-plane bar width has no meaning there.
+        let nonuniform = self.file_none
+            || self.initial_grid.is_some()
+            || !(self.contact_rects.is_empty()
+                && self.contact_decays.is_empty()
+                && self.contact_lines.is_empty()
+                && self.contact_traces.is_empty()
+                && self.contact_equivs.is_empty());
         let PlaneStatement {
             head,
             nhinc,
             meshed_grid,
+            segwid,
+            compat,
             mut nodes,
             hole_rects,
             hole_points,
@@ -2389,6 +2420,58 @@ impl<'a> PlaneStatement<'a> {
             mut warnings,
             ..
         } = self;
+
+        // `segwid1` / `segwid2`: caps on the bars parallel to p1→p2 and to
+        // p2→p3. Each bar's cross-spacing is the cell width across it.
+        let mut bar_width = [None, None];
+        for (index, entry) in segwid.iter().enumerate() {
+            let Some((width, (clause_line, order))) = *entry else {
+                continue;
+            };
+            let key = format!("segwid{}", index + 1);
+            if nonuniform {
+                if !compat {
+                    return Err(err(
+                        clause_line,
+                        format!(
+                            "ground plane '{head}': '{key}' needs a uniform plane, but this plane's mesh is nonuniform ('file=NONE', 'contact initial_grid' or a 'contact' clause); drop '{key}', or read the deck with --fasthenry-compat, which ignores it"
+                        ),
+                    ));
+                }
+                warnings.push((
+                    order,
+                    ParseWarning {
+                        line: clause_line,
+                        message: format!(
+                            "ground plane '{head}': '{key}' is ignored on a nonuniform plane (full-width bars are used)"
+                        ),
+                    },
+                ));
+                continue;
+            }
+            // Bars parallel to p1→p2 run along `axis1` and are as wide as
+            // the cell across the other axis.
+            let along = if index == 0 {
+                frame.axis1
+            } else {
+                1 - frame.axis1
+            };
+            let across = 1 - along;
+            #[allow(clippy::cast_precision_loss)]
+            let spacing = (frame.hi[across] - frame.lo[across]) / frame.cells[across] as f64;
+            if width > spacing * (1.0 + 1e-9) {
+                warnings.push((
+                    order,
+                    ParseWarning {
+                        line: clause_line,
+                        message: format!(
+                            "ground plane '{head}': '{key}' ({width} metres) is greater than the segment separation ({spacing} metres); the full width is used"
+                        ),
+                    },
+                ));
+            }
+            bar_width[along] = Some(width);
+        }
 
         // The meshed initial grid's holes are cut into the *initial* grid,
         // before anything else refines it, so they come first.
@@ -2563,6 +2646,7 @@ impl<'a> PlaneStatement<'a> {
                     equipotentials,
                 },
                 nhinc,
+                bar_width,
             },
             nodes,
             {
@@ -3937,6 +4021,7 @@ impl DeckBuilder {
                 equipotentials: Vec::new(),
             },
             nhinc,
+            bar_width: [None, None],
         });
         Ok(())
     }
@@ -4185,7 +4270,7 @@ fn build_plane_meshes<'a>(
     for spec in planes {
         let centres = spec
             .plane
-            .build_into(geometry)
+            .build_into_narrowed(geometry, spec.bar_width)
             .map_err(|error| ParseError {
                 line: 0,
                 message: error.to_string(),
@@ -7000,6 +7085,118 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         assert_eq!(spaced.geometry, tight.geometry);
     }
 
+    /// Widths (metres) of the plane's bars, split by direction: the bars
+    /// along global x, then those along global y. The via's own segment is
+    /// excluded (it is not horizontal).
+    fn plane_bar_widths(deck: &Deck) -> (Vec<f64>, Vec<f64>) {
+        let (mut along_x, mut along_y) = (Vec::new(), Vec::new());
+        for segment in deck.geometry.segments() {
+            let d = [
+                segment.b.x - segment.a.x,
+                segment.b.y - segment.a.y,
+                segment.b.z - segment.a.z,
+            ];
+            if d[2].abs() > 1e-12 {
+                continue;
+            }
+            if d[0].abs() > d[1].abs() {
+                along_x.push(segment.width);
+            } else {
+                along_y.push(segment.width);
+            }
+        }
+        (along_x, along_y)
+    }
+
+    fn segwid_deck(extra: &str) -> String {
+        plane_deck(
+            &format!(
+                "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=10 z3=0
++ thick=0.04 seg1=4 seg2=4 {extra}"
+            ),
+            "",
+        )
+    }
+
+    /// `segwid1`/`segwid2` only cap the bar width: the mesh and bar count
+    /// are unchanged, `segwid1` narrows the bars parallel to p1→p2 and
+    /// `segwid2` those parallel to p2→p3.
+    #[test]
+    fn segwid_narrows_the_bars_of_its_own_direction_only() {
+        let plain = parse_ok(&segwid_deck(""));
+        let (px, py) = plane_bar_widths(&plain);
+        assert!(px.iter().chain(&py).all(|w| (w - 2.5e-3).abs() < 1e-12));
+        for (extra, x_width, y_width) in [
+            ("segwid1=0.5 segwid2=0.5", 0.5e-3, 0.5e-3),
+            ("segwid1=0.5", 0.5e-3, 2.5e-3),
+            ("segwid2=0.5", 2.5e-3, 0.5e-3),
+        ] {
+            let (deck, warnings) = parse_reporting(&segwid_deck(extra)).unwrap();
+            assert!(warnings.is_empty(), "{warnings:?}");
+            let (x, y) = plane_bar_widths(&deck);
+            assert_eq!((x.len(), y.len()), (px.len(), py.len()), "{extra}");
+            assert!(x.iter().all(|w| (w - x_width).abs() < 1e-12), "{extra}");
+            assert!(y.iter().all(|w| (w - y_width).abs() < 1e-12), "{extra}");
+            assert_eq!(
+                deck.geometry.segment_count(),
+                plain.geometry.segment_count()
+            );
+        }
+    }
+
+    /// `segwid1` follows the p1→p2 edge, not global x.
+    #[test]
+    fn segwid1_follows_the_first_edge_on_a_rotated_plane() {
+        let deck = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=0 y2=10 z2=0 x3=10 y3=10 z3=0
++ thick=0.04 seg1=4 seg2=4 segwid1=0.5",
+            "",
+        ));
+        let (x, y) = plane_bar_widths(&deck);
+        assert!(y.iter().all(|w| (w - 0.5e-3).abs() < 1e-12));
+        assert!(x.iter().all(|w| (w - 2.5e-3).abs() < 1e-12));
+    }
+
+    /// A width above the node spacing warns on its own line and uses the
+    /// full spacing.
+    #[test]
+    fn segwid_above_the_spacing_warns_and_uses_full_width() {
+        let (deck, warnings) = parse_reporting(&segwid_deck("segwid2=3")).unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 4);
+        assert!(warnings[0].message.contains("'segwid2'"));
+        assert!(warnings[0].message.contains("segment separation"));
+        let (x, y) = plane_bar_widths(&deck);
+        assert!(x.iter().chain(&y).all(|w| (w - 2.5e-3).abs() < 1e-12));
+    }
+
+    /// On a nonuniform plane, native mode errors and compat ignores the
+    /// width with a line-numbered warning.
+    #[test]
+    fn segwid_on_a_nonuniform_plane_is_compat_only_ignored() {
+        for extra in [
+            "segwid1=0.5 file=NONE",
+            "segwid1=0.5 contact point (5, 5, 0, 1, 1)",
+        ] {
+            let text = segwid_deck(extra);
+            let error = parse(&text).unwrap_err();
+            assert_eq!(error.line, 4);
+            assert!(error.message.contains("'segwid1'"), "{}", error.message);
+            let (deck, warnings) =
+                parse_with_options_reporting(&format!("title\n{text}"), COMPAT).unwrap();
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.line == 5 && w.message.contains("'segwid1' is ignored")),
+                "{warnings:?}"
+            );
+            let (x, y) = plane_bar_widths(&deck);
+            assert!(x.iter().chain(&y).all(|w| *w > 0.5e-3 + 1e-9));
+        }
+    }
+
     /// Every documented plane parameter this engine cannot represent is
     /// rejected by name, on the statement's own line — never ignored.
     #[test]
@@ -7017,8 +7214,8 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         };
         for (extra, expected) in [
             ("nhinc=3 rh=2", "'rh'"),
-            ("segwid1=0.5", "'segwid1'"),
-            ("segwid2=0.5", "'segwid2'"),
+            ("segwid1=0", "'segwid1' needs a width > 0"),
+            ("segwid2=-1", "'segwid2' needs a width > 0"),
             // Only a *named* discretization hierarchy is rejected; the
             // documented `file=NONE` is accepted as the no-op it is — see
             // `file_none_is_the_documented_no_op_and_a_named_hierarchy_file_is_rejected`.
