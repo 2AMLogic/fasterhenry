@@ -43,14 +43,17 @@ Status key:
 
 | Field | Status | Notes |
 |---|---|---|
-| `.units <unit>` | Supported, differs (mandatory) | The engine takes the presence of `.units` as mandatory rather than defaulting silently — a deliberate safety choice, so a missing unit line can never scale every length (and therefore every impedance) by a factor of 10 or 100 without a diagnostic. A deck without `.units` is rejected with a line-numbered error naming the missing directive rather than assuming a default unit. |
+| `.units <unit>` | Supported, differs (mandatory) | The engine takes the presence of `.units` as mandatory rather than defaulting silently — a deliberate safety choice, so a missing unit line can never scale every length (and therefore every impedance) by a factor of 10 or 100 without a diagnostic. A deck without `.units` is rejected with a line-numbered error naming the missing directive rather than assuming a default unit. Under `--fasthenry-compat` (issue #144) a missing `.units` reads as metres, as FastHenry does, with a line-numbered warning on the first line that needs a unit (`no .units directive before this line; reading lengths in metres, …`). |
+| Several `.units` lines | Supported, differs (opt-in) | The public guide honours each `.units` from its own line onward. By default a second `.units` is a line-numbered error (`duplicate .units directive`). Under `--fasthenry-compat` (issue #144) each applies forward only — to lengths and explicit conductivities (`sigma=`/`rho=`) on later lines — never retroactively: every value already read, `.default` fields included, is stored in metres and S/m at the unit in force on its own line, so a `.default sigma=5.8e4` under `.units mm` stays 5.8e7 S/m after a later `.units m`. |
 | Full documented unit list: `km`, `m`, `cm`, `mm`, `um`, `in`, `mils` | Supported | Case-insensitive (issue #70); `mil` is also accepted as a synonym for `mils`. |
+| Long spellings FastHenry reads correctly: `meter(s)`, `metre(s)`, `kilometer(s)`, `kilometre(s)`, `inch`, `inches` | Supported, differs (opt-in) | Issue #144. FastHenry matches `.units` by prefix, so it reads these at the right scale. Rejected by default (`unknown length unit`); under `--fasthenry-compat` accepted at the documented unit's factor with a line-numbered warning naming the documented spelling. Case is ignored. |
+| Spellings FastHenry misreads: `millimeter…`/`millimetre…`/`milli…`, `micron…`/`micrometer…`/`micrometre…` | Rejected, differs (deliberate) | Issue #144. FastHenry's prefix match reads the first family as **mils** (2.54e-5 m) and the second as **metres**, silently solving at the wrong scale. This reader rejects them in both modes, with a line-numbered error that, under `--fasthenry-compat`, names FastHenry's misreading and the documented spelling (`mm`, `um`): matching FastHenry here would reproduce a wrong answer. Other spellings FastHenry rejects (`centimeter`, `nm`, `ft`, bare `c`/`u`/`i`) are the ordinary unknown-unit error. |
 
 ## `.default`
 
 | Field | Status | Notes |
 |---|---|---|
-| `.default x= y= z= w= h= nwinc= nhinc= rw= rh= wx= wy= wz= sigma=` | Supported | Applies to every `N`/`E` line parsed after it; not retroactive. Requires `.units` first (lengths need a scale factor before they can be stored). |
+| `.default x= y= z= w= h= nwinc= nhinc= rw= rh= wx= wy= wz= sigma=` | Supported | Applies to every `N`/`E` line parsed after it; not retroactive. Requires `.units` first (lengths need a scale factor before they can be stored); under `--fasthenry-compat` a deck with none is in metres, with a warning (see `.units`). |
 | `.default rho=` | Supported | Issue #70. Per deck unit, the exact reciprocal of `sigma=`; must be positive. Naming both `sigma=` and `rho=` on one line is a line-numbered error; a later per-line value in either form overrides a `.default` in either form. |
 
 ## Nodes (`N`)
