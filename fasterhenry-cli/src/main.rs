@@ -7,6 +7,7 @@
 
 use fasterhenry_cli::cli::{Invocation, RunArgs};
 use fasterhenry_cli::inp::ParseOptions;
+use fasterhenry_cli::outputs::{validate_destinations, Destination};
 use fasterhenry_cli::spice::write_spice_subckt;
 use fasterhenry_cli::{read_inputs_reporting_with, run_reporting_with, solver_for};
 
@@ -18,13 +19,30 @@ fn main() -> anyhow::Result<()> {
     let RunArgs {
         input,
         freq,
-        zc_mat: _,
+        zc_mat: zc_mat_flag,
         json,
         spice,
         spice_freq,
         solver,
         fasthenry_compat,
     } = invocation.into_args();
+
+    // Before anything is read, solved or written: no output may be the
+    // input, and no two outputs may be one file (issue #175).
+    let zc_mat_role = if zc_mat_flag.is_some() {
+        "--zc-mat"
+    } else {
+        "default Zc.mat"
+    };
+    let destinations: Vec<Destination<'_>> = [
+        ("--json", json.as_deref()),
+        (zc_mat_role, zc_mat.as_deref()),
+        ("--spice", spice.as_deref()),
+    ]
+    .into_iter()
+    .filter_map(|(role, path)| path.map(|path| Destination { role, path }))
+    .collect();
+    validate_destinations(&input, &destinations).map_err(|m| anyhow::anyhow!("{m}"))?;
 
     let options = ParseOptions { fasthenry_compat };
     let (problem, parse_warnings) =

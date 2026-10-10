@@ -218,6 +218,12 @@ Two further outputs are optional:
   frequency (default: the last): coupled inductors for `L`, current-
   controlled sources for `R`.
 
+No output may name the input file, and no two outputs may name the same
+file — counting relative and `./`/`../` spellings, symlinks and (on unix)
+hard links as the same file. Such a run is refused before anything is
+written, with both paths in the message. An unrelated existing file at an
+output path is replaced.
+
 Both formats are specified in
 [`docs/output-formats.md`](https://github.com/2AMLogic/fasterhenry/blob/main/docs/output-formats.md).
 
