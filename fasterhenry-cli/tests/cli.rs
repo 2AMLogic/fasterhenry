@@ -371,3 +371,91 @@ fn a_hole_off_its_plane_solves_with_a_line_numbered_warning() {
     assert!(warning.contains("'hole point'"), "{warning}");
     assert!(warning.contains("ground plane 'Gplane'"), "{warning}");
 }
+
+/// Runs `--spice` on a copy of the spiral fixture renamed to `file_name`
+/// and returns the exported netlist.
+fn spice_export_of_renamed_spiral(scratch_name: &str, file_name: &str) -> String {
+    let directory = scratch(scratch_name);
+    let deck = directory.join(file_name);
+    std::fs::copy(fixture("spiral.inp"), &deck).expect("copy the fixture");
+    let netlist = directory.join("out.cir");
+    let output = Command::new(BINARY)
+        .arg("run")
+        .arg(&deck)
+        .arg("--freq")
+        .args(["1e6", "1e6", "1"])
+        .arg("--spice")
+        .arg(&netlist)
+        .current_dir(&directory)
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success(), "{}", stderr(&output));
+    std::fs::read_to_string(&netlist).expect("the netlist is written")
+}
+
+/// The `.subckt` and `.ends` lines of a one-port export, asserting each
+/// directive appears exactly once and names `expected` as a single token.
+fn assert_single_subckt(text: &str, expected: &str) {
+    let subckt: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with(".subckt"))
+        .collect();
+    let ends: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with(".ends"))
+        .collect();
+    assert_eq!(subckt, vec![format!(".subckt {expected} p1 n1")], "{text}");
+    assert_eq!(ends, vec![format!(".ends {expected}")], "{text}");
+    // The comment header carries the name too and stays one line.
+    assert_eq!(
+        text.lines().filter(|line| line.starts_with('*')).count(),
+        2,
+        "{text}"
+    );
+    // The impedance stamp is intact.
+    assert!(text.contains("L1 p1 a0_0 "), "{text}");
+    assert!(text.contains("H1_1 a0_0 a0_1 vsense1 "), "{text}");
+    assert!(text.contains("vsense1 a0_1 n1 0"), "{text}");
+}
+
+/// A plain stem passes through unchanged.
+#[test]
+fn spice_subckt_name_keeps_a_simple_stem() {
+    let text = spice_export_of_renamed_spiral("spice-simple", "spiral.inp");
+    assert_single_subckt(&text, "spiral");
+}
+
+/// Spaces, punctuation and Unicode in the file name collapse into one
+/// `[A-Za-z0-9_]` token, the same on `.subckt` and `.ends`.
+#[test]
+fn spice_subckt_name_normalizes_unsafe_file_names() {
+    for (index, (file_name, expected)) in [
+        ("my coil.inp", "my_coil"),
+        ("v1.2-final(x).inp", "v1_2_final_x_"),
+        ("bobine\u{e9}.inp", "bobine_"),
+        ("\u{7dda}\u{5708}.inp", "__"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let text = spice_export_of_renamed_spiral(&format!("spice-unsafe-{index}"), file_name);
+        assert_single_subckt(&text, expected);
+    }
+}
+
+/// Tabs and newlines in the file name cannot add tokens or netlist lines,
+/// so filename text cannot inject directives.
+#[cfg(unix)]
+#[test]
+fn spice_subckt_name_neutralizes_control_characters() {
+    for (index, (file_name, expected)) in [
+        ("a\tb.inp", "a_b"),
+        ("x\n.ends\n.subckt evil.inp", "x__ends__subckt_evil"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let text = spice_export_of_renamed_spiral(&format!("spice-control-{index}"), file_name);
+        assert_single_subckt(&text, expected);
+    }
+}
