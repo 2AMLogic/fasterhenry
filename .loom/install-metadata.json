@@ -1,6 +1,6 @@
 {
-  "loom_version": "0.19.1132",
-  "loom_commit": "8695bdd2b7b963dca9b76f4643a9d7c744294426",
+  "loom_version": "0.19.1137",
+  "loom_commit": "240bb1a888bb79770ecc3acbc19c6425468fedca",
   "install_date": "2026-09-18",
   "loom_source_remote": "git@github.com:rjwalters/loom.git",
   "installed_files": [
@@ -612,7 +612,10 @@
     ".claude/commands/loom/sweep-doctor-glm-escalation.md",
     ".loom/docs/stale-check-inputs.md",
     ".loom/docs/merge-pr-exit-code-exceptions.md",
-    ".loom/scripts/tests/test-merge-pr-stale-check-redate.sh"
+    ".loom/scripts/tests/test-merge-pr-stale-check-redate.sh",
+    ".loom/docs/forge-events.md",
+    ".loom/scripts/tests/test-judge-payload-drop-guard.sh",
+    ".loom/scripts/tests/test-post-verdict-gate.sh"
   ],
   "last_resync": "2026-10-12",
   "requires_daemon": "0.19.1081"
