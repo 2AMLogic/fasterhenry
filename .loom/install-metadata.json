@@ -1,6 +1,6 @@
 {
-  "loom_version": "0.19.1124",
-  "loom_commit": "172a8b5e7fadbbac346679f692d4603683db486f",
+  "loom_version": "0.19.1127",
+  "loom_commit": "8279ae55971d200a6d077f99ea5d147e5b44283d",
   "install_date": "2026-09-18",
   "loom_source_remote": "https://github.com/rjwalters/loom.git",
   "installed_files": [
@@ -610,7 +610,9 @@
     ".loom/scripts/tests/test-premise-check.sh",
     ".loom/runtimes/gemini.json",
     ".claude/commands/loom/sweep-doctor-glm-escalation.md",
-    ".loom/docs/stale-check-inputs.md"
+    ".loom/docs/stale-check-inputs.md",
+    ".loom/docs/merge-pr-exit-code-exceptions.md",
+    ".loom/scripts/tests/test-merge-pr-stale-check-redate.sh"
   ],
   "last_resync": "2026-10-12",
   "requires_daemon": "0.19.1081"
