@@ -33,7 +33,7 @@ Ruehli's PEEC formulation; the FastHenry approach of Kamon, Tsuk and White
 (*FASTHENRY: a multipole-accelerated 3-D inductance extraction program*, IEEE
 Trans. MTT 42(9), 1994); Grover/Rosa closed forms for parallel filament
 partial inductances; numerical quadrature for arbitrary orientation. See
-`docs/` as the design lands.
+[`docs/`](docs/README.md).
 
 ## Clean-room rule
 
@@ -118,7 +118,7 @@ cross-validation behind the "replacement" claim.
 | crate | what |
 |---|---|
 | `fasterhenry` | the library: geometry, filaments, kernels, assembly, solve |
-| `fasterhenry-cli` | `fasterhenry` binary: `.inp`/JSON in, JSON out |
+| `fasterhenry-cli` | `fasterhenry` binary: `.inp`/JSON in; JSON, MAT v4 `Zc.mat` or SPICE out |
 
 ## Development
 
