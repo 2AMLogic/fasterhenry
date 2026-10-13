@@ -14,6 +14,11 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- Deck reader: under `--fasthenry-compat`, a diagonal `contact trace` is
+  accepted (issue #157) and refined as its bounding box padded by `3w/2`,
+  with cells `(w/2)·scale_factor^min(|tan θ|, |cot θ|)`, and a
+  line-numbered warning that this approximates FastHenry's staircase
+  refinement. Native mode still rejects it.
 - Deck reader: `relx=` / `rely=` / `relz=` on a corner-point `G` statement
   (issue #146), the documented offset (User's Guide §1.3.9), in every mode.
   It is added to every node-reference, hole and contact coordinate on the
@@ -22,6 +27,11 @@ breaking changes to the API or the command-line interface; patch releases
   `--fasthenry-compat`, one empty coordinate field in a node reference
   (`N1 (, 2, 0)`) now reads as 0 (before the offset) with a line-numbered
   warning; natively it is still an error.
+- Deck reader: under `--fasthenry-compat`, a segment or ground plane with
+  no conductivity on its line or in `.default` defaults to copper,
+  5.8e7 S/m as a physical value whatever the `.units`, with one
+  line-numbered warning per statement (issue #142). Natively it is still a
+  line-numbered error.
 - Deck reader: a line-numbered **warning** for a corner-point `G`
   statement's `hole point`, `hole circle`, `hole rect`, `contact rect` or
   `contact decay_rect` clause that lies **wholly outside** the plane's
@@ -33,7 +43,8 @@ breaking changes to the API or the command-line interface; patch releases
   naming the clause's own physical (continuation) line; stdout is
   unchanged. The test is intersection with the closed footprint: a circle
   or rectangle that overhangs an edge, reaches over a corner, or merely
-  touches the boundary does not warn, and neither does an in-footprint
+  touches the boundary does not warn (a contact rectangle that only
+  touches the boundary does, since #134), and neither does an in-footprint
   clause that happens to change nothing. The stricter clauses keep their
   errors (`contact point` / `line` / `trace` off the plane; a `contact
   equiv_rect` / `contact connection` whose node is off the plane or that
@@ -327,14 +338,23 @@ breaking changes to the API or the command-line interface; patch releases
   line-numbered warning per clamped axis (issue #145). Both axes clamp at
   `cell >= width`. Natively such a cell is still an error, and a cell ≤ 0
   is an error in both modes.
+- Deck reader: spaces or tabs around `=` on `N`, `E`, `.default` and
+  `.freq` lines (continuation lines included) are ignored, so `k = v` reads
+  as `k=v`, in every mode (issue #141). A dangling `x=` is still an error.
+- Deck reader: a `contact rect` / `contact decay_rect` that only touches a
+  plane's boundary (or overlaps it by no more than `plane::contact_slack`)
+  is dropped with a line-numbered warning instead of failing assembly on
+  line 0 (issue #134).
+- Deck reader: a ground-plane statement's warnings are reported in
+  source-clause order (issue #136).
 - Deck reader: a corner-point `G` statement's `contact rect` or `contact
   decay_rect` wholly outside the plane's footprint is no longer a plane
   assembly error on line 0 ("contact region … lies outside the plane
   footprint"); it refines nothing, so it is now dropped with the
   line-numbered warning above, consistent with the holes (issue #105). No
   deck that parsed before changes meaning. A rectangle that only touches
-  the footprint, and the `.contact` extension directive, keep the existing
-  error.
+  the footprint is dropped with a warning too (issue #134); the `.contact`
+  extension directive keeps the existing error.
 - Deck reader: `file=NONE` on a corner-point `G` ground-plane statement is
   now **accepted** as the no-op it is, and a *named* file is rejected for the
   right reason (issue #122, found while implementing #113). The public
