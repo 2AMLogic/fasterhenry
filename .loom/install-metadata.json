@@ -1,6 +1,6 @@
 {
-  "loom_version": "0.19.1018",
-  "loom_commit": "13e54f1cfc513507a7ef84ec6908085638d9c187",
+  "loom_version": "0.19.1151",
+  "loom_commit": "4ec7e046f71ff70b92c88ed647cff72d6a9d1e85",
   "install_date": "2026-09-18",
   "loom_source_remote": "git@github.com:rjwalters/loom.git",
   "installed_files": [
@@ -602,8 +602,24 @@
     ".loom/docs/comment-trust.md",
     ".loom/docs/rollout-check.md",
     ".loom/docs/telemetry-kind-pick-decision.md",
-    ".loom/scripts/tests/test-sweep-lease-renew-lifecycle.sh"
+    ".loom/scripts/tests/test-sweep-lease-renew-lifecycle.sh",
+    ".loom/docs/park-record.md",
+    ".loom/scripts/tests/test-champion-pr-merge-negation-guard.sh",
+    ".loom/docs/native-sweep.md",
+    ".loom/docs/premise-gate.md",
+    ".loom/scripts/tests/test-premise-check.sh",
+    ".loom/runtimes/gemini.json",
+    ".claude/commands/loom/sweep-doctor-glm-escalation.md",
+    ".loom/docs/stale-check-inputs.md",
+    ".loom/docs/merge-pr-exit-code-exceptions.md",
+    ".loom/scripts/tests/test-merge-pr-stale-check-redate.sh",
+    ".loom/docs/forge-events.md",
+    ".loom/scripts/tests/test-judge-payload-drop-guard.sh",
+    ".loom/scripts/tests/test-post-verdict-gate.sh",
+    ".loom/docs/configuring-resources.md",
+    ".loom/docs/hyperparameters.md",
+    ".loom/docs/runtime-model-trials.md"
   ],
-  "last_resync": "2026-10-10",
-  "requires_daemon": "0.19.772"
+  "last_resync": "2026-10-13",
+  "requires_daemon": "0.19.1081"
 }
