@@ -30,6 +30,18 @@ jobs:
           fi
           echo "clean"
 
+      - name: Fail if a crate root lacks #![forbid(unsafe_code)]
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r root; do
+            if ! grep -q '^#!\[forbid(unsafe_code)\]' "$root"; then
+              echo "::error file=$root::crate root is missing #![forbid(unsafe_code)]"
+              status=1
+            fi
+          done < <(find . -path ./target -prune -o \( -path '*/src/lib.rs' -o -path '*/src/main.rs' -o -path '*/src/bin/*.rs' -o -name build.rs \) -print)
+          exit $status
+
   dependency-policy:
     name: Dependency licenses & sources (cargo-deny)
     runs-on: ubuntu-latest
