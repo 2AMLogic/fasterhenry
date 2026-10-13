@@ -285,6 +285,13 @@ another:
 | #145 | `decay_rect` cell ≥ rectangle width (FastHenry: clamps) | 3d_example2, 3d_example2_coarse |
 | #146 | `relx`/`rely`/`relz` plane offsets | gpexamp_copper |
 
+Since this run, #141 (PR #150), #142 (#148) and #146 (#149) have merged. A
+rerun on `main` at `9f4ecd8`, which has #141 and #142, parses **4 of 19**:
+30pin is new, at 3.2e-3 agreement and 7× faster wall-clock. The decks that
+#141/#142 unblocked now stop on further gaps, filed as #154 (fractional
+`ndec`), #155 (`segwid1`/`segwid2`), #156 (case-insensitive node names) and
+#157 (diagonal `contact trace`).
+
 **Where both tools run**, agreement is relative Frobenius error of the port
 impedance matrix, ports matched by name, at every frequency both report:
 
@@ -315,7 +322,7 @@ nhinc/sigma`, `N`/`E` keyword lines, `.external` two-node ports,
 `.freq`). Differences observed: FastHenry's `G` uses three corner points
 (`x1..z3`), `thick=` and `sigma=`, requires `seg1`/`seg2`, and has no
 `nx=`/`ny=` (discretization comes from `contact` regions); its default
-`Zc.mat` is ASCII text, not MAT v4; `rho` is accepted for segments.
-fasterhenry's dialect (two corners + thickness + `nx`/`ny`, automatic
-landing-snap, `sigma` in deck units) is documented in
-`fasterhenry-cli/src/inp.rs`.
+`Zc.mat` is ASCII text, not MAT v4. fasterhenry reads FastHenry's
+corner-point `G` form as well as its own two-corner shorthand
+(`nx`/`ny`), accepts `rho`, and takes `sigma` in deck units; see
+`docs/fasthenry-compat.md`.
