@@ -332,6 +332,12 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- Deck reader: under `--fasthenry-compat`, a `contact decay_rect` or
+  seven-value `contact rect` cell at or above the rectangle's width on an
+  axis is clamped to 0.99 × that width, as FastHenry does, with one
+  line-numbered warning per clamped axis (issue #145). Both axes clamp at
+  `cell >= width`. Natively such a cell is still an error, and a cell ≤ 0
+  is an error in both modes.
 - Deck reader: spaces or tabs around `=` on `N`, `E`, `.default` and
   `.freq` lines (continuation lines included) are ignored, so `k = v` reads
   as `k=v`, in every mode (issue #141). A dangling `x=` is still an error.
