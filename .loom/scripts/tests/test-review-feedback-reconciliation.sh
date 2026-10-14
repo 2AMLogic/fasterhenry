@@ -39,59 +39,9 @@ SCRIPTS_DIR="$(cd "$TEST_DIR/.." && pwd)"
 GATE="$SCRIPTS_DIR/check-review-feedback.sh"
 POST_VERDICT="$SCRIPTS_DIR/post-verdict.sh"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
+# shellcheck source=lib/assert.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/assert.sh"
 
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-assert_eq() {
-  local expected="$1" actual="$2" msg="$3"
-  TESTS_RUN=$((TESTS_RUN + 1))
-  if [[ "$expected" == "$actual" ]]; then
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    echo -e "  ${GREEN}PASS${NC}: $msg"
-  else
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-    echo -e "  ${RED}FAIL${NC}: $msg"
-    echo "    Expected: '$expected'"
-    echo "    Actual:   '$actual'"
-  fi
-}
-
-# assert_contains/assert_not_contains use a pure-bash substring match (no
-# forked printf|grep pipeline) so a transient fork/exec failure under
-# run-ci-suites.sh's parallel suite pool can never masquerade as a genuine
-# content mismatch (#7819, #7874).
-assert_contains() {
-  local haystack="$1" needle="$2" msg="$3"
-  TESTS_RUN=$((TESTS_RUN + 1))
-  if [[ "$haystack" == *"$needle"* ]]; then
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    echo -e "  ${GREEN}PASS${NC}: $msg"
-  else
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-    echo -e "  ${RED}FAIL${NC}: $msg"
-    echo "    Expected substring: '$needle'"
-    echo "    In: '$haystack'"
-  fi
-}
-
-assert_not_contains() {
-  local haystack="$1" needle="$2" msg="$3"
-  TESTS_RUN=$((TESTS_RUN + 1))
-  if [[ "$haystack" == *"$needle"* ]]; then
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-    echo -e "  ${RED}FAIL${NC}: $msg"
-    echo "    Unexpected substring: '$needle'"
-    echo "    In: '$haystack'"
-  else
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    echo -e "  ${GREEN}PASS${NC}: $msg"
-  fi
-}
 
 if [[ ! -x "$GATE" ]]; then
   echo -e "${RED}FATAL${NC}: $GATE not found or not executable" >&2
@@ -242,6 +192,8 @@ export PATH="$STUB_DIR:$PATH"
 # is the reconciliation semantics over the GH ladder, so pin the SELF daemon
 # to a mock that refuses (127 = unavailable, never a scope verdict) — the gh
 # stub above stays the path under test, deterministically.
+# #10581's verdict gate / label verbs answer "proceed" / "ok": their logic is
+# not this suite's subject (test-post-verdict*.sh, loom_daemon::verdict_gate).
 cat > "$STUB_DIR/loom-daemon" <<'MOCK'
 #!/usr/bin/env bash
 # #10485: approvals also pass the exact-head CI gate; this suite is about review
@@ -250,6 +202,10 @@ if [[ "${1:-} ${2:-}" == "forge wait-checks" ]]; then
   echo "LOOM-CHECKS-GREEN ${LOOM_TEST_HEAD_SHA:?}"
   exit 0
 fi
+[[ "${1:-} ${2:-}" == "forge verdict-gate" ]] && { echo "LOOM-VERDICT-GATE PROCEED ok"; exit 0; }
+[[ "${1:-} ${2:-}" == "forge verdict-labels" ]] && { echo "LOOM-VERDICT-LABELS OK"; exit 0; }
+[[ "${1:-} ${2:-}" == "forge verdict-lock" ]] && exit 0
+[[ "${1:-} ${2:-}" == "forge verdict-reconcile" ]] && { echo "LOOM-VERDICT-RECONCILE STABLE"; exit 0; }
 echo "mock loom-daemon: forge comment not under test here" >&2
 exit 127
 MOCK
