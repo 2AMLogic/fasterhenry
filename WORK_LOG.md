@@ -4,6 +4,114 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-10-14
+
+- **PR #169**: docs: align benchmark speed summary with table (1k serpentine within noise)
+- **PR #153**: Compat: FastHenry .units spellings, missing .units, and repeated .units
+- **PR #152**: Compat: clamp a contact cell at or above the rectangle width to 0.99x width
+- **PR #151**: Compat: file=NONE plane with no initial grid is a single root cell
+- **Issue #167** (closed): benchmarks.md summary contradicts its own 1,000-filament row
+- **Issue #145** (closed): Compat: clamp a contact cell at or above the rectangle width to 0.99x width
+- **Issue #144** (closed): Compat: FastHenry .units spellings, missing .units, and repeated .units
+- **Issue #143** (closed): Compat: a ground plane with file=NONE and no initial grid is a single root cell
+- **Issue #48** (closed): README: embed the fleet burndown chart (one line)
+
+### 2026-10-13
+
+- **PR #170**: Forbid unsafe code in fasterhenry-cli; CI guard for crate roots
+- **PR #159**: docs: repo hygiene pass 2026-10-05
+- **Issue #168** (closed): Add #![forbid(unsafe_code)] to the fasterhenry-cli crate
+
+### 2026-10-12
+
+- **Issue #181** (closed): Guard decision review: keep main-checkout worktree confinement flagged
+- **Issue #180** (closed): Guard decision review: keep unresolved-variable worktree confinement flagged
+
+### 2026-10-11
+
+- **Issue #173** (closed): Guard review: keep gh-api-rawfield-body-literal-at protection
+
+### 2026-10-06
+
+- **Issue #157** (closed): Compat: approximate a diagonal contact trace by refining its bounding box
+
+### 2026-10-05
+
+- **Issue #146** (closed): Deck reader: support relx/rely/relz on ground planes (documented offset)
+- **Issue #142** (closed): Compat: default an unspecified conductivity to copper (5.8e7 S/m), with a warning
+- **Issue #141** (closed): Deck reader: accept whitespace around '=' on N, E and .default lines
+- **Issue #136** (closed): Align parse warning ordering with reporting API documentation
+- **Issue #134** (closed): Deck reader: a contact rect ending on the plane edge up to float rounding fails assembly with a zero-length segment on line 0
+- **Issue #105** (closed): Deck reader: a hole whose xy lies entirely outside the plane's footprint is a silent no-op
+- **Issue #35** (closed): Enable required status checks on main (a stale-green merge landed a failing change that needed a hotfix)
+
+### 2026-09-30
+
+- **Issue #131** (closed): Hygiene: the test suite leaves an untracked Zc.mat at the repo root
+
+### 2026-09-29
+
+- **Issue #124** (closed): Plane mesh: a background-resolution band merges with a finer one and widens it across the axis
+- **Issue #122** (closed): Deck reader: 'file=' on a ground plane is an input hierarchy file, not an output option
+- **Issue #118** (closed): Deck reader: contact cell sizes are applied along global x/y, but the public memo defines them in the plane's own p1->p2 coordinate system
+- **Issue #116** (closed): Deck reader: a contact point/line met on one axis still perturbs that axis's mesh
+- **Issue #113** (closed): Deck reader: 'contact initial_grid' / 'initial_mesh_grid' need the documented row/column convention
+- **Issue #110** (closed): Deck reader: the 'contact trace' refinement primitive
+- **Issue #95** (closed): Deck reader: 'contact rect' takes corners where the documented form takes a centre and widths
+- **Issue #94** (closed): CI: extend the cargo-deny gate with a [sources] check (crates.io only, no git dependencies)
+
+### 2026-09-28
+
+- **Issue #114** (closed): inp parser panics instead of erroring on a deck with no segments and no planes
+- **Issue #112** (closed): Simplify inp.rs: split the 394-line parse_plane_statement into per-clause helpers
+- **Issue #109** (closed): Deck reader: the 'contact circle' refinement primitive
+- **Issue #108** (closed): Simplify inp.rs: split the 804-line parse_with_options into per-directive functions
+- **Issue #106** (closed): Docs: two stale cross-references left by #98's hole-model widening (CHANGELOG line 61, inp.rs intra-doc link)
+- **Issue #101** (closed): Deck reader: named equipotential contacts ('equiv_rect', 'connection') and the initial-grid forms
+- **Issue #100** (closed): Deck reader: the 'contact point' / 'line' / 'circle' / 'trace' refinement primitives
+- **Issue #99** (closed): Deck reader: decide the disposition of 'hole user1'…'user7' (library predicate, or permanent rejection)
+- **Issue #98** (closed): Deck reader: 'hole point' and 'hole circle' need a non-rectangular hole model
+- **Issue #97** (closed): Ship a third-party license bundle for Apache-2.0-only dependencies with binary distributions
+- **Issue #88** (closed): Deck reader: accept rho= directly on the corner-point G plane form
+- **Issue #87** (closed): Consider #[non_exhaustive] on public solver enums (Discretization, SolveError) before 0.2.0
+- **Issue #83** (closed): Deck reader: compatibility mode for third-party FastHenry decks (implicit first-line title)
+- **Issue #80** (closed): Deck reader: ground-plane hole and contact shapes the plane model cannot represent yet
+- **Issue #75** (closed): CI: cargo-deny license allowlist gate for the dependency tree
+- **Issue #73** (closed): CLI: drop-in FastHenry mode (fasterhenry deck.inp writes Zc.mat) and --solver override
+- **Issue #72** (closed): Deck reader: audit against the public FastHenry format and commit a compatibility table
+- **Issue #71** (closed): Deck reader: rw/rh non-uniform filament ratios and wx/wy/wz width direction on segments
+- **Issue #70** (closed): Deck reader: accept rho= (resistivity) and the full documented .units list
+- **Issue #69** (closed): Deck reader: FastHenry ground-plane (G) statement syntax, with in-plane nodes, holes and contacts
+
+### 2026-09-27
+
+- **Issue #67** (closed): gitignore: add .claude/skills/repo/logs/ so guard-hook logs don't block fleet resync (2am#1184)
+- **Issue #65** (closed): ci: Actions cache at 9.94/10 GB (99%) — no save-if on either rust-cache step, plus a 0.955 GB venv cached per ref
+- **Issue #63** (closed): Slot-differential PyPEEC bound has only 0.5 pp of headroom now that the gate actually runs
+- **Issue #44** (closed): pFFT scaling benchmark and dense/iterative size threshold
+
+### 2026-09-25
+
+- **Issue #59** (closed): PyPEEC validation gates silently skip in CI (relative reference path + SKIPPED on stderr)
+- **Issue #51** (closed): pFFT: reduce PfftOperator set-up cost (precorrection box potential + near-pair kernels)
+- **Issue #36** (closed): Plane mesh: graded contact-region refinement near via landings (uniform cells converge ~1/n)
+- **Issue #34** (closed): CI: cache the PyPEEC venv (validation steps pay ~40 s of pip install per leg, every PR)
+
+### 2026-09-24
+
+- **Issue #53** (closed): Remove unused simba dependency: cargo-machete flags it, no code references it
+- **Issue #43** (closed): GMRES solve on the pFFT operator, wired into the port-impedance path
+
+### 2026-09-23
+
+- **Issue #46** (closed): Warn when a `.couples` declaration is not transitive (risk of an indefinite L)
+- **Issue #42** (closed): pFFT grid operator: projection, FFT far-field, near-field correction
+
+### 2026-09-21
+
+- **Issue #37** (closed): Validation: trace-over-plane image oracle — redesign the fixture or retire the oracle claim
+- **Issue #33** (closed): Reject numerically unusable surface-graded filament grids
+
 ### 2026-10-06
 
 - **PR #163**: Compat: approximate diagonal contact trace by padded bounding box (#157)
