@@ -372,6 +372,63 @@ fn a_hole_off_its_plane_solves_with_a_line_numbered_warning() {
     assert!(warning.contains("ground plane 'Gplane'"), "{warning}");
 }
 
+/// `segwid1=` on a nonuniform plane (issue #155) is a line-numbered error
+/// natively and is ignored with a line-numbered warning under
+/// `--fasthenry-compat`; `segwid1=` above the cell spacing on a uniform plane
+/// solves with a line-numbered warning.
+#[test]
+fn segwid_reaches_the_executable_with_line_numbered_diagnostics() {
+    let directory = scratch("segwid-diagnostics");
+    let deck = |plane_tail: &str| {
+        format!(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=10 z3=0
++ thick=0.04 {plane_tail}
+Nt x=5 y=5 z=0.5
+Nb x=5 y=5 z=0
+Ev Nt Nb w=0.2 h=0.2
+.external Nt Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+        )
+    };
+    std::fs::write(
+        directory.join("nonuniform.inp"),
+        deck("seg1=4 seg2=4 segwid1=0.5 file=NONE"),
+    )
+    .unwrap();
+    std::fs::write(directory.join("wide.inp"), deck("seg1=4 seg2=4 segwid2=9")).unwrap();
+
+    let native = fasterhenry(&directory, &["run", "nonuniform.inp"]);
+    assert!(!native.status.success());
+    let text = stderr(&native);
+    assert!(
+        text.contains("line 4") && text.contains("'segwid1'"),
+        "{text}"
+    );
+
+    let compat = fasterhenry(&directory, &["run", "--fasthenry-compat", "nonuniform.inp"]);
+    assert!(compat.status.success(), "{}", stderr(&compat));
+    let text = stderr(&compat);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("warning: line 4: ") && l.contains("'segwid1' is ignored")),
+        "{text}"
+    );
+
+    let wide = fasterhenry(&directory, &["run", "wide.inp"]);
+    assert!(wide.status.success(), "{}", stderr(&wide));
+    let text = stderr(&wide);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("warning: line 4: ") && l.contains("segment separation")),
+        "{text}"
+    );
+}
+
 /// A MAT result small enough to sit entirely in the `BufWriter` fails only
 /// at the final drain. `/dev/full` opens fine (so `File::create` succeeds)
 /// and rejects every write with ENOSPC; before the explicit flush the error
