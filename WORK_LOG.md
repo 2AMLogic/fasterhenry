@@ -6,6 +6,10 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-10-15
 
+- **PR #179**: fix(cli): normalize SPICE subckt names derived from file names
+- **PR #162**: feat: support segwid1/segwid2 meshed planes (#155)
+- **Issue #176** (closed): SPICE export: normalize filename-derived subcircuit names into one safe token
+- **Issue #155** (closed): Deck reader: support segwid1/segwid2 meshed planes (documented)
 - **PR #188**: docs: record documented vs hypothesised plane node placement in compat table
 - **PR #184**: Bump Repo Skills 0.19.5 -> 0.24.1
 - **PR #177**: fix(cli): propagate final buffered MAT output failures
