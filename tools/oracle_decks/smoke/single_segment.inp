@@ -1,0 +1,10 @@
+* Self-authored smoke deck for the FastHenry oracle runner (tools/README.md).
+* One straight 10 mm x 1 mm x 1 mm copper segment, one port, one frequency.
+.units m
+.default sigma=5.8e7
+N1 x=0 y=0 z=0
+N2 x=1e-2 y=0 z=0
+E1 N1 N2 w=1e-3 h=1e-3
+.external N1 N2
+.freq fmin=1e6 fmax=1e6 ndec=1
+.end
