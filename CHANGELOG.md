@@ -345,6 +345,14 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- CLI `--spice`: the subcircuit name derived from the input file's stem
+  is normalized to one ASCII `[A-Za-z0-9_]` token (every other character,
+  including whitespace, newlines, punctuation and non-ASCII, becomes `_`;
+  a missing stem falls back to `fasterhenry`), so `.subckt` and `.ends`
+  always carry the identical single-token name and a file name cannot add
+  netlist tokens or lines (issue #176). Simple stems such as `spiral` are
+  unchanged; stems that previously exported whitespace or punctuation now
+  export underscores. `write_spice_subckt` is unchanged.
 - Deck reader: under `--fasthenry-compat`, a `contact decay_rect` or
   seven-value `contact rect` cell at or above the rectangle's width on an
   axis is clamped to 0.99 × that width, as FastHenry does, with one

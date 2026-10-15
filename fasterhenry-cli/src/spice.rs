@@ -24,8 +24,40 @@
 //! controlling meters are named `vsense<i>`.
 
 use std::fmt::Write;
+use std::path::Path;
 
 use fasterhenry::SweepResult;
+
+/// The subcircuit name used when an input path has no usable file stem.
+pub const FALLBACK_SUBCKT_NAME: &str = "fasterhenry";
+
+/// The subcircuit name the CLI derives from an input path: the file stem,
+/// with every character outside ASCII `[A-Za-z0-9_]` (whitespace, control
+/// characters, punctuation including `.`, any non-ASCII character)
+/// replaced by one `_`, so the result is always a single netlist token.
+/// A stem that is missing or empty yields [`FALLBACK_SUBCKT_NAME`]. A stem
+/// that is not valid UTF-8 is read lossily first, so the mapping stays
+/// deterministic. Simple stems such as `spiral` pass through unchanged.
+pub fn subckt_name_from_path(path: &Path) -> String {
+    let name: String = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        FALLBACK_SUBCKT_NAME.to_owned()
+    } else {
+        name
+    }
+}
 
 /// Writes the subcircuit for `result` at frequency index `frequency`:
 /// `.subckt <name>` … `.ends`. Returns the text.
@@ -93,4 +125,36 @@ pub fn write_spice_subckt(result: &SweepResult, frequency: usize, name: &str) ->
 
     let _ = writeln!(out, ".ends {name}");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn name(path: &str) -> String {
+        subckt_name_from_path(Path::new(path))
+    }
+
+    #[test]
+    fn simple_stems_are_unchanged() {
+        assert_eq!(name("spiral.inp"), "spiral");
+        assert_eq!(name("dir/two_turn_2.json"), "two_turn_2");
+    }
+
+    #[test]
+    fn unsafe_characters_become_underscores() {
+        assert_eq!(name("my coil.inp"), "my_coil");
+        assert_eq!(name("a\tb\nc.inp"), "a_b_c");
+        assert_eq!(name("v1.2-final(x).inp"), "v1_2_final_x_");
+        assert_eq!(name("bobine\u{e9}.inp"), "bobine_");
+        assert_eq!(name("\u{7dda}\u{5708}.inp"), "__");
+        assert_eq!(name("x\n.ends\n.subckt evil.inp"), "x__ends__subckt_evil");
+    }
+
+    #[test]
+    fn missing_stem_falls_back() {
+        assert_eq!(name(""), FALLBACK_SUBCKT_NAME);
+        assert_eq!(name("/"), FALLBACK_SUBCKT_NAME);
+        assert_eq!(name(".."), FALLBACK_SUBCKT_NAME);
+    }
 }
