@@ -11,40 +11,44 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#160**: chore(tooling): update Loom 0.19.740 and Repo Skills 0.19.8 (conflicting; touches merge/permission tooling)
-- **#159**: docs: repo hygiene pass 2026-10-05 (benchmark figures need human review)
+- **#161**: feat: accept fractional `.freq` ndec, plus compat sweep edge cases (`loom:operator`; implements #154)
+- **#189**: feat(tools): add isolated FastHenry oracle workflow and runner (`loom:blocked`; implements #186)
 
-## Ready (`loom:issue`, PR open)
+## Important
 
-Each has an implementing PR in review:
-
+- **#166**: Champion merges blocked: branch-protection read returns 403 (repo admin must migrate classic branch protection to a ruleset)
 - **#156**: Deck reader: case-insensitive node names and `.equiv` pseudonyms (PR #164)
-- **#155**: Deck reader: `segwid1`/`segwid2` meshed planes (PR #162)
 - **#154**: Deck reader: fractional `.freq` ndec, compat sweep edge cases (PR #161)
-- **#145**: Compat: clamp a contact cell at or above the rectangle width (PR #152)
-- **#144**: Compat: `.units` spellings, missing and repeated `.units` (PR #153)
-- **#143**: Compat: `file=NONE` plane with no initial grid is a single root cell (PR #151)
+
+## Ready (`loom:issue`)
+
+- **#175**: CLI: reject output destinations that alias the input or each other (PR #178 approved, awaiting merge)
+- **#156**, **#154**: see Important; each has an implementing PR in review/hold
 
 ## In Progress
 
-*None claimed (`loom:building`).*
+- **#186**: clean-room FastHenry oracle runner (PR #189)
 
 ## Blocked / Operator-owned
 
-- **#74**: real-deck corpus comparison against FastHenry (operator-run; head-to-head tooling merged in PR #147)
-- **#48**: README fleet burndown embed (blocked on 2AMLogic/2am#1088)
+- **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
+- **#172**: Auditor request for a Rust toolchain (worker spec change needed)
+- **#166**: branch-protection ruleset migration (repo admin)
+- **#74**: real-deck corpus comparison against FastHenry (operator-run)
 - **#38**: adopt Renovate dependency security policy (open PR)
 - **#16**: Champion merge-risk hold digest (tracking issue, not a work item)
 
 ## Epics
 
-- **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; compatibility follow-ups above are in review.
+- **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; compatibility follow-ups above are in review (#74 remains operator-run).
 
 ## Backlog Balance
 
-| Tier | Count |
+| Bucket | Count |
 |------|-------|
-| Tier 1 (goal-advancing) | 6 (#143–#145, #154–#156) |
-| Tier 2 (goal-supporting) | 1 (#74) |
-| Tier 3 (maintenance) | 0 |
-| Unlabelled / triage | 2 (#16, #48, both blocked) |
+| Very important | 0 |
+| Important | 3 (#154, #156, #166) |
+| Ready (`loom:issue`) | 3 (#154, #156, #175) |
+| In Progress | 1 (#186) |
+| Blocked | 4 (#16, #166, #172, #187) |
+| Active epics | 1 (#76) |
