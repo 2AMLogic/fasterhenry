@@ -6,9 +6,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-10-15
 
+- **PR #188**: docs: record documented vs hypothesised plane node placement in compat table
 - **PR #184**: Bump Repo Skills 0.19.5 -> 0.24.1
 - **PR #177**: fix(cli): propagate final buffered MAT output failures
 - **Issue #174** (closed): CLI: propagate final buffered MAT output failures
+- **Issue #158** (closed): Investigate: FastHenry nonuniform-plane node placement vs our cell-centre model
 
 ### 2026-10-14
 
