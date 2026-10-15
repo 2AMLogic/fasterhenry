@@ -7547,6 +7547,35 @@ Gp x1=0 y1=0 z1=0 x2=0 y2=10 z2=0 x3=10 y3=10 z3=0
         }
     }
 
+    /// A bare `file=NONE` plane (issue #143: a single root cell under
+    /// compat) is nonuniform, so `segwid` follows the same rule as on any
+    /// nonuniform plane: ignored with a line-numbered warning under compat,
+    /// an error natively (the plane has no `seg1`/`seg2` there).
+    #[test]
+    fn segwid_on_a_bare_file_none_plane_is_ignored_under_compat() {
+        let text = plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=10 z3=0
++ thick=0.04 file=NONE segwid1=0.5",
+            "",
+        );
+        assert!(parse(&text).is_err());
+        let (deck, warnings) =
+            parse_with_options_reporting(&format!("title\n{text}"), COMPAT).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.line == 5 && w.message.contains("'segwid1' is ignored")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.message.contains("single cell")),
+            "{warnings:?}"
+        );
+        let (x, y) = plane_bar_widths(&deck);
+        assert!(x.iter().chain(&y).all(|w| *w > 0.5e-3 + 1e-9));
+    }
+
     /// Every documented plane parameter this engine cannot represent is
     /// rejected by name, on the statement's own line — never ignored.
     #[test]
