@@ -4,6 +4,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-10-15
+
+- **PR #177**: fix(cli): propagate final buffered MAT output failures
+- **Issue #174** (closed): CLI: propagate final buffered MAT output failures
+
 ### 2026-10-14
 
 - **PR #169**: docs: align benchmark speed summary with table (1k serpentine within noise)
@@ -190,3 +195,79 @@ Chronological record of completed work in this repository, maintained by the Gui
 - **Tag-triggered release workflow** (PR #68): crates.io Trusted Publishing on `v*` tags, resumes a partial publish on re-run
 - **0.1.1 published** (PR #77): dense/iterative size threshold and `--solver` (#44, PR #56). Library published by the release workflow; CLI by hand after its Trusted Publishing entry was found misconfigured (fixed)
 - **0.2.0 epic filed** (#76, children #69–#75): drop-in FastHenry replacement. #69 (FastHenry `G` plane syntax) merged
+
+### 2026-09-28
+
+- **Issue #6** (closed): Epic: fasterhenry M0 → release — dense validated core, physics completeness, acceleration, crates.io
+
+### 2026-09-27
+
+- **Issue #9** (closed): Publish 0.0.1 to crates.io to reserve fasterhenry + fasterhenry-cli (once M0 merits it)
+- **Issue #24** (closed): Precorrected-FFT acceleration for large problems
+
+### 2026-09-26
+
+- **PR #64**: Release readiness for 0.1.0 on crates.io (#9)
+
+### 2026-09-25
+
+- **PR #62**: ci: make the PyPEEC spiral and plane validation gates actually run
+- **PR #61**: feat(plane): graded contact-region refinement near via landings
+- **PR #60**: perf(inductance): fix memoization hash so near-field bundle throughput actually improves (issue #14 investigation)
+- **PR #58**: perf(pfft): profile and speed up PfftOperator set-up
+- **PR #57**: ci: cache the PyPEEC venv across runs on both Linux legs
+- **Issue #14** (closed): Kernel throughput: SIMD lanes gain only ~1.2x and near-field bundle pairs dominate assembly cost
+
+### 2026-09-24
+
+- **PR #55**: feat(iterative): GMRES port-impedance solve on the pFFT operator
+- **PR #54**: chore: remove unused direct simba dependency
+
+### 2026-09-23
+
+- **PR #52**: feat: reject non-transitive .couples declarations
+- **PR #50**: feat(pfft): matrix-free precorrected-FFT partial-inductance operator
+- **PR #49**: test: validate width-graded skin effect against an independent 2-D cross-section solve
+- **Issue #32** (closed): Validate width-graded skin effect against an independent 2D reference
+
+### 2026-09-22
+
+- **PR #47**: feat(bench): committed criterion suite for assembly/solve throughput + CI table regen
+- **PR #45**: feat: coupling truncation (.couples) for sparse assembly
+- **Issue #27** (closed): Benchmark: operator-run FastHenry head-to-head + a committed, hardware-normalized perf table
+- **Issue #25** (closed): Coupling truncation (.couples-style) for sparse assembly
+
+### 2026-09-21
+
+- **PR #41**: fix: reject ill-conditioned graded filament grids
+- **PR #40**: feat: expose unresolved pairs in detailed inductance batches
+- **PR #39**: docs: retire the trace-over-plane image accuracy claim
+- **PR #31**: Surface-graded filament subdivision
+- **PR #29**: feat: ground planes (G/.hole) with PyPEEC slot-differential validation
+- **PR #26**: feat: binary Zc.mat (MAT v4) and SPICE subcircuit output
+- **Issue #30** (closed): Inductance kernel: silently-unresolved near-singular pairs + no 2D reference for width-graded grid divergence
+- **Issue #23** (closed): Skin-depth-adaptive filament subdivision
+- **Issue #22** (closed): Ground planes (G directive) with holes
+- **Issue #21** (closed): Output formats: binary Zc.mat (MAT v4) and SPICE subcircuit export
+- **Issue #15** (closed): Batch inductance API should surface unresolved (reduced-accuracy) pairs; add independent reference for that regime
+
+### 2026-09-20
+
+- **PR #20**: feat: validation harness — PyPEEC + Greenhouse/Mohan references on the 2-turn spiral
+- **PR #19**: feat: CLI run subcommand — .inp deck reader, JSON problem documents, sweep output
+- **PR #18**: feat: mesh basis, dense complex solve, and port-impedance frequency sweep
+- **PR #17**: fix: harden geometry/discretize against overflow, extreme magnitudes, and unknown fields
+- **PR #13**: feat: add partial inductance kernels (closed forms, adaptive Neumann quadrature, SIMD batch)
+- **PR #10**: chore: make both crates packageable and dry-run the publish in CI
+- **Issue #8** (closed): Publish-readiness: packageable crates + cargo publish --dry-run in CI
+- **Issue #5** (closed): CLI: FastHenry .inp deck reader (public format) + JSON in/out
+- **Issue #4** (closed): Validation harness: PyPEEC + Mohan/Greenhouse closed forms on a 2-turn spiral (≤2 %)
+- **Issue #3** (closed): Mesh assembly + dense complex solve + frequency sweep
+- **Issue #2** (closed): Partial self/mutual inductance kernels (Grover/Rosa closed forms + arbitrary-orientation quadrature, SIMD-batched)
+- **Issue #12** (closed): Harden geometry/discretize inputs: nw*nh overflow panic, misleading ZeroLength on norm overflow, unknown serde fields
+
+### 2026-09-19
+
+- **PR #7**: Install Loom v0.19.174 and Repo Skills v0.11.17
+- **PR #11**: feat: add geometry model and uniform filament discretization
+- **Issue #1** (closed): Geometry model + filament discretization
