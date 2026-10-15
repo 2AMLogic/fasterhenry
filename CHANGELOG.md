@@ -19,6 +19,14 @@ breaking changes to the API or the command-line interface; patch releases
   with cells `(w/2)·scale_factor^min(|tan θ|, |cot θ|)`, and a
   line-numbered warning that this approximates FastHenry's staircase
   refinement. Native mode still rejects it.
+- Deck reader: a fractional `.freq ndec` (issue #154), as the User's Guide
+  documents, in every mode: any `ndec > 0` samples `fmin · 10^(k/ndec)`, so
+  `fmin=1e3 fmax=1e7 ndec=0.5` solves 1e3, 1e5 and 1e7 Hz. Previously any
+  non-integer `ndec` was rejected. `--freq` accepts a fractional `NDEC` too.
+  A negative `ndec` stays a line-numbered error everywhere. Under
+  `--fasthenry-compat`, a point is kept while it is ≤ 1.001 · `fmax`, and
+  `ndec=0` (read as 0.01), an omitted `ndec` (read as 1) and `fmin > fmax`
+  (an empty sweep) are line-numbered warnings instead of errors.
 - Deck reader: `relx=` / `rely=` / `relz=` on a corner-point `G` statement
   (issue #146), the documented offset (User's Guide §1.3.9), in every mode.
   It is added to every node-reference, hole and contact coordinate on the
