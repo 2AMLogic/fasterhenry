@@ -371,3 +371,180 @@ fn a_hole_off_its_plane_solves_with_a_line_numbered_warning() {
     assert!(warning.contains("'hole point'"), "{warning}");
     assert!(warning.contains("ground plane 'Gplane'"), "{warning}");
 }
+
+/// Runs `--spice` on a copy of the spiral fixture renamed to `file_name`
+/// and returns the exported netlist.
+fn spice_export_of_renamed_spiral(scratch_name: &str, file_name: &str) -> String {
+    let directory = scratch(scratch_name);
+    let deck = directory.join(file_name);
+    std::fs::copy(fixture("spiral.inp"), &deck).expect("copy the fixture");
+    let netlist = directory.join("out.cir");
+    let output = Command::new(BINARY)
+        .arg("run")
+        .arg(&deck)
+        .arg("--freq")
+        .args(["1e6", "1e6", "1"])
+        .arg("--spice")
+        .arg(&netlist)
+        .current_dir(&directory)
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success(), "{}", stderr(&output));
+    std::fs::read_to_string(&netlist).expect("the netlist is written")
+}
+
+/// The `.subckt` and `.ends` lines of a one-port export, asserting each
+/// directive appears exactly once and names `expected` as a single token.
+fn assert_single_subckt(text: &str, expected: &str) {
+    let subckt: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with(".subckt"))
+        .collect();
+    let ends: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with(".ends"))
+        .collect();
+    assert_eq!(subckt, vec![format!(".subckt {expected} p1 n1")], "{text}");
+    assert_eq!(ends, vec![format!(".ends {expected}")], "{text}");
+    // The comment header carries the name too and stays one line.
+    assert_eq!(
+        text.lines().filter(|line| line.starts_with('*')).count(),
+        2,
+        "{text}"
+    );
+    // The impedance stamp is intact.
+    assert!(text.contains("L1 p1 a0_0 "), "{text}");
+    assert!(text.contains("H1_1 a0_0 a0_1 vsense1 "), "{text}");
+    assert!(text.contains("vsense1 a0_1 n1 0"), "{text}");
+}
+
+/// A plain stem passes through unchanged.
+#[test]
+fn spice_subckt_name_keeps_a_simple_stem() {
+    let text = spice_export_of_renamed_spiral("spice-simple", "spiral.inp");
+    assert_single_subckt(&text, "spiral");
+}
+
+/// Spaces, punctuation and Unicode in the file name collapse into one
+/// `[A-Za-z0-9_]` token, the same on `.subckt` and `.ends`.
+#[test]
+fn spice_subckt_name_normalizes_unsafe_file_names() {
+    for (index, (file_name, expected)) in [
+        ("my coil.inp", "my_coil"),
+        ("v1.2-final(x).inp", "v1_2_final_x_"),
+        ("bobine\u{e9}.inp", "bobine_"),
+        ("\u{7dda}\u{5708}.inp", "__"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let text = spice_export_of_renamed_spiral(&format!("spice-unsafe-{index}"), file_name);
+        assert_single_subckt(&text, expected);
+    }
+}
+
+/// Tabs and newlines in the file name cannot add tokens or netlist lines,
+/// so filename text cannot inject directives.
+#[cfg(unix)]
+#[test]
+fn spice_subckt_name_neutralizes_control_characters() {
+    for (index, (file_name, expected)) in [
+        ("a\tb.inp", "a_b"),
+        ("x\n.ends\n.subckt evil.inp", "x__ends__subckt_evil"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let text = spice_export_of_renamed_spiral(&format!("spice-control-{index}"), file_name);
+        assert_single_subckt(&text, expected);
+    }
+}
+
+/// `segwid1=` on a nonuniform plane (issue #155) is a line-numbered error
+/// natively and is ignored with a line-numbered warning under
+/// `--fasthenry-compat`; `segwid1=` above the cell spacing on a uniform plane
+/// solves with a line-numbered warning.
+#[test]
+fn segwid_reaches_the_executable_with_line_numbered_diagnostics() {
+    let directory = scratch("segwid-diagnostics");
+    let deck = |plane_tail: &str| {
+        format!(
+            "\
+.units mm
+.default sigma=5.8e4
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=10 z3=0
++ thick=0.04 {plane_tail}
+Nt x=5 y=5 z=0.5
+Nb x=5 y=5 z=0
+Ev Nt Nb w=0.2 h=0.2
+.external Nt Nb
+.freq fmin=1 fmax=1 ndec=1
+.end
+"
+        )
+    };
+    std::fs::write(
+        directory.join("nonuniform.inp"),
+        deck("seg1=4 seg2=4 segwid1=0.5 file=NONE"),
+    )
+    .unwrap();
+    std::fs::write(directory.join("wide.inp"), deck("seg1=4 seg2=4 segwid2=9")).unwrap();
+
+    let native = fasterhenry(&directory, &["run", "nonuniform.inp"]);
+    assert!(!native.status.success());
+    let text = stderr(&native);
+    assert!(
+        text.contains("line 4") && text.contains("'segwid1'"),
+        "{text}"
+    );
+
+    let compat = fasterhenry(&directory, &["run", "--fasthenry-compat", "nonuniform.inp"]);
+    assert!(compat.status.success(), "{}", stderr(&compat));
+    let text = stderr(&compat);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("warning: line 4: ") && l.contains("'segwid1' is ignored")),
+        "{text}"
+    );
+
+    let wide = fasterhenry(&directory, &["run", "wide.inp"]);
+    assert!(wide.status.success(), "{}", stderr(&wide));
+    let text = stderr(&wide);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("warning: line 4: ") && l.contains("segment separation")),
+        "{text}"
+    );
+}
+
+/// A MAT result small enough to sit entirely in the `BufWriter` fails only
+/// at the final drain. `/dev/full` opens fine (so `File::create` succeeds)
+/// and rejects every write with ENOSPC; before the explicit flush the error
+/// was lost when the writer was dropped and the CLI exited 0.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_final_mat_drain_is_a_nonzero_exit_naming_the_path() {
+    let device = Path::new("/dev/full");
+    if !device.exists() {
+        return;
+    }
+    // The destination opens for writing, so any failure is not at create.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(device)
+        .expect("/dev/full opens for writing");
+
+    let directory = scratch("mat-drain-failure");
+    let deck = fixture("spiral.inp");
+    let output = fasterhenry(
+        &directory,
+        &["run", deck.to_str().unwrap(), "--zc-mat", "/dev/full"],
+    );
+    let message = stderr(&output);
+    assert!(!output.status.success(), "must exit nonzero: {message}");
+    assert!(message.contains("/dev/full"), "names the path: {message}");
+    assert!(
+        message.contains("cannot write") && !message.contains("cannot create"),
+        "fails at the write, not at create: {message}"
+    );
+}

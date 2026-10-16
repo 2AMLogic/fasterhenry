@@ -51,8 +51,16 @@ p<i> — L<i> — H_i_1 — H_i_2 — … — vsense<i> — n<i>
 
 Because the underlying partial-inductance matrix is positive
 semidefinite, `|K_ij| ≤ 1` holds mathematically; floating-point results
-within `1e-12` of the bound are clamped. Subcircuit and file names come
-from the input file's stem.
+within `1e-12` of the bound are clamped.
+
+The subcircuit name (used identically on `.subckt` and `.ends`) comes
+from the input file's stem, normalized to one conservative ASCII
+identifier token: every character outside `[A-Za-z0-9_]` — whitespace,
+tabs, newlines, punctuation including `.`, and any non-ASCII character —
+becomes one `_`, so `my coil.inp` exports `my_coil` and `v1.2.inp`
+exports `v1_2`, while a simple stem such as `spiral.inp` exports
+`spiral` unchanged. A path with no usable stem falls back to
+`fasterhenry`. Filename text therefore cannot add tokens or netlist lines.
 
 **Limitations**: linear-small-signal at the chosen frequency only (the
 stamp is exact for AC analysis at `--spice-freq` by construction); a

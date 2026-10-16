@@ -4,47 +4,51 @@ Prioritized roadmap of upcoming work, maintained by the Guide role.
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
-## Urgent
-
-*No urgent issues.*
-
-## Ready
-
 Released: **0.1.0** and **0.1.1** on crates.io (2026-09-27). Current
-milestone: **0.2.0 — drop-in FastHenry replacement** (epic #76). #69
-(FastHenry `G` ground-plane syntax) is merged. Remaining, in priority
-order:
+milestone: **0.2.0 — drop-in FastHenry replacement** (epic #76). The deck
+reader, drop-in CLI mode, compat mode and the `cargo-deny` license gate have
+merged; remaining work is the compatibility long tail below.
 
-- **#73**: drop-in CLI mode (`fasterhenry deck.inp` writes `Zc.mat`)
-- **#75**: `cargo-deny` license allowlist gate in CI
-- **#80**: plane hole/contact shapes the plane model cannot represent yet
-- **#83** (triage): compatibility mode for third-party decks (implicit
-  first-line title)
+## Operator Attention: Merge-Risk Holds
+
+- **#161**: feat: accept fractional `.freq` ndec, plus compat sweep edge cases (`loom:operator`; implements #154)
+- **#189**: feat(tools): add isolated FastHenry oracle workflow and runner (`loom:blocked`; implements #186)
+
+## Important
+
+- **#166**: Champion merges blocked: branch-protection read returns 403 (repo admin must migrate classic branch protection to a ruleset)
+- **#156**: Deck reader: case-insensitive node names and `.equiv` pseudonyms (PR #164)
+- **#154**: Deck reader: fractional `.freq` ndec, compat sweep edge cases (PR #161)
+
+## Ready (`loom:issue`)
+
+- **#175**: CLI: reject output destinations that alias the input or each other (PR #178 approved, awaiting merge)
+- **#156**, **#154**: see Important; each has an implementing PR in review/hold
 
 ## In Progress
 
-- **#70** — `rho=` and the full `.units` list (PR #82: changes requested, merge conflict)
-- **#71** — `rw`/`rh` filament ratios, `wx`/`wy`/`wz` width direction (PR #85: in review)
-- **#72** — format audit + compatibility table (PR #84: changes requested, merge conflict)
+- **#186**: clean-room FastHenry oracle runner (PR #189)
 
-## Proposed
+## Blocked / Operator-owned
 
-*No proposed issues.*
+- **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
+- **#172**: Auditor request for a Rust toolchain (worker spec change needed)
+- **#166**: branch-protection ruleset migration (repo admin)
+- **#74**: real-deck corpus comparison against FastHenry (operator-run)
+- **#38**: adopt Renovate dependency security policy (open PR)
+- **#16**: Champion merge-risk hold digest (tracking issue, not a work item)
 
 ## Epics
 
-- **#76**: 0.2.0 — drop-in FastHenry replacement. Done: #69. In progress:
-  #70, #71, #72. Next: #73, #75. Operator-run: #74 (real-deck corpus,
-  blocked by #69–#72), #35 (required status checks).
-- **#6**: M0 → release. All four phases have shipped (dense core,
-  physics completeness, pFFT acceleration, crates.io release #9); open
-  only as an operator-owned tracking epic.
+- **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; compatibility follow-ups above are in review (#74 remains operator-run).
 
 ## Backlog Balance
 
-| Tier | Count |
+| Bucket | Count |
 |------|-------|
-| Tier 1 (goal-advancing) | 6 (#6, #70, #71, #72, #73, #76) |
-| Tier 2 (goal-supporting) | 2 (#74, #75) |
-| Tier 3 (maintenance) | 0 |
-| Unlabelled / triage | 4 (#16, #48 blocked; #80, #83) |
+| Very important | 0 |
+| Important | 3 (#154, #156, #166) |
+| Ready (`loom:issue`) | 3 (#154, #156, #175) |
+| In Progress | 1 (#186) |
+| Blocked | 4 (#16, #166, #172, #187) |
+| Active epics | 1 (#76) |

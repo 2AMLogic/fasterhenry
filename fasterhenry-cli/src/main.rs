@@ -9,7 +9,7 @@
 
 use fasterhenry_cli::cli::{Invocation, RunArgs};
 use fasterhenry_cli::inp::ParseOptions;
-use fasterhenry_cli::spice::write_spice_subckt;
+use fasterhenry_cli::spice::{subckt_name_from_path, write_spice_subckt};
 use fasterhenry_cli::{read_inputs_reporting_with, run_reporting_with, solver_for};
 
 fn main() -> anyhow::Result<()> {
@@ -67,6 +67,10 @@ fn main() -> anyhow::Result<()> {
         let mut writer = std::io::BufWriter::new(file);
         fasterhenry_cli::mat::write_zc_mat(&mut writer, &result)
             .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", path.display()))?;
+        // A small result can sit entirely in the buffer, and dropping a
+        // `BufWriter` discards a failed final write; drain it explicitly.
+        std::io::Write::flush(&mut writer)
+            .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", path.display()))?;
     }
     if let Some(path) = &spice {
         let index = match spice_freq {
@@ -87,11 +91,7 @@ fn main() -> anyhow::Result<()> {
                 })?,
             None => result.frequencies_hz.len() - 1,
         };
-        let name = input
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("fasterhenry")
-            .replace('.', "_");
+        let name = subckt_name_from_path(&input);
         std::fs::write(path, write_spice_subckt(&result, index, &name))?;
     }
     Ok(())

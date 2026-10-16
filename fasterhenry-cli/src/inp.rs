@@ -177,7 +177,11 @@
 //!       cell, the documented decay law, until they reach the plane's
 //!       background cell. `cell` must therefore be smaller than `width`
 //!       (the ratio is otherwise not a ratio at all), and a `cell` equal
-//!       to half the width is the familiar ratio 2;
+//!       to half the width is the familiar ratio 2. Under
+//!       [`ParseOptions::fasthenry_compat`] a `cell` at or above `width`
+//!       is instead clamped to 0.99 × `width` on that axis, as FastHenry
+//!       does, with one line-numbered warning per clamped axis (issue
+//!       #145); a `cell` ≤ 0 is an error in both modes;
 //!     * a positive `maxcell` **finer** than the plane's own background
 //!       cell is rejected by name: this engine's grading levels off *at*
 //!       the background cell, so honouring a tighter limit would need a
@@ -448,8 +452,14 @@
 //!   are an error in both modes.
 //! * The remaining documented plane parameters are rejected by name too,
 //!   each with the reason and the alternative: `rh` (plane filaments are
-//!   uniform) and `segwid1`/`segwid2` (bar widths follow the cells).
-//!   Nothing on a `G` statement is silently ignored.
+//!   uniform). Nothing on a `G` statement is silently ignored.
+//! * **`segwid1`/`segwid2`** (the documented meshed plane) cap the width of
+//!   the bars parallel to p1→p2 and to p2→p3 at `min(segwid, cell width
+//!   across the bar)`; the mesh and bar count are unchanged. A value above
+//!   the spacing warns and the full width is used. On a nonuniform plane
+//!   (`file=NONE`, `contact initial_grid`, any `contact` clause) they are
+//!   an error natively and ignored with a warning under
+//!   [`ParseOptions::fasthenry_compat`].
 //!
 //! # Semantics
 //!
@@ -461,7 +471,15 @@
 //!   (coordinates, `w`, `h`) scale with the unit; **conductivity and
 //!   resistivity are per deck unit** — `sigma=5.8e4` under `.units mm` is
 //!   copper (5.8e4 S/mm = 5.8e7 S/m), and so is `rho=1.7241e-5`
-//!   (Ω·mm = 1.7241e-8 Ω·m). `rho=r` is exactly `sigma=1/r`.
+//!   (Ω·mm = 1.7241e-8 Ω·m). `rho=r` is exactly `sigma=1/r`. Under
+//!   [`ParseOptions::fasthenry_compat`] (issue #144) a missing `.units` is
+//!   metres with a [`ParseWarning`]; `.units` may repeat, each applying
+//!   from its own line onward (a value already read — `.default` fields
+//!   included — keeps the unit it was written in); and the long spellings
+//!   FastHenry reads correctly (`meter(s)`, `metre(s)`, `kilometer(s)`,
+//!   `kilometre(s)`, `inch`, `inches`) are accepted with a warning, while
+//!   those it misreads (`millimeter…`/`milli…` as mils, `micron…`/
+//!   `micrometer…` as metres) are an error naming the misreading.
 //! * **`nwinc`/`nhinc` and `rw`/`rh` cut the cross-section into
 //!   filaments.** `nwinc` filaments go across the width and `nhinc` across
 //!   the height (default 1 each). `rw` and `rh` are the ratio of adjacent
@@ -609,6 +627,9 @@ struct PlaneSpec {
     plane: GroundPlane,
     /// Filaments across each plane bar's thickness (`nhinc=`; 1 by default).
     nhinc: usize,
+    /// `segwid1=`/`segwid2=` as caps on the bar width, in global axes:
+    /// `[x-directed bars, y-directed bars]`, metres (`None`: full width).
+    bar_width: [Option<f64>; 2],
 }
 
 /// An in-plane node awaiting assembly: the declared node slot it occupies,
@@ -713,6 +734,49 @@ fn unit_factor(unit: &str, line: usize) -> Result<f64, ParseError> {
 
 /// The accepted `.units` spellings, for error messages.
 const UNITS: &str = "km, m, cm, mm, um, in, mils";
+
+/// [`unit_factor`] under [`ParseOptions::fasthenry_compat`] (issue #144):
+/// also the long spellings FastHenry reads *correctly* — `meter(s)`,
+/// `metre(s)`, `kilometer(s)`, `kilometre(s)`, `inch`, `inches` — each with
+/// a [`ParseWarning`] naming the documented spelling. Spellings FastHenry
+/// silently *misreads* are an error naming the misreading, so a deck that
+/// FastHenry solves at the wrong scale is not solved at it here either:
+/// `millimeter`/`millimetre`/`milli…` (FastHenry reads mils) and
+/// `micron…`/`micrometer`/`micrometre…` (FastHenry reads metres).
+fn compat_unit_factor(unit: &str, line: usize) -> Result<(f64, Option<ParseWarning>), ParseError> {
+    let unknown = match unit_factor(unit, line) {
+        Ok(factor) => return Ok((factor, None)),
+        Err(error) => error,
+    };
+    let lower = unit.to_ascii_lowercase();
+    let misread = |reads: &str, documented: &str| {
+        err(
+            line,
+            format!(
+                "'.units {unit}' is not a documented unit, and FastHenry misreads it as {reads}, which would scale every length wrongly; write '.units {documented}' (supported: {UNITS})"
+            ),
+        )
+    };
+    if lower.starts_with("milli") {
+        return Err(misread("mils (2.54e-5 m)", "mm"));
+    }
+    if lower.starts_with("micron") || lower.starts_with("micromet") {
+        return Err(misread("metres", "um"));
+    }
+    let (factor, documented) = match lower.as_str() {
+        "meter" | "meters" | "metre" | "metres" => (1.0, "m"),
+        "kilometer" | "kilometers" | "kilometre" | "kilometres" => (1e3, "km"),
+        "inch" | "inches" => (0.0254, "in"),
+        _ => return Err(unknown),
+    };
+    let warning = ParseWarning {
+        line,
+        message: format!(
+            "'.units {unit}' is not one of the documented units ({UNITS}); reading it as '{documented}', as FastHenry does"
+        ),
+    };
+    Ok((factor, Some(warning)))
+}
 
 /// Rejects a line that gives its conductivity both ways: `sigma=` and
 /// `rho=` among the same line's `<field>=<value>` tokens.
@@ -1280,15 +1344,23 @@ struct DecayRect {
 /// `values` may be longer — [`decay_rect_values`] reads its own two
 /// trailing limits over the top of this — so the caller checks its own
 /// arity first.
+///
+/// Under [`ParseOptions::fasthenry_compat`] (`compat`), a `cell` at or
+/// above its axis's `width` is clamped to [`COMPAT_CELL_CLAMP`] × `width`
+/// instead of rejected (issue #145): the second value returned holds, per
+/// axis, the cell as written wherever it was clamped, for the caller's
+/// warning. A `cell` ≤ 0 is an error in both modes.
 fn contact_rect_values(
     values: &[String],
     what: &str,
     unit: f64,
+    compat: bool,
     line: usize,
-) -> Result<DecayRect, ParseError> {
+) -> Result<(DecayRect, [Option<f64>; 2]), ParseError> {
     let centre = triple(&values[..3], what, unit, line)?;
     let mut widths = [0.0f64; 2];
     let mut cell = [0.0f64; 2];
+    let mut clamped = [None; 2];
     for axis in 0..2 {
         let name = ['x', 'y'][axis];
         widths[axis] = parse_number(&values[3 + axis], line)? * unit;
@@ -1304,6 +1376,11 @@ fn contact_rect_values(
             ));
         }
         cell[axis] = parse_number(&values[5 + axis], line)? * unit;
+        // Both axes clamp at `>=`, so the ratio below never meets r0 = 1.
+        if compat && cell[axis] > 0.0 && cell[axis] >= widths[axis] {
+            clamped[axis] = Some(cell[axis]);
+            cell[axis] = COMPAT_CELL_CLAMP * widths[axis];
+        }
         if !(cell[axis] > 0.0 && cell[axis] < widths[axis]) {
             return Err(err(
                 line,
@@ -1314,13 +1391,23 @@ fn contact_rect_values(
             ));
         }
     }
-    Ok(DecayRect {
-        centre,
-        widths,
-        cell,
-        limit: [None, None],
-    })
+    Ok((
+        DecayRect {
+            centre,
+            widths,
+            cell,
+            limit: [None, None],
+        },
+        clamped,
+    ))
 }
+
+/// The fraction of its rectangle's width a `contact rect` /
+/// `contact decay_rect` cell at or above that width is clamped to under
+/// [`ParseOptions::fasthenry_compat`] (issue #145) — FastHenry's own
+/// observed clamp, which keeps the decay ratio `1/(1 − cell/width)` finite
+/// (here 100) and so grades effectively nothing outside the rectangle.
+const COMPAT_CELL_CLAMP: f64 = 0.99;
 
 /// The nine values of a `contact decay_rect` clause:
 /// `(x, y, z, xwidth, ywidth, xcell, ycell, xmaxcell, ymaxcell)` — the
@@ -1331,8 +1418,9 @@ fn decay_rect_values(
     values: &[String],
     what: &str,
     unit: f64,
+    compat: bool,
     line: usize,
-) -> Result<DecayRect, ParseError> {
+) -> Result<(DecayRect, [Option<f64>; 2]), ParseError> {
     if values.len() != 9 {
         return Err(err(
             line,
@@ -1342,7 +1430,7 @@ fn decay_rect_values(
             ),
         ));
     }
-    let mut rect = contact_rect_values(values, what, unit, line)?;
+    let (mut rect, clamped) = contact_rect_values(values, what, unit, compat, line)?;
     for axis in 0..2 {
         let name = ['x', 'y'][axis];
         let raw = parse_number(&values[7 + axis], line)?;
@@ -1359,7 +1447,7 @@ fn decay_rect_values(
             ));
         };
     }
-    Ok(rect)
+    Ok((rect, clamped))
 }
 
 /// A `contact point` or `contact line` clause, kept raw until the plane's
@@ -1689,6 +1777,12 @@ struct PlaneStatement<'a> {
     /// Whether that clause was the meshed form, which additionally punches
     /// the documented checkerboard of holes into the initial grid.
     meshed_grid: bool,
+    /// `segwid1=` / `segwid2=`: bar width (metres) along p1→p2 and along
+    /// p2→p3, each with the clause's physical line and source order.
+    segwid: [Option<(f64, ClauseAt)>; 2],
+    /// Whether the statement carried `file=NONE` (the plane is then
+    /// nonuniform).
+    file_none: bool,
     /// `sigma=` / `rho=` (S/m), or the `.default` conductivity.
     sigma: Option<f64>,
     /// `nhinc=` (1 unless set).
@@ -1825,12 +1919,17 @@ impl<'a> PlaneStatement<'a> {
                 ));
             }
             "segwid1" | "segwid2" => {
-                return Err(err(
-                    line,
-                    format!(
-                        "ground plane '{head}': '{key}' (an explicit plane-segment width) is not supported; this engine's plane bars take their width from the cell they span (set seg1/seg2, or refine locally with '.contact')"
-                    ),
-                ));
+                let width = parse_number(raw, line)? * unit;
+                if width <= 0.0 {
+                    return Err(err(
+                        line,
+                        format!(
+                            "ground plane '{head}': '{key}' needs a width > 0 (got '{key}={raw}')"
+                        ),
+                    ));
+                }
+                self.segwid[usize::from(key == "segwid2")] =
+                    Some((width, (self.clause_line, self.clause_seq)));
             }
             // Read by `apply_offset` before any other item (issue #146).
             "relx" | "rely" | "relz" => {}
@@ -1846,7 +1945,8 @@ impl<'a> PlaneStatement<'a> {
                 // case, as every other token this reader interprets is. A
                 // *named* file is rejected by name: an input this reader
                 // does not read, not an output it does not write.
-                if !raw.eq_ignore_ascii_case("NONE") {
+                self.file_none = raw.eq_ignore_ascii_case("NONE");
+                if !self.file_none {
                     return Err(err(
                         line,
                         format!(
@@ -1854,6 +1954,7 @@ impl<'a> PlaneStatement<'a> {
                         ),
                     ));
                 }
+                self.file_none = true;
             }
             "nx" | "ny" => {
                 return Err(err(
@@ -1867,7 +1968,7 @@ impl<'a> PlaneStatement<'a> {
                 return Err(err(
                     line,
                     format!(
-                        "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, sigma, rho, nhinc, relx, rely, relz)"
+                        "unknown ground-plane parameter '{other}' (supported: x1…z3, thick, seg1, seg2, segwid1, segwid2, sigma, rho, nhinc, relx, rely, relz)"
                     ),
                 ));
             }
@@ -2001,7 +2102,9 @@ impl<'a> PlaneStatement<'a> {
             // default 2 × 2 cells at ratio 2.
             ("contact", "rect") => match values.len() {
                 7 => {
-                    let mut decay = contact_rect_values(values, &what, unit, line)?;
+                    let (mut decay, clamped) =
+                        contact_rect_values(values, &what, unit, self.compat, line)?;
+                    self.warn_clamped_cells("'contact rect'", &decay, clamped);
                     decay.centre = self.shift(decay.centre);
                     self.contact_decays
                         .push(("'contact rect'", decay, clause_line));
@@ -2020,7 +2123,9 @@ impl<'a> PlaneStatement<'a> {
                 }
             },
             ("contact", "decay_rect") => {
-                let mut decay = decay_rect_values(values, &what, unit, line)?;
+                let (mut decay, clamped) =
+                    decay_rect_values(values, &what, unit, self.compat, line)?;
+                self.warn_clamped_cells("'contact decay_rect'", &decay, clamped);
                 decay.centre = self.shift(decay.centre);
                 self.contact_decays
                     .push(("'contact decay_rect'", decay, clause_line));
@@ -2059,6 +2164,29 @@ impl<'a> PlaneStatement<'a> {
             _ => return Err(self.unsupported_clause(kind, shape)),
         }
         Ok(())
+    }
+
+    /// One warning per axis of a `contact rect` / `contact decay_rect`
+    /// whose cell [`contact_rect_values`] clamped under
+    /// [`ParseOptions::fasthenry_compat`] (issue #145), on the clause's own
+    /// line and in its source order.
+    fn warn_clamped_cells(&mut self, what: &str, decay: &DecayRect, clamped: [Option<f64>; 2]) {
+        for axis in 0..2 {
+            let Some(written) = clamped[axis] else {
+                continue;
+            };
+            let name = ['x', 'y'][axis];
+            self.warnings.push((
+                self.clause_seq,
+                ParseWarning {
+                    line: self.clause_line,
+                    message: format!(
+                        "ground plane '{}': {what}: {name}cell={written} metres is not smaller than {name}width={} metres; clamped to {}×{name}width = {} metres, as FastHenry does (--fasthenry-compat), so the rectangle grades effectively nothing outside itself",
+                        self.head, decay.widths[axis], COMPAT_CELL_CLAMP, decay.cell[axis]
+                    ),
+                },
+            ));
+        }
     }
 
     /// `hole circle (x, y, z, r)`.
@@ -2267,6 +2395,16 @@ impl<'a> PlaneStatement<'a> {
         }
     }
 
+    /// Whether, under `--fasthenry-compat`, this `file=NONE` plane gives no
+    /// initial grid at all (no `seg1`/`seg2`, no `contact initial_grid`) and
+    /// so meshes as a single root cell (issue #143).
+    fn single_root_cell(&self) -> bool {
+        self.compat
+            && self.file_none
+            && self.segments == [None, None]
+            && self.initial_grid.is_none()
+    }
+
     /// Checks the statement's geometry — three corners of an axis-aligned
     /// rectangle parallel to xy, both cell counts, a positive thickness,
     /// and a conductivity — and returns the frame the plane's features are
@@ -2322,18 +2460,23 @@ impl<'a> PlaneStatement<'a> {
             }
         };
         let mut cells = [0usize; 2];
-        cells[axis1] = self.segments[0].ok_or_else(|| {
-            err(
-                line,
-                format!("ground plane '{head}' has no 'seg1' (cells along p1→p2)"),
-            )
-        })?;
-        cells[axis2] = self.segments[1].ok_or_else(|| {
-            err(
-                line,
-                format!("ground plane '{head}' has no 'seg2' (cells along p2→p3)"),
-            )
-        })?;
+        if self.single_root_cell() {
+            // `file=NONE` with no grid at all: one root cell (issue #143).
+            cells = [1, 1];
+        } else {
+            cells[axis1] = self.segments[0].ok_or_else(|| {
+                err(
+                    line,
+                    format!("ground plane '{head}' has no 'seg1' (cells along p1→p2)"),
+                )
+            })?;
+            cells[axis2] = self.segments[1].ok_or_else(|| {
+                err(
+                    line,
+                    format!("ground plane '{head}' has no 'seg2' (cells along p2→p3)"),
+                )
+            })?;
+        }
         let thickness = self.thickness.ok_or_else(|| {
             err(
                 line,
@@ -2395,10 +2538,28 @@ impl<'a> PlaneStatement<'a> {
     /// off the plane), but neither is an error.
     fn finish(self) -> Result<(PlaneSpec, Vec<PlaneNode>, Vec<ParseWarning>), ParseError> {
         let frame = self.frame()?;
+        // A plane is nonuniform once anything but `seg1`/`seg2` shapes its
+        // mesh; a meshed-plane bar width has no meaning there.
+        let nonuniform = self.file_none
+            || self.initial_grid.is_some()
+            || !(self.contact_rects.is_empty()
+                && self.contact_decays.is_empty()
+                && self.contact_lines.is_empty()
+                && self.contact_traces.is_empty()
+                && self.contact_equivs.is_empty());
+        let single_root_cell = self.single_root_cell().then(|| ParseWarning {
+            line: self.line,
+            message: format!(
+                "ground plane '{}' has 'file=NONE' and no 'seg1'/'seg2' or 'contact initial_grid': its initial grid is a single cell (as 'contact initial_grid (1, 1)'), refined only by its 'contact' clauses",
+                self.head
+            ),
+        });
         let PlaneStatement {
             head,
             nhinc,
             meshed_grid,
+            segwid,
+            compat,
             mut nodes,
             hole_rects,
             hole_points,
@@ -2411,6 +2572,61 @@ impl<'a> PlaneStatement<'a> {
             mut warnings,
             ..
         } = self;
+        if let Some(warning) = single_root_cell {
+            warnings.push((0, warning));
+        }
+
+        // `segwid1` / `segwid2`: caps on the bars parallel to p1→p2 and to
+        // p2→p3. Each bar's cross-spacing is the cell width across it.
+        let mut bar_width = [None, None];
+        for (index, entry) in segwid.iter().enumerate() {
+            let Some((width, (clause_line, order))) = *entry else {
+                continue;
+            };
+            let key = format!("segwid{}", index + 1);
+            if nonuniform {
+                if !compat {
+                    return Err(err(
+                        clause_line,
+                        format!(
+                            "ground plane '{head}': '{key}' needs a uniform plane, but this plane's mesh is nonuniform ('file=NONE', 'contact initial_grid' or a 'contact' clause); drop '{key}', or read the deck with --fasthenry-compat, which ignores it"
+                        ),
+                    ));
+                }
+                warnings.push((
+                    order,
+                    ParseWarning {
+                        line: clause_line,
+                        message: format!(
+                            "ground plane '{head}': '{key}' is ignored on a nonuniform plane (full-width bars are used)"
+                        ),
+                    },
+                ));
+                continue;
+            }
+            // Bars parallel to p1→p2 run along `axis1` and are as wide as
+            // the cell across the other axis.
+            let along = if index == 0 {
+                frame.axis1
+            } else {
+                1 - frame.axis1
+            };
+            let across = 1 - along;
+            #[allow(clippy::cast_precision_loss)]
+            let spacing = (frame.hi[across] - frame.lo[across]) / frame.cells[across] as f64;
+            if width > spacing * (1.0 + 1e-9) {
+                warnings.push((
+                    order,
+                    ParseWarning {
+                        line: clause_line,
+                        message: format!(
+                            "ground plane '{head}': '{key}' ({width} metres) is greater than the segment separation ({spacing} metres); the full width is used"
+                        ),
+                    },
+                ));
+            }
+            bar_width[along] = Some(width);
+        }
 
         // The meshed initial grid's holes are cut into the *initial* grid,
         // before anything else refines it, so they come first.
@@ -2585,6 +2801,7 @@ impl<'a> PlaneStatement<'a> {
                     equipotentials,
                 },
                 nhinc,
+                bar_width,
             },
             nodes,
             {
@@ -3214,6 +3431,13 @@ pub struct ParseOptions {
     /// deck unit), and raises a [`ParseWarning`] on the statement's line.
     /// Off, that is a line-numbered error (issue #142).
     ///
+    /// On, `.units` reads as FastHenry does (issue #144): a deck without
+    /// one is in metres, with a [`ParseWarning`] on the first line that
+    /// needs a unit; a repeated `.units` applies from its own line onward;
+    /// and FastHenry's correctly read long spellings (`meters`, `inches`, …)
+    /// are accepted with a warning, while the spellings FastHenry misreads
+    /// (`millimeter`, `micron`, …) are rejected naming the misreading.
+    ///
     /// On, a `.equiv` naming one node twice (`.equiv x x`, or two names
     /// already joined) is a [`ParseWarning`] and changes nothing. Off, it is
     /// a line-numbered error (issue #156).
@@ -3387,6 +3611,9 @@ struct DeckBuilder {
     /// Whether the deck is read under [`ParseOptions::fasthenry_compat`]:
     /// among other things, a conductor naming no conductivity is copper
     /// (with a warning) rather than an error.
+    ///
+    /// Likewise: `.units` is optional (metres, with a warning), repeatable,
+    /// and reads FastHenry's long spellings.
     compat: bool,
 }
 
@@ -3408,6 +3635,23 @@ impl DeckBuilder {
         }
         let head = tokens[0];
         let keyword = head.to_ascii_lowercase();
+        // Under compat, a deck with no `.units` before its first line that
+        // needs a unit is in metres, as FastHenry reads it — said out loud
+        // on that line (issue #144). A later `.units` still applies from
+        // its own line onward.
+        if self.compat
+            && self.unit.is_none()
+            && (matches!(keyword.as_str(), ".default" | ".hole" | ".contact")
+                || matches!(keyword.chars().next(), Some('n' | 'e' | 'g')))
+        {
+            self.unit = Some(1.0);
+            self.warnings.push(ParseWarning {
+                line: number,
+                message: format!(
+                    "no .units directive before this line; reading lengths in metres, as FastHenry does (write '.units m' to say so, or one of {UNITS})"
+                ),
+            });
+        }
         // The unit in force for *this* line: a line that needs one and was
         // read before `.units` is rejected by the method that reads it.
         let factor = self.unit.unwrap_or(1.0);
@@ -3477,10 +3721,22 @@ impl DeckBuilder {
         }
     }
 
-    /// `.units km|m|cm|mm|um|in|mils` — mandatory, and at most once.
+    /// `.units km|m|cm|mm|um|in|mils` — mandatory, and at most once; under
+    /// [`ParseOptions::fasthenry_compat`], any number of times, each from
+    /// its own line onward, and in the long spellings of
+    /// [`compat_unit_factor`].
     fn apply_units(&mut self, tokens: &[&str], number: usize) -> Result<(), ParseError> {
         if tokens.len() != 2 {
             return Err(err(number, "expected .units <unit>"));
+        }
+        if self.compat {
+            // Forward only: every value read so far (nodes, `.default`
+            // fields, segments, planes) is already stored in metres and
+            // S/m, so a new factor cannot reach back to it.
+            let (factor, warning) = compat_unit_factor(tokens[1], number)?;
+            self.warnings.extend(warning);
+            self.unit = Some(factor);
+            return Ok(());
         }
         if self.unit.is_some() {
             return Err(err(number, "duplicate .units directive"));
@@ -4075,6 +4331,7 @@ impl DeckBuilder {
                 equipotentials: Vec::new(),
             },
             nhinc,
+            bar_width: [None, None],
         });
         Ok(())
     }
@@ -4086,7 +4343,10 @@ impl DeckBuilder {
         if !self.ended {
             return Err(err(last_number, "deck has no .end directive"));
         }
-        if self.unit.is_none() {
+        // Under compat a missing `.units` is metres, set (with a warning)
+        // by the first line that needed a unit; a deck with no such line
+        // has nothing for a unit to scale.
+        if self.unit.is_none() && !self.compat {
             return Err(err(
                 last_number,
                 format!(
@@ -4323,7 +4583,7 @@ fn build_plane_meshes<'a>(
     for spec in planes {
         let centres = spec
             .plane
-            .build_into(geometry)
+            .build_into_narrowed(geometry, spec.bar_width)
             .map_err(|error| ParseError {
                 line: 0,
                 message: error.to_string(),
@@ -4607,9 +4867,12 @@ e1 n1 n2 w=1e-3 h=1e-4 sigma=5.8e7
     #[test]
     fn compat_mode_ignores_directive_like_first_line() {
         // Line 1 is skipped whatever it holds: a `.units` there is swallowed,
-        // so the deck then lacks `.units` — the documented cost of the mode.
-        let error = parse_compat(COMPAT_BODY).expect_err(".units on line 1 is the title");
-        assert!(error.message.contains(".units"), "{error}");
+        // so the deck then lacks `.units` and reads in metres, with a warning
+        // (issue #144) — the documented cost of the mode.
+        let (deck, warnings) = units_compat(COMPAT_BODY).expect(".units on line 1 is the title");
+        assert_eq!(deck.title.as_deref(), Some(".units m"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].message.contains("no .units"), "{warnings:?}");
         // A `*` comment or a `.title` on line 1 is likewise just title text.
         let deck = parse_compat(&format!("* comment-looking title\n{COMPAT_BODY}")).unwrap();
         assert_eq!(deck.title.as_deref(), Some("* comment-looking title"));
@@ -5529,6 +5792,133 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
                 error.message
             );
         }
+    }
+
+    /// Issue #145: under `--fasthenry-compat`, a `contact decay_rect` /
+    /// seven-value `contact rect` cell at or above its axis's width is
+    /// clamped to 0.99 × that width — the deck then reads exactly as the
+    /// one writing the clamped cell out — with one warning per clamped
+    /// axis on the clause's own line. Both axes clamp at `>=`, so a cell
+    /// *equal* to the width (r0 = 1) clamps on y as on x.
+    #[test]
+    fn compat_clamps_a_cell_at_or_above_the_width() {
+        let statement = |clause: &str| {
+            plane_deck(
+                &format!(
+                    "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ {clause}"
+                ),
+                "",
+            )
+        };
+        let compat = |clause: &str| {
+            // Compat reads line 1 as the title, so the clause moves to line 6.
+            parse_with_options_reporting(&format!("title\n{}", statement(clause)), COMPAT)
+                .unwrap_or_else(|error| panic!("{clause}: {error}"))
+        };
+        let clamp_warnings = |warnings: &[ParseWarning]| -> Vec<ParseWarning> {
+            warnings
+                .iter()
+                .filter(|warning| warning.message.contains("clamped"))
+                .cloned()
+                .collect()
+        };
+        for (clause, explicit, axes) in [
+            // Both axes above the width, as the issue's black-box deck.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 4, 4, 2, 2)",
+                "contact decay_rect (5, 3, 0, 2, 2, 1.98, 1.98, 2, 2)",
+                &['x', 'y'][..],
+            ),
+            // A negative limit clamps the same way.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 4, 4, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 2, 1.98, 1.98, -1, -1)",
+                &['x', 'y'][..],
+            ),
+            // Equal on both axes: `>=` on y too, not FastHenry's `>`.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 2, 2, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 2, 1.98, 1.98, -1, -1)",
+                &['x', 'y'][..],
+            ),
+            // One axis only: the other keeps its own cell and decay.
+            (
+                "contact decay_rect (5, 3, 0, 2, 2, 1, 2, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 2, 1, 1.98, -1, -1)",
+                &['y'][..],
+            ),
+            (
+                "contact decay_rect (5, 3, 0, 2, 1, 3, 0.5, -1, -1)",
+                "contact decay_rect (5, 3, 0, 2, 1, 1.98, 0.5, -1, -1)",
+                &['x'][..],
+            ),
+            // The seven-value `contact rect` is the same clause.
+            (
+                "contact rect (5, 3, 0, 2, 2, 2, 5)",
+                "contact rect (5, 3, 0, 2, 2, 1.98, 1.98)",
+                &['x', 'y'][..],
+            ),
+        ] {
+            let (clamped, warnings) = compat(clause);
+            let (expected, explicit_warnings) = compat(explicit);
+            assert_eq!(clamped.geometry, expected.geometry, "{clause}");
+            assert!(clamp_warnings(&explicit_warnings).is_empty(), "{explicit}");
+            let warnings = clamp_warnings(&warnings);
+            assert_eq!(warnings.len(), axes.len(), "{clause}: {warnings:?}");
+            for (warning, axis) in warnings.iter().zip(axes) {
+                // The clause's own continuation line, not the `G` line.
+                assert_eq!(warning.line, 6, "{clause}");
+                assert!(
+                    warning.message.contains(&format!("{axis}cell="))
+                        && warning.message.contains("0.99×")
+                        && warning.message.contains("ground plane 'Gp'"),
+                    "{clause}: {}",
+                    warning.message
+                );
+            }
+            // Native mode keeps the error.
+            let error = parse(&statement(clause)).unwrap_err();
+            assert!(
+                error.message.contains("must be > 0 and smaller than"),
+                "{clause}: {error}"
+            );
+        }
+        // A cell ≤ 0 is still an error under compat.
+        for clause in [
+            "contact decay_rect (5, 3, 0, 2, 2, 0, 4, -1, -1)",
+            "contact rect (5, 3, 0, 2, 2, 4, -1)",
+        ] {
+            let error =
+                parse_with_options(&format!("title\n{}", statement(clause)), COMPAT).unwrap_err();
+            assert!(
+                error.message.contains("must be > 0 and smaller than"),
+                "{clause}: {error}"
+            );
+        }
+    }
+
+    /// The clamp warnings take their clause's place among the statement's
+    /// other warnings, in source order (issue #145).
+    #[test]
+    fn compat_clamp_warnings_keep_source_order() {
+        let deck = plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04 seg1=5 seg2=3
++ hole point (50, 50, 0) contact decay_rect (5, 3, 0, 2, 2, 4, 1, -1, -1)
++ hole point (60, 60, 0)",
+            "",
+        );
+        let (_, warnings) =
+            parse_with_options_reporting(&format!("title\n{deck}"), COMPAT).unwrap();
+        let shape: Vec<(usize, bool)> = warnings
+            .iter()
+            .map(|warning| (warning.line, warning.message.contains("clamped")))
+            .collect();
+        assert_eq!(shape, [(6, false), (6, true), (7, false)], "{warnings:?}");
     }
 
     /// The unsupported-contact-shape message is user-facing documentation of
@@ -6832,6 +7222,51 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         );
     }
 
+    /// Issue #143: under compat, `file=NONE` with no initial grid is a single
+    /// root cell, warned about on the `G` line; native mode and a uniform
+    /// plane missing `seg1`/`seg2` stay errors.
+    #[test]
+    fn compat_file_none_without_a_grid_is_a_single_cell() {
+        let opts = ParseOptions {
+            fasthenry_compat: true,
+        };
+        let g = "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
++ thick=0.04";
+        let compat = |statement: &str| {
+            parse_with_options_reporting(&format!("title\n{}", plane_deck(statement, "")), opts)
+        };
+        let (bare, warnings) = compat(&format!("{g} file=NONE")).unwrap();
+        let explicit = parse_ok(&plane_deck(&format!("{g} contact initial_grid (1, 1)"), ""));
+        assert_eq!(bare.geometry, explicit.geometry);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 4);
+        assert!(warnings[0].message.contains("single cell"));
+
+        // Contact refinements still apply.
+        let refine = "contact rect (5, 3, 0, 4, 4, 1, 1)";
+        let (refined, _) = compat(&format!("{g} file=NONE {refine}")).unwrap();
+        let by_hand = parse_ok(&plane_deck(
+            &format!("{g} contact initial_grid (1, 1) {refine}"),
+            "",
+        ));
+        assert_eq!(refined.geometry, by_hand.geometry);
+        assert_ne!(refined.geometry, bare.geometry);
+
+        // An explicit grid means no warning.
+        let (_, warnings) = compat(&format!("{g} file=NONE seg1=2 seg2=2")).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // Native mode: unchanged error.
+        let error = parse(&plane_deck(&format!("{g} file=NONE"), "")).unwrap_err();
+        assert!(error.message.contains("has no 'seg1'"), "{error}");
+        // Uniform plane missing seg1/seg2, or only one: error in both modes.
+        for body in [g.to_string(), format!("{g} seg1=3"), format!("{g} seg2=3")] {
+            assert!(compat(&body).is_err(), "{body}");
+            assert!(parse(&plane_deck(&body, "")).is_err(), "{body}");
+        }
+    }
+
     /// `seg1` counts cells along `p1 → p2` and `seg2` along `p2 → p3`,
     /// whichever axis each of those edges runs along.
     #[test]
@@ -7420,6 +7855,147 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         assert_eq!(spaced.geometry, tight.geometry);
     }
 
+    /// Widths (metres) of the plane's bars, split by direction: the bars
+    /// along global x, then those along global y. The via's own segment is
+    /// excluded (it is not horizontal).
+    fn plane_bar_widths(deck: &Deck) -> (Vec<f64>, Vec<f64>) {
+        let (mut along_x, mut along_y) = (Vec::new(), Vec::new());
+        for segment in deck.geometry.segments() {
+            let d = [
+                segment.b.x - segment.a.x,
+                segment.b.y - segment.a.y,
+                segment.b.z - segment.a.z,
+            ];
+            if d[2].abs() > 1e-12 {
+                continue;
+            }
+            if d[0].abs() > d[1].abs() {
+                along_x.push(segment.width);
+            } else {
+                along_y.push(segment.width);
+            }
+        }
+        (along_x, along_y)
+    }
+
+    fn segwid_deck(extra: &str) -> String {
+        plane_deck(
+            &format!(
+                "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=10 z3=0
++ thick=0.04 seg1=4 seg2=4 {extra}"
+            ),
+            "",
+        )
+    }
+
+    /// `segwid1`/`segwid2` only cap the bar width: the mesh and bar count
+    /// are unchanged, `segwid1` narrows the bars parallel to p1→p2 and
+    /// `segwid2` those parallel to p2→p3.
+    #[test]
+    fn segwid_narrows_the_bars_of_its_own_direction_only() {
+        let plain = parse_ok(&segwid_deck(""));
+        let (px, py) = plane_bar_widths(&plain);
+        assert!(px.iter().chain(&py).all(|w| (w - 2.5e-3).abs() < 1e-12));
+        for (extra, x_width, y_width) in [
+            ("segwid1=0.5 segwid2=0.5", 0.5e-3, 0.5e-3),
+            ("segwid1=0.5", 0.5e-3, 2.5e-3),
+            ("segwid2=0.5", 2.5e-3, 0.5e-3),
+        ] {
+            let (deck, warnings) = parse_reporting(&segwid_deck(extra)).unwrap();
+            assert!(warnings.is_empty(), "{warnings:?}");
+            let (x, y) = plane_bar_widths(&deck);
+            assert_eq!((x.len(), y.len()), (px.len(), py.len()), "{extra}");
+            assert!(x.iter().all(|w| (w - x_width).abs() < 1e-12), "{extra}");
+            assert!(y.iter().all(|w| (w - y_width).abs() < 1e-12), "{extra}");
+            assert_eq!(
+                deck.geometry.segment_count(),
+                plain.geometry.segment_count()
+            );
+        }
+    }
+
+    /// `segwid1` follows the p1→p2 edge, not global x.
+    #[test]
+    fn segwid1_follows_the_first_edge_on_a_rotated_plane() {
+        let deck = parse_ok(&plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=0 y2=10 z2=0 x3=10 y3=10 z3=0
++ thick=0.04 seg1=4 seg2=4 segwid1=0.5",
+            "",
+        ));
+        let (x, y) = plane_bar_widths(&deck);
+        assert!(y.iter().all(|w| (w - 0.5e-3).abs() < 1e-12));
+        assert!(x.iter().all(|w| (w - 2.5e-3).abs() < 1e-12));
+    }
+
+    /// A width above the node spacing warns on its own line and uses the
+    /// full spacing.
+    #[test]
+    fn segwid_above_the_spacing_warns_and_uses_full_width() {
+        let (deck, warnings) = parse_reporting(&segwid_deck("segwid2=3")).unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 4);
+        assert!(warnings[0].message.contains("'segwid2'"));
+        assert!(warnings[0].message.contains("segment separation"));
+        let (x, y) = plane_bar_widths(&deck);
+        assert!(x.iter().chain(&y).all(|w| (w - 2.5e-3).abs() < 1e-12));
+    }
+
+    /// On a nonuniform plane, native mode errors and compat ignores the
+    /// width with a line-numbered warning.
+    #[test]
+    fn segwid_on_a_nonuniform_plane_is_compat_only_ignored() {
+        for extra in [
+            "segwid1=0.5 file=NONE",
+            "segwid1=0.5 contact point (5, 5, 0, 1, 1)",
+        ] {
+            let text = segwid_deck(extra);
+            let error = parse(&text).unwrap_err();
+            assert_eq!(error.line, 4);
+            assert!(error.message.contains("'segwid1'"), "{}", error.message);
+            let (deck, warnings) =
+                parse_with_options_reporting(&format!("title\n{text}"), COMPAT).unwrap();
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.line == 5 && w.message.contains("'segwid1' is ignored")),
+                "{warnings:?}"
+            );
+            let (x, y) = plane_bar_widths(&deck);
+            assert!(x.iter().chain(&y).all(|w| *w > 0.5e-3 + 1e-9));
+        }
+    }
+
+    /// A bare `file=NONE` plane (issue #143: a single root cell under
+    /// compat) is nonuniform, so `segwid` follows the same rule as on any
+    /// nonuniform plane: ignored with a line-numbered warning under compat,
+    /// an error natively (the plane has no `seg1`/`seg2` there).
+    #[test]
+    fn segwid_on_a_bare_file_none_plane_is_ignored_under_compat() {
+        let text = plane_deck(
+            "\
+Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=10 z3=0
++ thick=0.04 file=NONE segwid1=0.5",
+            "",
+        );
+        assert!(parse(&text).is_err());
+        let (deck, warnings) =
+            parse_with_options_reporting(&format!("title\n{text}"), COMPAT).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.line == 5 && w.message.contains("'segwid1' is ignored")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.message.contains("single cell")),
+            "{warnings:?}"
+        );
+        let (x, y) = plane_bar_widths(&deck);
+        assert!(x.iter().chain(&y).all(|w| *w > 0.5e-3 + 1e-9));
+    }
+
     /// Every documented plane parameter this engine cannot represent is
     /// rejected by name, on the statement's own line — never ignored.
     #[test]
@@ -7437,8 +8013,8 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
         };
         for (extra, expected) in [
             ("nhinc=3 rh=2", "'rh'"),
-            ("segwid1=0.5", "'segwid1'"),
-            ("segwid2=0.5", "'segwid2'"),
+            ("segwid1=0", "'segwid1' needs a width > 0"),
+            ("segwid2=-1", "'segwid2' needs a width > 0"),
             // Only a *named* discretization hierarchy is rejected; the
             // documented `file=NONE` is accepted as the no-op it is — see
             // `file_none_is_the_documented_no_op_and_a_named_hierarchy_file_is_rejected`.
@@ -8914,5 +9490,154 @@ G1 x1=0 y1=0 z1=0 x2=16 y2=0 z2=0 x3=16 y3=8 z3=0
                 "{warnings:?}"
             );
         }
+    }
+
+    /// Compat mode, reporting (issue #144's tests).
+    fn units_compat(text: &str) -> Result<(Deck, Vec<ParseWarning>), ParseError> {
+        parse_with_options_reporting(text, COMPAT)
+    }
+
+    /// A titled compat deck: a 10-unit bar under `.units {unit}`.
+    fn units_deck(unit: &str) -> String {
+        format!("title\n{}", conductivity_deck(unit, "sigma=1", ""))
+    }
+
+    /// Issue #144: under compat the long spellings FastHenry reads
+    /// correctly are accepted, at the documented unit's factor, each with a
+    /// warning on the `.units` line naming the documented spelling; case
+    /// is ignored.
+    #[test]
+    fn compat_units_accepts_long_spellings_with_a_warning() {
+        for (spelling, documented) in [
+            ("meter", "m"),
+            ("Meters", "m"),
+            ("metre", "m"),
+            ("METRES", "m"),
+            ("kilometer", "km"),
+            ("kilometres", "km"),
+            ("inch", "in"),
+            ("Inches", "in"),
+        ] {
+            let (deck, warnings) =
+                units_compat(&units_deck(spelling)).unwrap_or_else(|error| panic!("{error}"));
+            let (expected, none) = units_compat(&units_deck(documented)).unwrap();
+            assert!(none.is_empty(), "{documented}: {none:?}");
+            assert_eq!(deck.geometry, expected.geometry, "{spelling}");
+            assert_eq!(warnings.len(), 1, "{spelling}: {warnings:?}");
+            assert_eq!(warnings[0].line, 2, "{spelling}");
+            assert!(
+                warnings[0]
+                    .message
+                    .contains(&format!("reading it as '{documented}'")),
+                "{spelling}: {}",
+                warnings[0].message
+            );
+        }
+        // The documented seven (and `mil`) warn about nothing.
+        for unit in ["km", "m", "cm", "mm", "um", "in", "mils", "mil", "MM"] {
+            let (_, warnings) = units_compat(&units_deck(unit)).unwrap();
+            assert!(warnings.is_empty(), "{unit}: {warnings:?}");
+        }
+        let (deck, _) = units_compat(&units_deck("inches")).unwrap();
+        let segment = deck.geometry.segment(0).unwrap();
+        assert!((segment.length() - 0.254).abs() < 1e-15);
+    }
+
+    /// Spellings FastHenry silently misreads are errors naming the
+    /// misreading and the documented spelling, not reproduced.
+    #[test]
+    fn compat_units_rejects_spellings_fasthenry_misreads() {
+        for (spelling, reads, documented) in [
+            ("millimeter", "mils", "mm"),
+            ("Millimeters", "mils", "mm"),
+            ("millimetre", "mils", "mm"),
+            ("milli", "mils", "mm"),
+            ("micron", "metres", "um"),
+            ("microns", "metres", "um"),
+            ("micrometer", "metres", "um"),
+            ("micrometres", "metres", "um"),
+        ] {
+            let error = units_compat(&units_deck(spelling)).expect_err(spelling);
+            assert_eq!(error.line, 2, "{spelling}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("FastHenry misreads it as {reads}")),
+                "{spelling}: {error}"
+            );
+            assert!(
+                error.message.contains(&format!("'.units {documented}'")),
+                "{spelling}: {error}"
+            );
+        }
+        // Anything else stays the native unknown-unit error.
+        for spelling in ["centimeter", "nm", "ft", "c", "u", "i"] {
+            let error = units_compat(&units_deck(spelling)).expect_err(spelling);
+            assert!(
+                error.message.contains("unknown length unit"),
+                "{spelling}: {error}"
+            );
+        }
+    }
+
+    /// Under compat a deck with no `.units` is in metres, with one warning
+    /// on the first line that needs a unit.
+    #[test]
+    fn compat_missing_units_is_metres_with_a_warning() {
+        let with = units_deck("m");
+        let without = with.replacen(".units m\n", "", 1);
+        let (deck, warnings) = units_compat(&without).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(deck.geometry, units_compat(&with).unwrap().0.geometry);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].line, 2);
+        assert!(warnings[0].message.contains("metres"), "{warnings:?}");
+    }
+
+    /// Under compat each `.units` applies from its own line onward: values
+    /// already read — nodes, `.default` fields, segments — keep the unit
+    /// they were written in, and later lines take the new one.
+    #[test]
+    fn compat_repeated_units_apply_forward() {
+        let text = "\
+title
+.units mm
+.default z=0 w=1 h=1 sigma=5.8e4
+n1 x=0 y=0
+.units m
+n2 x=0.01 y=0
+e1 n1 n2
+e2 n1 n2 sigma=5.8e7 w=1e-3 h=1e-3
+.units cm
+n3 x=2 y=0
+e3 n2 n3
+.external n1 n3
+.freq fmin=1 fmax=1 ndec=1
+.end
+";
+        let (deck, warnings) = units_compat(text).unwrap_or_else(|error| panic!("{error}"));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let e1 = deck.geometry.segment(0).unwrap();
+        // n2 at 0.01 m, w/h and sigma from the mm-era `.default`: 1 mm and
+        // 5.8e4 S/mm = 5.8e7 S/m, not re-scaled by the later `.units m`.
+        assert!((e1.length() - 0.01).abs() < 1e-15);
+        assert!((e1.width - 1e-3).abs() < 1e-18);
+        assert!((e1.sigma - 5.8e7).abs() < 1e-3);
+        // An explicit sigma after `.units m` is per metre.
+        let e2 = deck.geometry.segment(1).unwrap();
+        assert!((e2.sigma - 5.8e7).abs() < 1e-3);
+        // n3 at 2 cm.
+        let e3 = deck.geometry.segment(2).unwrap();
+        assert!((e3.length() - 0.01).abs() < 1e-15);
+
+        // Native mode is unchanged: a second `.units`, a missing `.units`
+        // and a long spelling are each still an error.
+        let error = parse(text.replacen("title\n", "", 1).as_str()).unwrap_err();
+        assert_eq!(error.line, 4);
+        assert!(error.message.contains("duplicate .units"), "{error}");
+        let native = conductivity_deck("m", "sigma=1", "");
+        let error = parse(&native.replacen(".units m\n", "", 1)).unwrap_err();
+        assert!(error.message.contains("before .units"), "{error}");
+        let error = parse(&native.replacen(".units m", ".units meters", 1)).unwrap_err();
+        assert!(error.message.contains("unknown length unit"), "{error}");
     }
 }
