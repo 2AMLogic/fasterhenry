@@ -13,7 +13,6 @@ merged; remaining work is the compatibility long tail below.
 
 - **#161**: feat: accept fractional `.freq` ndec, plus compat sweep edge cases (`loom:pr` + `loom:blocked`; implements #154)
 - **#189**: feat(tools): add isolated FastHenry oracle workflow and runner (`loom:pr` + `loom:blocked`; implements #186)
-- **#194**: Bump Repo Skills 0.24.1 -> 0.24.3 (`loom:pr` + `loom:blocked`)
 
 ## Important
 
