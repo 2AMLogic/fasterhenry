@@ -6,6 +6,7 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-10-16
 
+- **PR #194**: Bump Repo Skills 0.24.1 -> 0.24.3
 - **PR #178**: fix(cli): reject output destinations that alias the input or each other
 - **PR #164**: Deck reader: case-insensitive node names and .equiv pseudonyms
 - **Issue #175** (closed): CLI: reject output destinations that alias the input or each other
