@@ -11,7 +11,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#161**: feat: accept fractional `.freq` ndec, plus compat sweep edge cases (`loom:operator`; implements #154)
+- **#161**: feat: accept fractional `.freq` ndec, plus compat sweep edge cases (`loom:pr` + `loom:blocked`; implements #154)
 - **#189**: feat(tools): add isolated FastHenry oracle workflow and runner (`loom:blocked`; implements #186)
 
 ## Important
@@ -22,7 +22,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Ready (`loom:issue`)
 
-- **#175**: CLI: reject output destinations that alias the input or each other (PR #178 approved, awaiting merge)
+- **#175**: CLI: reject output destinations that alias the input or each other (PR #178 has changes requested and a merge conflict; being treated)
 - **#156**, **#154**: see Important; each has an implementing PR in review/hold
 
 ## In Progress
