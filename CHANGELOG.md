@@ -19,6 +19,10 @@ breaking changes to the API or the command-line interface; patch releases
   with cells `(w/2)·scale_factor^min(|tan θ|, |cot θ|)`, and a
   line-numbered warning that this approximates FastHenry's staircase
   refinement. Native mode still rejects it.
+- `G` planes accept `segwid1=`/`segwid2=` (meshed planes): a per-bar width
+  cap on uniform planes, with a warning when above the spacing; on
+  nonuniform planes an error natively and ignored with a warning under
+  `--fasthenry-compat` (issue #155).
 - Deck reader: `relx=` / `rely=` / `relz=` on a corner-point `G` statement
   (issue #146), the documented offset (User's Guide §1.3.9), in every mode.
   It is added to every node-reference, hole and contact coordinate on the
@@ -32,6 +36,15 @@ breaking changes to the API or the command-line interface; patch releases
   5.8e7 S/m as a physical value whatever the `.units`, with one
   line-numbered warning per statement (issue #142). Natively it is still a
   line-numbered error.
+- `--fasthenry-compat`: `.units` reads as FastHenry does (issue #144). A
+  deck with no `.units` is in metres, with a line-numbered warning; several
+  `.units` lines are honoured, each from its own line onward (values already
+  read, `.default` fields included, keep their unit); and the long spellings
+  FastHenry reads correctly (`meter(s)`, `metre(s)`, `kilometer(s)`,
+  `kilometre(s)`, `inch`, `inches`) are accepted with a warning. Spellings
+  FastHenry silently misreads — `millimeter…`/`milli…` (as mils) and
+  `micron…`/`micrometer…` (as metres) — are an error naming the misreading
+  and the documented unit. Default mode is unchanged.
 - Deck reader: a line-numbered **warning** for a corner-point `G`
   statement's `hole point`, `hole circle`, `hole rect`, `contact rect` or
   `contact decay_rect` clause that lies **wholly outside** the plane's
@@ -205,7 +218,7 @@ breaking changes to the API or the command-line interface; patch releases
   planes is rejected rather than silently attaching to one.
   `nhinc=` is also accepted on the shorthand form.
   Every remaining documented plane parameter is rejected by name, with the
-  statement's line number and the alternative: `rh`, `segwid1`/`segwid2`,
+  statement's line number and the alternative: `rh`,
   `relx`/`rely`/`relz`, `file`, and every hole or contact shape other than `rect` (`point`, `circle`,
   `decay_rect`, `line`, `trace`, `connection`, the `initial_*`/`equiv_*`
   forms and the user-defined `user1…user7`) — nothing on a `G` statement is
@@ -332,6 +345,20 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- CLI `--spice`: the subcircuit name derived from the input file's stem
+  is normalized to one ASCII `[A-Za-z0-9_]` token (every other character,
+  including whitespace, newlines, punctuation and non-ASCII, becomes `_`;
+  a missing stem falls back to `fasterhenry`), so `.subckt` and `.ends`
+  always carry the identical single-token name and a file name cannot add
+  netlist tokens or lines (issue #176). Simple stems such as `spiral` are
+  unchanged; stems that previously exported whitespace or punctuation now
+  export underscores. `write_spice_subckt` is unchanged.
+- Deck reader: under `--fasthenry-compat`, a `contact decay_rect` or
+  seven-value `contact rect` cell at or above the rectangle's width on an
+  axis is clamped to 0.99 × that width, as FastHenry does, with one
+  line-numbered warning per clamped axis (issue #145). Both axes clamp at
+  `cell >= width`. Natively such a cell is still an error, and a cell ≤ 0
+  is an error in both modes.
 - Deck reader: spaces or tabs around `=` on `N`, `E`, `.default` and
   `.freq` lines (continuation lines included) are ignored, so `k = v` reads
   as `k=v`, in every mode (issue #141). A dangling `x=` is still an error.

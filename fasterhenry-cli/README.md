@@ -200,7 +200,7 @@ continuation lines included, is a line-numbered error, and naming neither
 falls back to the `.default` conductivity (and, under `--fasthenry-compat`,
 to copper). Every other documented plane
 parameter is either mapped or **rejected by name** with the statement's line
-number — `rh`, `segwid1`/`segwid2`, a named hierarchy `file=` (`file=NONE`
+number — `rh`, a named hierarchy `file=` (`file=NONE`
 is accepted), `contact circle` and a diagonal `contact trace` (see
 `docs/fasthenry-compat.md` for the full list). Nothing on a `G` statement is silently ignored.
 `tests/data/plane_fasthenry.inp` and `tests/data/plane_extension.inp` are
