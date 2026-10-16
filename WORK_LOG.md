@@ -4,6 +4,13 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-10-16
+
+- **PR #178**: fix(cli): reject output destinations that alias the input or each other
+- **PR #164**: Deck reader: case-insensitive node names and .equiv pseudonyms
+- **Issue #175** (closed): CLI: reject output destinations that alias the input or each other
+- **Issue #156** (closed): Deck reader: case-insensitive node names and .equiv pseudonyms (documented)
+
 ### 2026-10-15
 
 - **PR #179**: fix(cli): normalize SPICE subckt names derived from file names
