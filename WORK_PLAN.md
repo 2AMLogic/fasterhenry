@@ -12,18 +12,17 @@ merged; remaining work is the compatibility long tail below.
 ## Operator Attention: Merge-Risk Holds
 
 - **#161**: feat: accept fractional `.freq` ndec, plus compat sweep edge cases (`loom:pr` + `loom:blocked`; implements #154)
-- **#189**: feat(tools): add isolated FastHenry oracle workflow and runner (`loom:blocked`; implements #186)
+- **#189**: feat(tools): add isolated FastHenry oracle workflow and runner (`loom:pr` + `loom:blocked`; implements #186)
+- **#194**: Bump Repo Skills 0.24.1 -> 0.24.3 (`loom:pr` + `loom:blocked`)
 
 ## Important
 
 - **#166**: Champion merges blocked: branch-protection read returns 403 (repo admin must migrate classic branch protection to a ruleset)
-- **#156**: Deck reader: case-insensitive node names and `.equiv` pseudonyms (PR #164)
 - **#154**: Deck reader: fractional `.freq` ndec, compat sweep edge cases (PR #161)
 
 ## Ready (`loom:issue`)
 
-- **#175**: CLI: reject output destinations that alias the input or each other (PR #178 has changes requested and a merge conflict; being treated)
-- **#156**, **#154**: see Important; each has an implementing PR in review/hold
+- **#154**: see Important; implementing PR #161 is under hold
 
 ## In Progress
 
@@ -33,22 +32,23 @@ merged; remaining work is the compatibility long tail below.
 
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
+- **#171**: split `fasterhenry-cli/src/inp.rs` into a module directory (architect proposal, blocked)
 - **#166**: branch-protection ruleset migration (repo admin)
-- **#74**: real-deck corpus comparison against FastHenry (operator-run)
+- **#74**: real-deck corpus comparison against FastHenry (operator-run; #69-#72 closed, real corpus rerun still required)
 - **#38**: adopt Renovate dependency security policy (open PR)
 - **#16**: Champion merge-risk hold digest (tracking issue, not a work item)
 
 ## Epics
 
-- **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; compatibility follow-ups above are in review (#74 remains operator-run).
+- **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; the remaining compatibility follow-ups (#154, #186/#187) are in review or blocked (#74 remains operator-run).
 
 ## Backlog Balance
 
 | Bucket | Count |
 |------|-------|
 | Very important | 0 |
-| Important | 3 (#154, #156, #166) |
-| Ready (`loom:issue`) | 3 (#154, #156, #175) |
+| Important | 2 (#154, #166) |
+| Ready (`loom:issue`) | 1 (#154) |
 | In Progress | 1 (#186) |
-| Blocked | 4 (#16, #166, #172, #187) |
+| Blocked | 6 (#16, #74, #166, #171, #172, #187) |
 | Active epics | 1 (#76) |
