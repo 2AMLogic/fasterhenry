@@ -9,6 +9,7 @@
 pub mod cli;
 pub mod inp;
 pub mod mat;
+pub mod outputs;
 pub mod problem;
 pub mod spice;
 
