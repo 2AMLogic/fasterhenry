@@ -1,0 +1,86 @@
+name: FastHenry oracle
+
+# Black-box FastHenry runner (#186). Manual only: a Builder commits
+# self-authored decks to a branch, dispatches this workflow on that ref, and
+# downloads the artifact. The public FastHenry release is fetched, built and
+# run on an ephemeral GitHub-hosted runner that no agent reads source from;
+# only the run outputs and the build identity are uploaded. See
+# tools/README.md ("FastHenry oracle") and CONTRIBUTING.md (clean room).
+on:
+  workflow_dispatch:
+    inputs:
+      deck_dir:
+        description: Directory of self-authored .inp decks in the dispatched ref
+        required: true
+        default: tools/oracle_decks/smoke
+      source_url:
+        description: Public FastHenry release tarball URL (recorded in the build identity)
+        required: true
+        default: https://github.com/ediloren/FastHenry2/archive/refs/tags/R3.0.1.tar.gz
+      source_sha256:
+        description: Expected sha256 of the tarball; empty = trust on first use (identity records the value seen)
+        required: false
+        default: ""
+      build_dir:
+        description: Directory inside the extracted release whose Makefile builds the fasthenry binary
+        required: true
+        default: src/fasthenry
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fasthenry-oracle
+  cancel-in-progress: false
+
+jobs:
+  oracle:
+    name: Build FastHenry, run decks in fresh directories
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the public release (source stays in RUNNER_TEMP, never uploaded)
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          SOURCE_SHA256: ${{ inputs.source_sha256 }}
+          BUILD_DIR: ${{ inputs.build_dir }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/fh-build"
+          mkdir -p "$work/src" "$RUNNER_TEMP/fh-bin" "$RUNNER_TEMP/fh-identity"
+          curl -fsSL --retry 3 -o "$work/release.tar.gz" "$SOURCE_URL"
+          seen="$(sha256sum "$work/release.tar.gz" | cut -d' ' -f1)"
+          if [ -n "$SOURCE_SHA256" ] && [ "$seen" != "$SOURCE_SHA256" ]; then
+            echo "tarball sha256 $seen does not match the pinned $SOURCE_SHA256" >&2
+            exit 1
+          fi
+          tar -xzf "$work/release.tar.gz" -C "$work/src" --strip-components=1
+          # Build output is discarded on success; a failure shows only the tail.
+          if ! make -C "$work/src/$BUILD_DIR" >"$work/build.log" 2>&1; then
+            tail -n 40 "$work/build.log" >&2
+            exit 1
+          fi
+          cp "$work/src/$BUILD_DIR/fasthenry" "$RUNNER_TEMP/fh-bin/fasthenry"
+          {
+            echo "source_url=$SOURCE_URL"
+            echo "source_sha256=$seen"
+            echo "pinned=$([ -n "$SOURCE_SHA256" ] && echo yes || echo no)"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "runner_image=${ImageOS:-unknown}-${ImageVersion:-unknown}"
+            echo "binary_sha256=$(sha256sum "$RUNNER_TEMP/fh-bin/fasthenry" | cut -d' ' -f1)"
+          } | tee "$RUNNER_TEMP/fh-identity/build-identity.txt"
+          rm -rf "$work"
+      - name: Run decks, each in a fresh directory
+        env:
+          DECK_DIR: ${{ inputs.deck_dir }}
+        run: |
+          set -euo pipefail
+          python3 tools/fasthenry_oracle_run.py \
+            --fasthenry "$RUNNER_TEMP/fh-bin/fasthenry" \
+            --out "$RUNNER_TEMP/fh-identity/runs" "$DECK_DIR"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fasthenry-oracle-${{ github.run_id }}
+          path: ${{ runner.temp }}/fh-identity
+          if-no-files-found: error
