@@ -12,7 +12,7 @@ merged; remaining work is the compatibility long tail below.
 ## Operator Attention: Merge-Risk Holds
 
 - **#161**: feat: accept fractional `.freq` ndec, plus compat sweep edge cases (`loom:pr` + `loom:blocked`; implements #154)
-- **#189**: feat(tools): add isolated FastHenry oracle workflow and runner (`loom:pr` + `loom:blocked`; implements #186)
+- **#199**: chore(loom): resync installed Loom to v0.19.1180 (`loom:operator`)
 
 ## Important
 
@@ -25,7 +25,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## In Progress
 
-- **#186**: clean-room FastHenry oracle runner (PR #189)
+- **#186**: clean-room FastHenry oracle runner (PR #189 merged; stays open until the post-merge `fasthenry-oracle.yml` smoke run is recorded, operator-owned)
 
 ## Blocked / Operator-owned
 
