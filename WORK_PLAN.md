@@ -11,17 +11,15 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#161**: feat: accept fractional `.freq` ndec, plus compat sweep edge cases (`loom:pr` + `loom:blocked`; implements #154)
 - **#199**: chore(loom): resync installed Loom to v0.19.1180 (`loom:operator`)
 
 ## Important
 
 - **#166**: Champion merges blocked: branch-protection read returns 403 (repo admin must migrate classic branch protection to a ruleset)
-- **#154**: Deck reader: fractional `.freq` ndec, compat sweep edge cases (PR #161)
 
 ## Ready (`loom:issue`)
 
-- **#154**: see Important; implementing PR #161 is under hold
+_None._
 
 ## In Progress
 
@@ -39,15 +37,15 @@ merged; remaining work is the compatibility long tail below.
 
 ## Epics
 
-- **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; the remaining compatibility follow-ups (#154, #186/#187) are in review or blocked (#74 remains operator-run).
+- **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; the remaining compatibility follow-ups (#186/#187) are in progress or blocked (#74 remains operator-run).
 
 ## Backlog Balance
 
 | Bucket | Count |
 |------|-------|
 | Very important | 0 |
-| Important | 2 (#154, #166) |
-| Ready (`loom:issue`) | 1 (#154) |
+| Important | 1 (#166) |
+| Ready (`loom:issue`) | 0 |
 | In Progress | 1 (#186) |
 | Blocked | 6 (#16, #74, #166, #171, #172, #187) |
 | Active epics | 1 (#76) |

@@ -4,6 +4,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-10-21
+
+- **PR #161**: feat: accept fractional .freq ndec, plus compat sweep edge cases
+- **Issue #154** (closed): Deck reader: accept fractional .freq ndec (documented), plus compat sweep edge cases
+
 ### 2026-10-20
 
 - **PR #189**: feat(tools): add isolated FastHenry oracle workflow and runner
