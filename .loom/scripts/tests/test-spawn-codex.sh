@@ -54,27 +54,8 @@ CLASSIFY_LIB="$SCRIPTS_DIR/lib/classify-error.sh"
 source "$SCRIPT_DIR/lib/require-daemon-bin.sh"
 loom_test_require_daemon_bin --self-only --path "$SCRIPTS_DIR" spawn-worker session-exec private-workspace
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
-
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-assert_eq() {
-    local expected="$1" actual="$2" msg="$3"
-    TESTS_RUN=$((TESTS_RUN + 1))
-    if [[ "$expected" == "$actual" ]]; then
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-        echo -e "  ${GREEN}PASS${NC}: $msg"
-    else
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-        echo -e "  ${RED}FAIL${NC}: $msg"
-        echo "    Expected: '$expected'"
-        echo "    Actual:   '$actual'"
-    fi
-}
+# shellcheck source=lib/assert.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/assert.sh"
 
 assert_contains() {
     local needle="$1" haystack="$2" msg="$3"
@@ -838,6 +819,16 @@ assert_not_contains "spawn-codex: session=" "$mock_stderr" \
     "LOOM_CODEX_NO_CAPTURE=1 skips session reporting (plain exec path)"
 assert_contains "session id: $MOCK_SESSION" "$mock_stderr" \
     "LOOM_CODEX_NO_CAPTURE=1 still passes the child's stderr through"
+
+# A prompt run on the plain exec path must not inherit an open, never-written
+# stdin (the mock blocks on `cat` if it does). Bounded so a regression fails
+# fast instead of hanging the suite.
+nocap_rc=0
+nocap_stderr="$(sleep 30 | { timeout 20 bash -c "$(declare -f run_mock); SPAWN_CODEX='$SPAWN_CODEX' MOCK_BIN='$MOCK_BIN' MOCK_ARGV_FILE='$MOCK_ARGV_FILE' run_mock LOOM_CODEX_NO_CAPTURE=1 -- -p hi >/dev/null"; } 2>&1)" || nocap_rc=$?
+assert_eq "0" "$nocap_rc" \
+    "LOOM_CODEX_NO_CAPTURE=1 prompt run finishes with an open stdin (no hang)"
+assert_not_contains "MOCK-SAW-STDIN" "$nocap_stderr" \
+    "LOOM_CODEX_NO_CAPTURE=1 prompt run gives the child /dev/null, not the caller's stdin"
 
 # ============================================================
 # Section 9: LOOM_RUNTIME=codex resolves through spawn-worker.sh
@@ -1613,11 +1604,12 @@ assert_not_contains "MOCK-SAW-STDIN" "$session_stderr" \
     "session-exec closes the exec'd process's stdin, same as bare-metal (never a hang)"
 
 assert_contains "loom-codex-session-session-acct codex exec" "$(cat "$SESSION_DOCKER_EXEC_ARGV")" "docker exec targets the account's own session container with the codex exec argv"
+# The real `session-exec host` took this container's dispatch lock, in the
+# sandbox, not under the real ~/.loom (lib/session-lock-sandbox.sh, #10661).
+lss_expect_lock loom-codex-session-session-acct
 
-set +e
-run_session_mock MOCK_RC=42 -- -p "hi" >/dev/null 2>&1
-session_exit_rc=$?
-set -e
+session_exit_rc=0
+run_session_mock MOCK_RC=42 -- -p "hi" >/dev/null 2>&1 || session_exit_rc=$?
 assert_eq "42" "$session_exit_rc" \
     "session-exec preserves exit-code passthrough (PIPESTATUS), identical to bare-metal"
 

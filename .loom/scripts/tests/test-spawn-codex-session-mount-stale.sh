@@ -15,9 +15,9 @@
 # category without a per-cause arm.
 #
 # Hermetic: a fake daemon stands in for loom-daemon for the adapter cases;
-# docker is never run. The last cases run the real `loom-daemon` when one is
-# on PATH, against a fake docker, to pin the announcement's exact text and
-# the one-inspect dispatch check behind it.
+# docker is never run. The last cases run THIS checkout's `loom-daemon`
+# (lib/require-daemon-bin.sh, #10676) against a fake docker, to pin the
+# announcement's exact text and the one-inspect dispatch check behind it.
 #
 # Usage:
 #   ./.loom/scripts/tests/test-spawn-codex-session-mount-stale.sh
@@ -27,27 +27,15 @@ set -uo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "$TEST_DIR/.." && pwd)"
 SPAWN_CODEX="$SCRIPTS_DIR/spawn-codex.sh"
+# THIS checkout's build or nothing (#10662/#10676), never whatever is on PATH.
+# shellcheck source=lib/require-daemon-bin.sh
+source "$TEST_DIR/lib/require-daemon-bin.sh"
+loom_test_require_daemon_bin --self-only "$SCRIPTS_DIR" session-exec
+REAL_DAEMON="$LOOM_DAEMON_SELF_BIN"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
+# shellcheck source=lib/assert.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/assert.sh"
 
-assert_eq() {
-    local expected="$1" actual="$2" msg="$3"
-    TESTS_RUN=$((TESTS_RUN + 1))
-    if [[ "$expected" == "$actual" ]]; then
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-        echo -e "  ${GREEN}PASS${NC}: $msg"
-    else
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-        echo -e "  ${RED}FAIL${NC}: $msg"
-        echo "    Expected: '$expected'"
-        echo "    Actual:   '$actual'"
-    fi
-}
 
 WORK="$(mktemp -d)"
 source "$TEST_DIR/lib/session-lock-sandbox.sh" "$WORK"
@@ -130,44 +118,40 @@ echo '[{"State":{"Running":true},"Config":{"Labels":{"loom.workspace":"$WORK"}},
 DOCKER
 }
 real_host() {
-    REAL_ERR="$(PATH="$WORK/bin:$PATH" loom-daemon session-exec host \
+    REAL_ERR="$(PATH="$WORK/bin:$PATH" "$REAL_DAEMON" session-exec host \
         --container loom-codex-session-acct --workdir "$WORK/ws" -- true 2>&1 >/dev/null)"
     REAL_RC=$?
 }
 
 echo "--- the real daemon announces SESSION_MOUNT_STALE for an unmounted workdir ---"
-# Captured, then matched without a pipe: under `pipefail` a `cmd | grep -q`
-# can fail on the writer's SIGPIPE (scripts/check-pipefail-early-exit.sh).
-HOST_HELP=""
-if command -v loom-daemon >/dev/null 2>&1; then
-    HOST_HELP="$(loom-daemon session-exec host --help 2>/dev/null || true)"
-fi
-if [[ "$HOST_HELP" == *"--container"* ]]; then
-    fake_docker "$WORK/other-repo"
-    real_host
-    if grep -qxF "$MARKER" <<<"$REAL_ERR"; then
-        assert_eq "78" "$REAL_RC" "session-exec host refuses with 78 and announces SESSION_MOUNT_STALE"
-        assert_eq "inspect" "$(tr '\n' ' ' <"$WORK/docker-calls" | sed 's/ $//')" \
-            "the refusal costs one docker inspect and no exec"
-        case "$REAL_ERR" in
-            *"accounts session stop acct && loom-daemon accounts session start acct --mount-workspace $WORK"*) actual="named" ;;
-            *) actual="missing" ;;
-        esac
-        assert_eq "named" "$actual" "the refusal names the account's recreate command"
+fake_docker "$WORK/other-repo"
+real_host
+# It took the dispatch lock before its inspect, in the sandbox, not under the
+# real ~/.loom (lib/session-lock-sandbox.sh, #10661).
+lss_expect_lock loom-codex-session-acct
+# Matched without a pipe: under `pipefail` a `cmd | grep -q` can fail on the
+# writer's SIGPIPE (scripts/check-pipefail-early-exit.sh).
+case $'\n'"$REAL_ERR"$'\n' in
+    *$'\n'"$MARKER"$'\n'*) actual="announced" ;;
+    *) actual="missing" ;;
+esac
+assert_eq "announced" "$actual" "session-exec host announces SESSION_MOUNT_STALE"
+assert_eq "78" "$REAL_RC" "…and refuses with 78"
+assert_eq "inspect" "$(tr '\n' ' ' <"$WORK/docker-calls" | sed 's/ $//')" \
+    "the refusal costs one docker inspect and no exec"
+case "$REAL_ERR" in
+    *"accounts session stop acct && loom-daemon accounts session start acct --mount-workspace $WORK"*) actual="named" ;;
+    *) actual="missing" ;;
+esac
+assert_eq "named" "$actual" "the refusal names the account's recreate command"
 
-        echo "--- the real daemon lets a mounted workdir through to the protocol probe ---"
-        fake_docker "$WORK/ws"
-        real_host
-        assert_eq "0" "$(printf '%s\n' "$REAL_ERR" | grep -c '^# LOOM_SESSION_REFUSAL ' || true)" \
-            "a container that mounts the workdir is not refused for its mounts"
-        assert_eq "inspect exec" "$(tr '\n' ' ' <"$WORK/docker-calls" | sed 's/ $//')" \
-            "dispatch makes one inspect, then goes on to the protocol exec"
-    else
-        echo "  SKIP: the loom-daemon on PATH predates the stale-mount announcement"
-    fi
-else
-    echo "  SKIP: no loom-daemon with \`session-exec host\` on PATH"
-fi
+echo "--- the real daemon lets a mounted workdir through to the protocol probe ---"
+fake_docker "$WORK/ws"
+real_host
+assert_eq "0" "$(printf '%s\n' "$REAL_ERR" | grep -c '^# LOOM_SESSION_REFUSAL ' || true)" \
+    "a container that mounts the workdir is not refused for its mounts"
+assert_eq "inspect exec" "$(tr '\n' ' ' <"$WORK/docker-calls" | sed 's/ $//')" \
+    "dispatch makes one inspect, then goes on to the protocol exec"
 
 echo ""
 echo "========================================"

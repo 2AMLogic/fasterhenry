@@ -33,7 +33,7 @@ Ruehli's PEEC formulation; the FastHenry approach of Kamon, Tsuk and White
 (*FASTHENRY: a multipole-accelerated 3-D inductance extraction program*, IEEE
 Trans. MTT 42(9), 1994); Grover/Rosa closed forms for parallel filament
 partial inductances; numerical quadrature for arbitrary orientation. See
-`docs/` as the design lands.
+[`docs/`](docs/README.md).
 
 ## Clean-room rule
 
@@ -106,7 +106,8 @@ Measured head-to-head against the original FastHenry (operator-run,
 one machine, self-authored decks; method, hardware and caveats in
 [`docs/benchmarks.md`](docs/benchmarks.md)):
 fasterhenry's dense path is faster on wall clock at every size up to
-~20 000 filaments (3× at small sizes, ~1.2× at 20 k, where FastHenry's
+~20 000 filaments except around 1 000, where the two are within noise
+(1.6–3× at a few hundred filaments or fewer, ~1.2× at 20 k, where FastHenry's
 multipole stays 14× ahead *per thread* — that dense-path edge is
 parallelism; the algorithmic answer is the pFFT + GMRES path above).
 On shared segment fixtures the two engines
@@ -118,7 +119,7 @@ cross-validation behind the "replacement" claim.
 | crate | what |
 |---|---|
 | `fasterhenry` | the library: geometry, filaments, kernels, assembly, solve |
-| `fasterhenry-cli` | `fasterhenry` binary: `.inp`/JSON in, JSON out |
+| `fasterhenry-cli` | `fasterhenry` binary: `.inp`/JSON in; JSON, MAT v4 `Zc.mat` or SPICE out |
 
 ## Development
 

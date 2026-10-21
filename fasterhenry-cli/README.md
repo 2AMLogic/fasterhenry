@@ -67,7 +67,7 @@ Options:
           [default: auto]
 
       --fasthenry-compat
-          Read a `.inp`/`.fh` deck's first line as an always-ignored title, as the public FastHenry format does, for third-party decks whose line 1 is prose. Off by default: line 1 is parsed like any other and `.title <text>` sets the title. A later `.title` is still honored in this mode
+          Read a `.inp`/`.fh` deck's first line as an always-ignored title, as the public FastHenry format does, for third-party decks whose line 1 is prose. Off by default: line 1 is parsed like any other and `.title <text>` sets the title. A later `.title` is still honored in this mode. Also gives a segment or ground plane with no conductivity FastHenry's copper default (5.8e7 S/m), with a warning
 
   -h, --help
           Print help (see a summary with '-h')
@@ -197,11 +197,12 @@ counts mean equal resolution rather than an identical node set. Both forms
 take the plane's conductivity as either `sigma=` or its reciprocal `rho=` on
 the statement itself, alongside `nhinc=` — naming both on one statement,
 continuation lines included, is a line-numbered error, and naming neither
-falls back to the `.default` conductivity. Every other documented plane
+falls back to the `.default` conductivity (and, under `--fasthenry-compat`,
+to copper). Every other documented plane
 parameter is either mapped or **rejected by name** with the statement's line
-number — `rh`, `segwid1`/`segwid2`, `relx`/`rely`/`relz`, `file`, and every
-hole or contact shape other than
-`rect`. Nothing on a `G` statement is silently ignored.
+number — `rh`, a named hierarchy `file=` (`file=NONE`
+is accepted), `contact circle` and a diagonal `contact trace` (see
+`docs/fasthenry-compat.md` for the full list). Nothing on a `G` statement is silently ignored.
 `tests/data/plane_fasthenry.inp` and `tests/data/plane_extension.inp` are
 the same problem in the two syntaxes, and a test requires them to produce
 the same `Z(ω)`.
@@ -217,6 +218,12 @@ Two further outputs are optional:
 - `--spice out.cir [--spice-freq HZ]` — a SPICE subcircuit at one
   frequency (default: the last): coupled inductors for `L`, current-
   controlled sources for `R`.
+
+No output may name the input file, and no two outputs may name the same
+file — counting relative and `./`/`../` spellings, symlinks and (on unix)
+hard links as the same file. Such a run is refused before anything is
+written, with both paths in the message. An unrelated existing file at an
+output path is replaced.
 
 Both formats are specified in
 [`docs/output-formats.md`](https://github.com/2AMLogic/fasterhenry/blob/main/docs/output-formats.md).

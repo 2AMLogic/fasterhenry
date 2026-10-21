@@ -5,9 +5,12 @@
 //! the explicit `fasterhenry run <deck.inp | problem.json>`, which writes
 //! one only when `--zc-mat` asks for it. See `--help`.
 
+#![forbid(unsafe_code)]
+
 use fasterhenry_cli::cli::{Invocation, RunArgs};
 use fasterhenry_cli::inp::{decade_sweep, ParseOptions};
-use fasterhenry_cli::spice::write_spice_subckt;
+use fasterhenry_cli::outputs::{validate_destinations, Destination};
+use fasterhenry_cli::spice::{subckt_name_from_path, write_spice_subckt};
 use fasterhenry_cli::{read_inputs_reporting_with, run_reporting_with, solver_for};
 
 fn main() -> anyhow::Result<()> {
@@ -18,13 +21,30 @@ fn main() -> anyhow::Result<()> {
     let RunArgs {
         input,
         freq,
-        zc_mat: _,
+        zc_mat: zc_mat_flag,
         json,
         spice,
         spice_freq,
         solver,
         fasthenry_compat,
     } = invocation.into_args();
+
+    // Before anything is read, solved or written: no output may be the
+    // input, and no two outputs may be one file (issue #175).
+    let zc_mat_role = if zc_mat_flag.is_some() {
+        "--zc-mat"
+    } else {
+        "default Zc.mat"
+    };
+    let destinations: Vec<Destination<'_>> = [
+        ("--json", json.as_deref()),
+        (zc_mat_role, zc_mat.as_deref()),
+        ("--spice", spice.as_deref()),
+    ]
+    .into_iter()
+    .filter_map(|(role, path)| path.map(|path| Destination { role, path }))
+    .collect();
+    validate_destinations(&input, &destinations).map_err(|m| anyhow::anyhow!("{m}"))?;
 
     let options = ParseOptions { fasthenry_compat };
     let (problem, parse_warnings) =
@@ -65,6 +85,10 @@ fn main() -> anyhow::Result<()> {
         let mut writer = std::io::BufWriter::new(file);
         fasterhenry_cli::mat::write_zc_mat(&mut writer, &result)
             .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", path.display()))?;
+        // A small result can sit entirely in the buffer, and dropping a
+        // `BufWriter` discards a failed final write; drain it explicitly.
+        std::io::Write::flush(&mut writer)
+            .map_err(|error| anyhow::anyhow!("cannot write {}: {error}", path.display()))?;
     }
     if let Some(path) = &spice {
         let index = match spice_freq {
@@ -85,11 +109,7 @@ fn main() -> anyhow::Result<()> {
                 })?,
             None => result.frequencies_hz.len() - 1,
         };
-        let name = input
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("fasterhenry")
-            .replace('.', "_");
+        let name = subckt_name_from_path(&input);
         std::fs::write(path, write_spice_subckt(&result, index, &name))?;
     }
     Ok(())

@@ -4,9 +4,12 @@
 //! The binary logic lives in this library so the tests can drive it without
 //! spawning a process; `src/main.rs` is a thin wrapper.
 
+#![forbid(unsafe_code)]
+
 pub mod cli;
 pub mod inp;
 pub mod mat;
+pub mod outputs;
 pub mod problem;
 pub mod spice;
 

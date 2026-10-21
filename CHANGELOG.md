@@ -27,6 +27,10 @@ breaking changes to the API or the command-line interface; patch releases
   `--fasthenry-compat`, a point is kept while it is ≤ 1.001 · `fmax`, and
   `ndec=0` (read as 0.01), an omitted `ndec` (read as 1) and `fmin > fmax`
   (an empty sweep) are line-numbered warnings instead of errors.
+- `G` planes accept `segwid1=`/`segwid2=` (meshed planes): a per-bar width
+  cap on uniform planes, with a warning when above the spacing; on
+  nonuniform planes an error natively and ignored with a warning under
+  `--fasthenry-compat` (issue #155).
 - Deck reader: `relx=` / `rely=` / `relz=` on a corner-point `G` statement
   (issue #146), the documented offset (User's Guide §1.3.9), in every mode.
   It is added to every node-reference, hole and contact coordinate on the
@@ -35,6 +39,20 @@ breaking changes to the API or the command-line interface; patch releases
   `--fasthenry-compat`, one empty coordinate field in a node reference
   (`N1 (, 2, 0)`) now reads as 0 (before the offset) with a line-numbered
   warning; natively it is still an error.
+- Deck reader: under `--fasthenry-compat`, a segment or ground plane with
+  no conductivity on its line or in `.default` defaults to copper,
+  5.8e7 S/m as a physical value whatever the `.units`, with one
+  line-numbered warning per statement (issue #142). Natively it is still a
+  line-numbered error.
+- `--fasthenry-compat`: `.units` reads as FastHenry does (issue #144). A
+  deck with no `.units` is in metres, with a line-numbered warning; several
+  `.units` lines are honoured, each from its own line onward (values already
+  read, `.default` fields included, keep their unit); and the long spellings
+  FastHenry reads correctly (`meter(s)`, `metre(s)`, `kilometer(s)`,
+  `kilometre(s)`, `inch`, `inches`) are accepted with a warning. Spellings
+  FastHenry silently misreads — `millimeter…`/`milli…` (as mils) and
+  `micron…`/`micrometer…` (as metres) — are an error naming the misreading
+  and the documented unit. Default mode is unchanged.
 - Deck reader: a line-numbered **warning** for a corner-point `G`
   statement's `hole point`, `hole circle`, `hole rect`, `contact rect` or
   `contact decay_rect` clause that lies **wholly outside** the plane's
@@ -46,7 +64,8 @@ breaking changes to the API or the command-line interface; patch releases
   naming the clause's own physical (continuation) line; stdout is
   unchanged. The test is intersection with the closed footprint: a circle
   or rectangle that overhangs an edge, reaches over a corner, or merely
-  touches the boundary does not warn, and neither does an in-footprint
+  touches the boundary does not warn (a contact rectangle that only
+  touches the boundary does, since #134), and neither does an in-footprint
   clause that happens to change nothing. The stricter clauses keep their
   errors (`contact point` / `line` / `trace` off the plane; a `contact
   equiv_rect` / `contact connection` whose node is off the plane or that
@@ -207,7 +226,7 @@ breaking changes to the API or the command-line interface; patch releases
   planes is rejected rather than silently attaching to one.
   `nhinc=` is also accepted on the shorthand form.
   Every remaining documented plane parameter is rejected by name, with the
-  statement's line number and the alternative: `rh`, `segwid1`/`segwid2`,
+  statement's line number and the alternative: `rh`,
   `relx`/`rely`/`relz`, `file`, and every hole or contact shape other than `rect` (`point`, `circle`,
   `decay_rect`, `line`, `trace`, `connection`, the `initial_*`/`equiv_*`
   forms and the user-defined `user1…user7`) — nothing on a `G` statement is
@@ -334,14 +353,62 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Changed
 
+- CLI `--spice`: the subcircuit name derived from the input file's stem
+  is normalized to one ASCII `[A-Za-z0-9_]` token (every other character,
+  including whitespace, newlines, punctuation and non-ASCII, becomes `_`;
+  a missing stem falls back to `fasterhenry`), so `.subckt` and `.ends`
+  always carry the identical single-token name and a file name cannot add
+  netlist tokens or lines (issue #176). Simple stems such as `spiral` are
+  unchanged; stems that previously exported whitespace or punctuation now
+  export underscores. `write_spice_subckt` is unchanged.
+- Deck reader: under `--fasthenry-compat`, a `contact decay_rect` or
+  seven-value `contact rect` cell at or above the rectangle's width on an
+  axis is clamped to 0.99 × that width, as FastHenry does, with one
+  line-numbered warning per clamped axis (issue #145). Both axes clamp at
+  `cell >= width`. Natively such a cell is still an error, and a cell ≤ 0
+  is an error in both modes.
+- Deck reader: spaces or tabs around `=` on `N`, `E`, `.default` and
+  `.freq` lines (continuation lines included) are ignored, so `k = v` reads
+  as `k=v`, in every mode (issue #141). A dangling `x=` is still an error.
+- Deck reader: a `contact rect` / `contact decay_rect` that only touches a
+  plane's boundary (or overlaps it by no more than `plane::contact_slack`)
+  is dropped with a line-numbered warning instead of failing assembly on
+  line 0 (issue #134).
+- Deck reader: a ground-plane statement's warnings are reported in
+  source-clause order (issue #136).
+- CLI: output destinations are checked before anything is read, solved or
+  written (issue #175). An output (`--json`, `--zc-mat`, the bare form's
+  implicit `./Zc.mat`, or `--spice`) that is the input file, or two outputs
+  that are the same file, is now an error naming both roles and paths;
+  previously the input was overwritten, or the later output silently
+  replaced the earlier one. "The same file" is decided on resolved paths —
+  relative and `.`/`..` spellings, symlinks (including a dangling one), and
+  on unix hard links by device and inode — not on the strings given. An
+  unrelated existing output file is still replaced. No output format or
+  result changes.
+- Deck reader: **node names are case-insensitive** (issue #156), as the
+  User's Guide documents (§1.1, §1.3), in every mode and every position —
+  node and in-plane node declarations, `E` endpoints, `.external` and
+  `.equiv`. This reverses the earlier case-sensitive decision: a deck that
+  declared both `N1` and `n1` now gets a line-numbered duplicate-definition
+  error naming both spellings, instead of two nodes. A port's default
+  `<+>/<->` label is now lowercased (an explicit label is kept as written).
+  `.equiv` now implements the documented **pseudonyms** (§1.3.7): a name
+  not yet defined becomes a pseudonym for the list's first defined node,
+  usable afterwards as an endpoint or in `.external`; a list with no
+  defined name is an error (`no defined node in .equiv`), and declaring a
+  node under a pseudonym's name is a duplicate error. Previously every
+  `.equiv` name had to be defined already. Under `--fasthenry-compat`,
+  `.equiv x x` (naming one node twice) is a warning and a no-op; natively
+  it is still an error.
 - Deck reader: a corner-point `G` statement's `contact rect` or `contact
   decay_rect` wholly outside the plane's footprint is no longer a plane
   assembly error on line 0 ("contact region … lies outside the plane
   footprint"); it refines nothing, so it is now dropped with the
   line-numbered warning above, consistent with the holes (issue #105). No
   deck that parsed before changes meaning. A rectangle that only touches
-  the footprint, and the `.contact` extension directive, keep the existing
-  error.
+  the footprint is dropped with a warning too (issue #134); the `.contact`
+  extension directive keeps the existing error.
 - Deck reader: `file=NONE` on a corner-point `G` ground-plane statement is
   now **accepted** as the no-op it is, and a *named* file is rejected for the
   right reason (issue #122, found while implementing #113). The public

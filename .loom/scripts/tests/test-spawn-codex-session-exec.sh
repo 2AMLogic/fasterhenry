@@ -101,10 +101,12 @@ out="$(cd "$WS" && env -u CODEX_HOME -u LOOM_CODEX_PROFILE \
     LOOM_SWEEP_NICE=0 LOOM_CODEX_NO_EXEC=1 LOOM_WORKSPACE="$WS" \
     LOOM_CODEX_HOME="$PROFILE" \
     LOOM_ROLE=curator LOOM_SWEEP_ID=sweep-1 ANTHROPIC_API_KEY=never-forward-me \
+    CARGO_PROFILE_DEV_DEBUG=line-tables-only \
     bash "$SPAWN_CODEX" -p "hi" 2>&1 || true)"
 line="$(printf '%s\n' "$out" | grep '^spawn-codex would-exec:' || true)"
 assert_contains "--env LOOM_ROLE=curator" "$line" "LOOM_ROLE is forwarded into the container"
 assert_contains "--env LOOM_SWEEP_ID=sweep-1" "$line" "LOOM_SWEEP_ID is forwarded into the container"
+assert_contains "--env CARGO_PROFILE_DEV_DEBUG=line-tables-only" "$line" "the #11190 debuginfo cap is forwarded into the container"
 assert_not_contains "never-forward-me" "$line" \
     "an ambient provider credential in the host env is never forwarded"
 
@@ -271,6 +273,9 @@ host_refusal() {
 }
 out="$(host_refusal 'echo false')"
 assert_contains "$REFUSAL" "$out" "session-exec host announces SESSION_DOWN for a container that is not running"
+# It took the dispatch lock before its inspect, in the sandbox, not under the
+# real ~/.loom (lib/session-lock-sandbox.sh, #10661).
+lss_expect_lock loom-codex-session-acct
 assert_contains "rc=78" "$out" "…and still refuses with 78"
 out="$(host_refusal 'echo "Error: No such object" >&2; exit 1')"
 assert_contains "$REFUSAL" "$out" "…and for a container docker does not have"
