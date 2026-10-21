@@ -30,6 +30,7 @@ _None._
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
 - **#171**: split `fasterhenry-cli/src/inp.rs` into a module directory (architect proposal, blocked)
+- **#208**: move the inline test module out of `inp.rs` (hermit proposal, blocked behind #171)
 - **#166**: branch-protection ruleset migration (repo admin)
 - **#74**: real-deck corpus comparison against FastHenry (operator-run; #69-#72 closed, real corpus rerun still required)
 - **#38**: adopt Renovate dependency security policy (open PR)
@@ -47,5 +48,5 @@ _None._
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
 | In Progress | 1 (#186) |
-| Blocked | 6 (#16, #74, #166, #171, #172, #187) |
+| Blocked | 7 (#16, #74, #166, #171, #172, #187, #208) |
 | Active epics | 1 (#76) |

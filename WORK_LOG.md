@@ -6,6 +6,7 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-10-21
 
+- **PR #209**: chore(loom): resync installed Loom to v0.19.1201
 - **PR #161**: feat: accept fractional .freq ndec, plus compat sweep edge cases
 - **Issue #154** (closed): Deck reader: accept fractional .freq ndec (documented), plus compat sweep edge cases
 
