@@ -11,7 +11,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#199**: chore(loom): resync installed Loom to v0.19.1180 (`loom:operator`)
+_None._
 
 ## Important
 
