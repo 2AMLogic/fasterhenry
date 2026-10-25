@@ -189,7 +189,7 @@ check "an unknown or doubled argument refuses and touches nothing" \
   doc_has "$TARGETED_MD" 'Error: /loom:champion takes --pr N, --issue N or --non-item'
 # --pr N
 check "--pr: writes the pin file only for an eligible PR" doc_has "$TARGETED_MD" '[ -n "$EVALUATED_SHA" ] && printf'
-check "--pr: the pin records the step's agent process (#11902)" doc_has "$TARGETED_MD" '"$EVALUATED_SHA" "$PPID" > "$PIN_FILE"'
+check "--pr: the pin records the step's agent process (#11902)" doc_has "$TARGETED_MD" '"$EVALUATED_SHA" "$PPID" > "$(git rev-parse --git-common-dir)/loom-champion-pin-pr-N"'
 check "--pr: Step 3 must carry the SHA literally (env does not survive tool calls)" \
   doc_has "$TARGETED_MD" 'first line must be `EXPECTED_HEAD=<that SHA, written out literally>`'
 check "--pr: a lost pin is outcome requeued, never merged" doc_has "$TARGETED_MD" '9 (`CHAMPION-PIN-MISSING`): not merged, still approved, no "Merge Failed"'
@@ -291,6 +291,8 @@ check "triaged: the normal case adds loom:review-requested" \
   has '| `triaged` | **The normal case**: none of the rows below applies | `gh pr edit N --add-label loom:review-requested` |'
 check "triage-blocked: duplicate, superseded, or closing an already-closed issue, with a reason comment" \
   eval 'has "**duplicate**" && has "**superseded**" && has "**closes an issue that is already closed**" && has "park-record apply --pr N --by champion --reason"'
+check "triage-blocked: a confirmed-superseded PR is commented then closed; unconfirmed is parked greppably" \
+  eval 'has "**Superseded, confirmed**" && has "then \`gh pr close N\`" && has "--is-ancestor" && has "superseded (unconfirmed):"'
 check "triage-operator: a human decision, through the routing rule" \
   eval 'has "**needs a human decision**" && has "operator-decision apply N" && has "--add-label loom:operator"'
 check "an untrusted fork PR ends triage-operator, never triaged" \
@@ -301,7 +303,8 @@ check "triage-operator: operator-decision apply adds loom:operator itself (one t
   has "which adds \`loom:operator\` itself. Only a human-hands step:"
 check "step 1 reads the hard exclusions from the registry, not a hard-coded list" \
   doc_has "$TARGETED_MD" "loom-daemon labels list --property hard_exclusion 2>/dev/null || printf 'external\\n'"
-check "triage never merges, closes or pushes" has 'Never close the PR, push to it, or
+check "triage closes only a confirmed-superseded PR, never pushes or adds loom:pr" has 'Close a PR only when its
+supersession is confirmed (the `triage-blocked` row); never push to it or
 add `loom:pr`.'
 
 echo "Results: $PASS passed, $FAIL failed"
