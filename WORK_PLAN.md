@@ -11,7 +11,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#219**, **#220**, **#221**: `chore(loom)` resyncs to v0.19.1218 / v0.19.1220 / v0.19.1221. Judge-approved, CI green, mergeable, held by Champion because they rewrite the merge gate itself (`merge-pr.sh`, `post-verdict.sh`, Champion/Judge prompts). A human releases each with `gh pr edit <N> --remove-label loom:blocked`; the three are successive resyncs, so the newest (#221) supersedes the others.
+_None._ The held `chore(loom)` resyncs #219-#221 were closed as superseded; the latest resync (#223, v0.19.1225) has merged.
 
 ## Important
 
