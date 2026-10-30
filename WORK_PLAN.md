@@ -11,7 +11,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-_None._ The held `chore(loom)` resyncs #219-#221 were closed as superseded; the latest resync (#223, v0.19.1225) has merged.
+- **#227**: chore(loom): resync installed Loom to v0.19.1236 (`loom:pr` + `loom:blocked`; Judge-approved, awaiting a human merge decision). Resync #225 (v0.19.1227) has merged.
 
 ## Important
 
@@ -23,10 +23,11 @@ _None._
 
 ## In Progress
 
-- **#186**: clean-room FastHenry oracle runner (PR #189 merged; stays open until the post-merge `fasthenry-oracle.yml` smoke run is recorded, operator-owned)
+_None._ (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
 
 ## Blocked / Operator-owned
 
+- **#186**: clean-room FastHenry oracle runner (operator must dispatch the smoke run)
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
 - **#171**: split `fasterhenry-cli/src/inp.rs` into a module directory (architect proposal, blocked)
@@ -47,7 +48,7 @@ _None._
 | Very important | 0 |
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
-| In Progress | 1 (#186) |
+| In Progress | 0 |
 | Blocked | 8 (#16, #74, #166, #171, #172, #186, #187, #208) |
-| Operator merge-risk holds | 3 (#219, #220, #221) |
+| Operator merge-risk holds | 1 (#227) |
 | Active epics | 1 (#76) |
