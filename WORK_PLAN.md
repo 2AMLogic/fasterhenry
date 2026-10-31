@@ -11,7 +11,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#227**: chore(loom): resync installed Loom to v0.19.1236 (`loom:pr` + `loom:blocked`; Judge-approved, awaiting a human merge decision). Resync #225 (v0.19.1227) has merged.
+_None._ (Resync #227, v0.19.1236, has merged.)
 
 ## Important
 
@@ -50,5 +50,5 @@ _None._ (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open
 | Ready (`loom:issue`) | 0 |
 | In Progress | 0 |
 | Blocked | 8 (#16, #74, #166, #171, #172, #186, #187, #208) |
-| Operator merge-risk holds | 1 (#227) |
+| Operator merge-risk holds | 0 |
 | Active epics | 1 (#76) |
