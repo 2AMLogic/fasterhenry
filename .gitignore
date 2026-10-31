@@ -132,3 +132,6 @@ tools/pypeec_plane_solid_reference.json
 # The CLI's documented default output (`./Zc.mat`, written to the current
 # directory when no --zc-mat path is given). Never a tracked file.
 Zc.mat
+
+# Repo Skills Codex-side machine-local install metadata (never committed)
+.agents/skills/repo/.install-local.json
