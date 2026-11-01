@@ -4,6 +4,10 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-01
+
+- **PR #231**: Bump Repo Skills 0.24.7 -> 0.25.1
+
 ### 2026-10-31
 
 - **PR #227**: chore(loom): resync installed Loom to v0.19.1236
