@@ -26,8 +26,15 @@ _None._
 
 _None._ (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
 
+## Proposed
+
+- **#244**: fasterhenry.org site skeleton, landing, About and Cloudflare Pages deploy pipeline (`loom:curated`, awaiting approval; the first of the site issues below)
+
 ## Blocked / Operator-owned
 
+- **#243**: fasterhenry.org public demo site (umbrella; blocked by #244, #245, #246)
+- **#245**: fasterhenry.org gallery and benchmarks pages (blocked by #244)
+- **#246**: fasterhenry.org validation and FastHenry-users pages (blocked by #244)
 - **#186**: clean-room FastHenry oracle runner (operator must dispatch the smoke run)
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
@@ -50,6 +57,7 @@ _None._ (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
 | In Progress | 0 |
-| Blocked | 8 (#16, #74, #166, #171, #172, #186, #187, #208) |
+| Curated (proposed) | 1 (#244) |
+| Blocked | 11 (#16, #74, #166, #171, #172, #186, #187, #208, #243, #245, #246) |
 | Operator merge-risk holds | 2 (#238, #241) |
 | Active epics | 1 (#76) |
