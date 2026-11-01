@@ -6,6 +6,9 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-01
 
+- **PR #237**: chore(loom): resync installed Loom to v0.19.1245
+- **PR #236**: fix: remove dangling worktree:return npm script
+- **Issue #234** (closed): package.json worktree:return points at removed .loom/scripts/worktree-return.sh
 - **PR #232**: chore(loom): resync installed Loom to v0.19.1244
 - **PR #231**: Bump Repo Skills 0.24.7 -> 0.25.1
 
