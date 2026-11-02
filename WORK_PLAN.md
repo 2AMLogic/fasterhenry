@@ -11,7 +11,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#248**: Loom resync 0.19.1245 → 0.19.1250 (Judge-approved, merge state clean; `loom:blocked` merge-risk hold — needs a human merge decision). Supersedes the earlier resync PRs #238 and #241, both now closed unmerged.
+- **#250**: Loom resync to 0.19.1251 (Judge-approved, merge state clean; `loom:blocked` merge-risk hold — needs a human merge decision). Supersedes the earlier resync PRs #238, #241 and #248, all now closed unmerged.
 
 ## Important
 
