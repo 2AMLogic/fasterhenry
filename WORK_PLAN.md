@@ -11,7 +11,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#253**: Loom resync to 0.19.1254 (Judge-approved, merge state clean; `loom:blocked` merge-risk hold — needs a human merge decision). Supersedes the earlier resync PRs #238, #241, #248, #250 and #251, all now closed unmerged.
+_None._ The Loom resync to 0.19.1254 (#253) has merged; the earlier resync PRs #238, #241, #248, #250 and #251 were closed unmerged in its favour.
 
 ## Important
 
@@ -27,10 +27,11 @@ _None._ (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open
 
 ## Proposed
 
-- **#244**: fasterhenry.org site skeleton, landing, About and Cloudflare Pages deploy pipeline (`loom:curated`, awaiting approval; the first of the site issues below)
+_None._ (#244, the fasterhenry.org site skeleton, now carries `loom:operator` and is operator-owned; see below.)
 
 ## Blocked / Operator-owned
 
+- **#244**: fasterhenry.org site skeleton, landing, About and Cloudflare Pages deploy pipeline (`loom:operator`; first of the site issues, gates #245/#246)
 - **#243**: fasterhenry.org public demo site (umbrella; blocked by #244, #245, #246)
 - **#245**: fasterhenry.org gallery and benchmarks pages (blocked by #244)
 - **#246**: fasterhenry.org validation and FastHenry-users pages (blocked by #244)
@@ -56,7 +57,8 @@ _None._ (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
 | In Progress | 0 |
-| Curated (proposed) | 1 (#244) |
-| Blocked | 11 (#16, #74, #166, #171, #172, #186, #187, #208, #243, #245, #246) |
-| Operator merge-risk holds | 1 (#251) |
+| Curated (proposed) | 0 |
+| Blocked | 10 (#16, #74, #171, #172, #186, #187, #208, #243, #245, #246) |
+| Operator-gated (`loom:operator`) | 2 (#166, #244) |
+| Operator merge-risk holds | 0 |
 | Active epics | 1 (#76) |
