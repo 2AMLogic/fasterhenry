@@ -6,6 +6,7 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-05
 
+- **PR #260**: chore(loom): resync installed Loom to v0.19.1264
 - **PR #258**: chore(loom): resync installed Loom to v0.19.1263
 
 ### 2026-11-04
