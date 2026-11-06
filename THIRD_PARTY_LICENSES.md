@@ -45,8 +45,8 @@ terms of other people's code that a binary carries with it.
 | `crossbeam-epoch` | 0.9.21 | MIT OR Apache-2.0 |
 | `crossbeam-utils` | 0.8.23 | MIT OR Apache-2.0 |
 | `either` | 1.18.0 | MIT OR Apache-2.0 |
-| `fasterhenry` | 0.1.1 | MIT |
-| `fasterhenry-cli` | 0.1.1 | MIT |
+| `fasterhenry` | 0.2.0 | MIT |
+| `fasterhenry-cli` | 0.2.0 | MIT |
 | `heck` | 0.5.0 | MIT OR Apache-2.0 |
 | `is_terminal_polyfill` | 1.70.2 | MIT OR Apache-2.0 |
 | `itoa` | 1.0.18 | MIT OR Apache-2.0 |
@@ -1169,8 +1169,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 Applies to:
 
-- `fasterhenry` 0.1.1
-- `fasterhenry-cli` 0.1.1
+- `fasterhenry` 0.2.0
+- `fasterhenry-cli` 0.2.0
 
 ```text
 MIT License
