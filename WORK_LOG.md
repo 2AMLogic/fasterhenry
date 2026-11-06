@@ -6,6 +6,8 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-06
 
+- **PR #268**: ci: check the SPICE export in ngspice against the JSON impedance
+- **Issue #267** (closed): CI: check the SPICE export in ngspice against the JSON impedance (1- and 2-port)
 - **PR #264**: fix(ci): build FastHenry with gnu89 and print a source-free failure summary
 - **Issue #263** (closed): Oracle workflow: FastHenry build fails on the runner's compiler, and the failure path prints source excerpts to the public log
 
