@@ -4,6 +4,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-06
+
+- **PR #264**: fix(ci): build FastHenry with gnu89 and print a source-free failure summary
+- **Issue #263** (closed): Oracle workflow: FastHenry build fails on the runner's compiler, and the failure path prints source excerpts to the public log
+
 ### 2026-11-05
 
 - **PR #260**: chore(loom): resync installed Loom to v0.19.1264
