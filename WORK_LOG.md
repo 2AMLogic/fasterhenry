@@ -6,6 +6,7 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-06
 
+- **PR #271**: chore(loom): resync installed Loom to v0.19.1270
 - **PR #268**: ci: check the SPICE export in ngspice against the JSON impedance
 - **Issue #267** (closed): CI: check the SPICE export in ngspice against the JSON impedance (1- and 2-port)
 - **PR #264**: fix(ci): build FastHenry with gnu89 and print a source-free failure summary
