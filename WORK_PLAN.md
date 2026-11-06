@@ -23,11 +23,18 @@ _None._
 
 ## In Progress
 
-_None._ (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
+- **#263**: Oracle workflow: FastHenry build fails on the runner's compiler, and the failure path prints source excerpts to the public log (PR #264 open)
+
+(#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
+
+## PRs Awaiting Review
+
+- **#264**: fix(ci): build FastHenry with gnu89 and print a source-free failure summary (closes #263)
+- **#262**: release: 0.2.0
 
 ## Proposed
 
-_None._ (#244, the fasterhenry.org site skeleton, now carries `loom:operator` and is operator-owned; see below.)
+_None._ (#244, the fasterhenry.org site skeleton, carries `loom:curated` plus `loom:operator` and is operator-owned; see below.)
 
 ## Blocked / Operator-owned
 
@@ -56,7 +63,8 @@ _None._ (#244, the fasterhenry.org site skeleton, now carries `loom:operator` an
 | Very important | 0 |
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
-| In Progress | 0 |
+| In Progress | 1 (#263) |
+| PRs awaiting review | 2 (#262, #264) |
 | Curated (proposed) | 0 |
 | Blocked | 10 (#16, #74, #171, #172, #186, #187, #208, #243, #245, #246) |
 | Operator-gated (`loom:operator`) | 2 (#166, #244) |
