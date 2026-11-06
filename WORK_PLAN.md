@@ -11,7 +11,9 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-_None._ The Loom resync to 0.19.1254 (#253) has merged; the earlier resync PRs #238, #241, #248, #250 and #251 were closed unmerged in its favour.
+- **#262**: release: 0.2.0 (`loom:pr` + `loom:blocked`, clean and mergeable; awaiting the operator's release decision)
+
+Earlier: the Loom resync to 0.19.1254 (#253) has merged; the earlier resync PRs #238, #241, #248, #250 and #251 were closed unmerged in its favour.
 
 ## Important
 
@@ -23,14 +25,13 @@ _None._
 
 ## In Progress
 
-- **#263**: Oracle workflow: FastHenry build fails on the runner's compiler, and the failure path prints source excerpts to the public log (PR #264 open)
+_None._ (#263 closed via PR #264.)
 
 (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
 
 ## PRs Awaiting Review
 
-- **#264**: fix(ci): build FastHenry with gnu89 and print a source-free failure summary (closes #263)
-- **#262**: release: 0.2.0
+_None._
 
 ## Proposed
 
@@ -63,10 +64,10 @@ _None._ (#244, the fasterhenry.org site skeleton, carries `loom:curated` plus `l
 | Very important | 0 |
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
-| In Progress | 1 (#263) |
-| PRs awaiting review | 2 (#262, #264) |
+| In Progress | 0 |
+| PRs awaiting review | 0 |
 | Curated (proposed) | 0 |
 | Blocked | 10 (#16, #74, #171, #172, #186, #187, #208, #243, #245, #246) |
 | Operator-gated (`loom:operator`) | 2 (#166, #244) |
-| Operator merge-risk holds | 0 |
+| Operator merge-risk holds | 1 (#262) |
 | Active epics | 1 (#76) |
