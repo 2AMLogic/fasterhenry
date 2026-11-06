@@ -285,6 +285,32 @@ jobs:
                       assert abs(got.imag - entry['im']) <= 1e-12 * abs(entry['im']) + 1e-30
           print('scipy.io.loadmat round-trip: exact')
           PYEOF
+      # The SPICE export reproduces Z = R + jwL in a real simulator: the
+      # exported subcircuit is driven in ngspice and every V(p_i) is compared
+      # with the JSON impedance (tools/spice_check.py). twobar.inp is the
+      # two-port case, the only one that emits K and off-diagonal H lines;
+      # the cir greps below make sure those stamps are really in the export.
+      # The marker is counted so a skipped comparison cannot pass.
+      - name: SPICE export (ngspice vs JSON, 1- and 2-port)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y ngspice
+          for deck in spiral twobar; do
+            cargo run -q -p fasterhenry-cli -- run "fasterhenry-cli/tests/data/$deck.inp" \
+              --freq 1e9 1e9 1 --json "target/$deck.json" \
+              --spice "target/$deck.cir" --spice-freq 1e9
+          done
+          {
+            /tmp/pypeec-venv/bin/python tools/spice_check.py target/spiral.json target/spiral.cir 1e9
+            /tmp/pypeec-venv/bin/python tools/spice_check.py target/twobar.json target/twobar.cir 1e9 \
+              --expect-lines '^K1_2 ' --expect-lines '^H1_2 ' --expect-lines '^H2_1 '
+          } 2>&1 | tee target/spice-check.log
+          checked="$(grep -c "ngspice stamp vs JSON: [12] ports checked" target/spice-check.log || true)"
+          if [ "$checked" -ne 2 ]; then
+            echo "::error::SPICE export: $checked of 2 ngspice comparisons ran"
+            exit 1
+          fi
       # The ground-plane PyPEEC gates: the slotted-vs-solid differential
       # and the graded contact-region separation differential (issue #36),
       # on both solvers (contact terms cancel on each). Release mode, for

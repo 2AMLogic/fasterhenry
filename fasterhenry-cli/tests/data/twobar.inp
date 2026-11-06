@@ -1,0 +1,16 @@
+* Self-authored two-port fixture for the CI SPICE-stamp check (see ci.yml).
+* Two parallel 5 mm x 0.2 mm x 35 um copper bars, 0.5 mm apart, one port
+* each, so the SPICE export carries a K mutual and off-diagonal H sources.
+.title two parallel bars
+.units m
+.default z=0 w=2e-4 h=3.5e-5 sigma=5.8e7 nwinc=3 nhinc=2
+na x=0 y=0
+nb x=5e-3 y=0
+nc x=0 y=5e-4
+nd x=5e-3 y=5e-4
+e1 na nb
+e2 nc nd
+.external na nb barA
+.external nc nd barB
+.freq fmin=1e6 fmax=1e9 ndec=1
+.end
