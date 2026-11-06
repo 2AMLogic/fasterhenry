@@ -70,6 +70,9 @@ frequency-dependent rerun is a re-export.
 
 `tests/roundtrip.rs` checks the MAT byte layout structurally; CI loads a
 generated file with `scipy.io.loadmat` and compares against the JSON
-output; the SPICE stamp is exercised end-to-end by driving the exported
-spiral subcircuit with a 1 A AC source in ngspice and comparing `V(p1)`
-against `Z(1 GHz)` (both parts to six digits in the development run).
+output; the SPICE stamp is exercised end-to-end in CI (`tools/spice_check.py`):
+the exported subcircuit is driven in ngspice with a 1 A AC source on each port
+in turn, for a one-port deck (`spiral.inp`) and a two-port deck (`twobar.inp`,
+which emits the `K` mutual and the off-diagonal `H` sources), and every `V(p_i)`
+is compared with the JSON `Z_ij(1 GHz)` in both parts to a relative tolerance
+of 1e-6.
