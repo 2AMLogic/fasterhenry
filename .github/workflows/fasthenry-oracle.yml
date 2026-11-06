@@ -48,6 +48,8 @@ jobs:
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/fh-build"
+          # Remove the source and build log on success and failure alike.
+          trap 'rm -rf "$work"' EXIT
           mkdir -p "$work/src" "$RUNNER_TEMP/fh-bin" "$RUNNER_TEMP/fh-identity"
           curl -fsSL --retry 3 -o "$work/release.tar.gz" "$SOURCE_URL"
           seen="$(sha256sum "$work/release.tar.gz" | cut -d' ' -f1)"
@@ -56,9 +58,15 @@ jobs:
             exit 1
           fi
           tar -xzf "$work/release.tar.gz" -C "$work/src" --strip-components=1
-          # Build output is discarded on success; a failure shows only the tail.
-          if ! make -C "$work/src/$BUILD_DIR" >"$work/build.log" 2>&1; then
-            tail -n 40 "$work/build.log" >&2
+          # The release is pre-ANSI C. gnu89 is added to the compiler, so the
+          # Makefile's own flags stay in force.
+          cc="gcc -std=gnu89"
+          # Build output is discarded. GCC diagnostics quote source lines, so a
+          # failure prints only a source-free summary: never any build.log line.
+          if ! make CC="$cc" -C "$work/src/$BUILD_DIR" >"$work/build.log" 2>&1; then
+            nerr="$(grep -c 'error:' "$work/build.log" || true)"
+            opts="$(grep -o '\[-W[A-Za-z0-9_=+-]*\]' "$work/build.log" | sort -u | tr '\n' ' ' || true)"
+            echo "build failed: ${nerr:-0} error: lines; diagnostic options: ${opts:-none}" >&2
             exit 1
           fi
           cp "$work/src/$BUILD_DIR/fasthenry" "$RUNNER_TEMP/fh-bin/fasthenry"
@@ -67,10 +75,11 @@ jobs:
             echo "source_sha256=$seen"
             echo "pinned=$([ -n "$SOURCE_SHA256" ] && echo yes || echo no)"
             echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "cc_version=$($cc --version | head -n 1)"
+            echo "cc_flags=-std=gnu89"
             echo "runner_image=${ImageOS:-unknown}-${ImageVersion:-unknown}"
             echo "binary_sha256=$(sha256sum "$RUNNER_TEMP/fh-bin/fasthenry" | cut -d' ' -f1)"
           } | tee "$RUNNER_TEMP/fh-identity/build-identity.txt"
-          rm -rf "$work"
       - name: Run decks, each in a fresh directory
         env:
           DECK_DIR: ${{ inputs.deck_dir }}
