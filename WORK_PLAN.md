@@ -12,8 +12,7 @@ merged; remaining work is the compatibility long tail below.
 ## Operator Attention: Merge-Risk Holds
 
 - **#262**: release: 0.2.0 (`loom:pr` + `loom:blocked`, clean and mergeable; awaiting the operator's release decision)
-
-Earlier: the Loom resync to 0.19.1254 (#253) has merged; the earlier resync PRs #238, #241, #248, #250 and #251 were closed unmerged in its favour.
+- **#280**: feat(site): static fasterhenry.org site, spiral hero figure and Pages deploy (`loom:pr` + `loom:blocked`; closes #244)
 
 ## Important
 
@@ -25,7 +24,7 @@ _None._
 
 ## In Progress
 
-_None._ (#263 closed via PR #264.)
+- **#244**: fasterhenry.org site skeleton, landing, About and Cloudflare Pages deploy pipeline (`loom:building`; PR #280 open)
 
 (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
 
@@ -35,11 +34,10 @@ _None._
 
 ## Proposed
 
-_None._ (#244, the fasterhenry.org site skeleton, carries `loom:curated` plus `loom:operator` and is operator-owned; see below.)
+_None._
 
 ## Blocked / Operator-owned
 
-- **#244**: fasterhenry.org site skeleton, landing, About and Cloudflare Pages deploy pipeline (`loom:operator`; first of the site issues, gates #245/#246)
 - **#243**: fasterhenry.org public demo site (umbrella; blocked by #244, #245, #246)
 - **#245**: fasterhenry.org gallery and benchmarks pages (blocked by #244)
 - **#246**: fasterhenry.org validation and FastHenry-users pages (blocked by #244)
@@ -64,10 +62,10 @@ _None._ (#244, the fasterhenry.org site skeleton, carries `loom:curated` plus `l
 | Very important | 0 |
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
-| In Progress | 0 |
+| In Progress | 1 (#244) |
 | PRs awaiting review | 0 |
 | Curated (proposed) | 0 |
 | Blocked | 10 (#16, #74, #171, #172, #186, #187, #208, #243, #245, #246) |
-| Operator-gated (`loom:operator`) | 2 (#166, #244) |
-| Operator merge-risk holds | 1 (#262) |
+| Operator-gated (`loom:operator`) | 1 (#166) |
+| Operator merge-risk holds | 2 (#262, #280) |
 | Active epics | 1 (#76) |
