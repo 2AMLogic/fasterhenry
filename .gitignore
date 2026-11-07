@@ -134,3 +134,6 @@ Zc.mat
 
 # Repo Skills Codex-side machine-local install metadata (never committed)
 .agents/skills/repo/.install-local.json
+
+# fasterhenry.org static site build output (site/build.py)
+site/dist/
