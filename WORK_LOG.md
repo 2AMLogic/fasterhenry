@@ -6,6 +6,7 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-07
 
+- **PR #277**: chore(loom): resync installed Loom to v0.19.1273
 - **PR #274**: Bump Repo Skills 0.25.1 -> 0.25.10
 - **PR #273**: chore(loom): resync installed Loom to v0.19.1272
 
