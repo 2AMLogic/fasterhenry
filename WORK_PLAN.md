@@ -8,11 +8,11 @@ Released: **0.1.0** and **0.1.1** on crates.io (2026-09-27). Current
 milestone: **0.2.0 — drop-in FastHenry replacement** (epic #76). The deck
 reader, drop-in CLI mode, compat mode and the `cargo-deny` license gate have
 merged, and the 0.2.0 release PR (#262) has merged. Remaining work is the
-public demo site (#243) and the compatibility long tail below.
+public demo site (#243, gallery and benchmarks pages in #245) and the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#283**: feat(site): render validation and FastHenry-users pages from docs markdown (`loom:pr` + `loom:blocked`; part of #246)
+_None._
 
 ## Important
 
@@ -25,7 +25,6 @@ _None._
 ## In Progress
 
 - **#245**: fasterhenry.org gallery and benchmarks pages (`loom:building`)
-- **#246**: fasterhenry.org validation and FastHenry-users pages (`loom:building`; PR #283 open)
 
 (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
 
@@ -39,7 +38,8 @@ _None._
 
 ## Blocked / Operator-owned
 
-- **#243**: fasterhenry.org public demo site (umbrella; #244 done, waiting on #245 and #246)
+- **#285**: site benchmarks page shows literal underscores around the notice (blocked by PR #284)
+- **#243**: fasterhenry.org public demo site (umbrella; #244 and #246 done, waiting on #245)
 - **#186**: clean-room FastHenry oracle runner (operator must dispatch the smoke run)
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
@@ -61,10 +61,10 @@ _None._
 | Very important | 0 |
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
-| In Progress | 2 (#245, #246) |
+| In Progress | 1 (#245) |
 | PRs awaiting review | 1 (#284) |
 | Curated (proposed) | 0 |
-| Blocked | 8 (#16, #74, #171, #172, #186, #187, #208, #243) |
+| Blocked | 9 (#16, #74, #171, #172, #186, #187, #208, #243, #285) |
 | Operator-gated (`loom:operator`) | 1 (#166) |
-| Operator merge-risk holds | 1 (#283) |
+| Operator merge-risk holds | 0 |
 | Active epics | 1 (#76) |
