@@ -11,8 +11,7 @@ merged; remaining work is the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#262**: release: 0.2.0 (`loom:pr` + `loom:blocked`, clean and mergeable; awaiting the operator's release decision)
-- **#280**: feat(site): static fasterhenry.org site, spiral hero figure and Pages deploy (`loom:pr` + `loom:blocked`; closes #244)
+_None._ (#262 release 0.2.0 and #280 site skeleton have both merged.)
 
 ## Important
 
@@ -24,13 +23,18 @@ _None._
 
 ## In Progress
 
-- **#244**: fasterhenry.org site skeleton, landing, About and Cloudflare Pages deploy pipeline (`loom:building`; PR #280 open)
+- **#245**: fasterhenry.org gallery and benchmarks pages (`loom:building`; PR #284 awaiting review)
+- **#246**: fasterhenry.org validation and FastHenry-users pages (`loom:building`; PR #283 approved, awaiting merge)
 
 (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
 
 ## PRs Awaiting Review
 
-_None._
+- **#284**: feat(site): Gallery and Benchmarks pages generated from committed decks and docs
+
+## Approved (Awaiting Merge)
+
+- **#283**: feat(site): render validation and FastHenry-users pages from docs markdown
 
 ## Proposed
 
@@ -38,9 +42,7 @@ _None._
 
 ## Blocked / Operator-owned
 
-- **#243**: fasterhenry.org public demo site (umbrella; blocked by #244, #245, #246)
-- **#245**: fasterhenry.org gallery and benchmarks pages (blocked by #244)
-- **#246**: fasterhenry.org validation and FastHenry-users pages (blocked by #244)
+- **#243**: fasterhenry.org public demo site (umbrella; blocked by #245 and #246, #244 is done)
 - **#186**: clean-room FastHenry oracle runner (operator must dispatch the smoke run)
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
@@ -62,10 +64,11 @@ _None._
 | Very important | 0 |
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
-| In Progress | 1 (#244) |
-| PRs awaiting review | 0 |
+| In Progress | 2 (#245, #246) |
+| PRs awaiting review | 1 (#284) |
+| Approved PRs awaiting merge | 1 (#283) |
 | Curated (proposed) | 0 |
-| Blocked | 10 (#16, #74, #171, #172, #186, #187, #208, #243, #245, #246) |
+| Blocked | 8 (#16, #74, #171, #172, #186, #187, #208, #243) |
 | Operator-gated (`loom:operator`) | 1 (#166) |
-| Operator merge-risk holds | 2 (#262, #280) |
+| Operator merge-risk holds | 0 |
 | Active epics | 1 (#76) |
