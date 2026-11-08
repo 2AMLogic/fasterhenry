@@ -20,8 +20,9 @@ figcaption{font-size:.95rem;color:var(--muted);margin-top:.5rem}
 .links{display:flex;gap:1.25rem;flex-wrap:wrap;padding:0;list-style:none}
 footer{padding-top:1.5rem;padding-bottom:2.5rem;margin-top:3rem;border-top:1px solid var(--line);color:var(--muted);font-size:.95rem}
 h3{font-size:1.1rem;margin:1.5rem 0 .4rem}
-.table-wrap{overflow-x:auto;margin:1rem 0}
+.tablewrap,.table-wrap{overflow-x:auto;margin:1rem 0}
 table{border-collapse:collapse;font-size:.95rem;width:100%}
 th,td{border:1px solid var(--line);padding:.35rem .6rem;text-align:left;vertical-align:top;overflow-wrap:anywhere}
 th{background:var(--code)}
 li{margin:.25rem 0}
+section{border-top:1px solid var(--line)}
