@@ -6,9 +6,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-08
 
+- **PR #284**: feat(site): add Gallery and Benchmarks pages generated from committed decks and docs
 - **PR #283**: feat(site): render validation and FastHenry-users pages from docs markdown
 - **PR #280**: feat(site): add static fasterhenry.org site, spiral hero figure and Pages deploy
 - **PR #262**: release: 0.2.0
+- **Issue #245** (closed): fasterhenry.org: gallery and benchmarks pages
 - **Issue #246** (closed): fasterhenry.org: validation and FastHenry-users pages
 - **Issue #244** (closed): fasterhenry.org: site skeleton, landing, About and Cloudflare Pages deploy pipeline
 
