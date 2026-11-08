@@ -19,3 +19,8 @@ figure{margin:1.5rem 0}figure img{width:100%;height:auto;border:1px solid var(--
 figcaption{font-size:.95rem;color:var(--muted);margin-top:.5rem}
 .links{display:flex;gap:1.25rem;flex-wrap:wrap;padding:0;list-style:none}
 footer{padding-top:1.5rem;padding-bottom:2.5rem;margin-top:3rem;border-top:1px solid var(--line);color:var(--muted);font-size:.95rem}
+.tablewrap{overflow-x:auto;margin:1rem 0}
+table{border-collapse:collapse;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.3rem .6rem;text-align:left}
+th{background:var(--code)}
+section{border-top:1px solid var(--line)}

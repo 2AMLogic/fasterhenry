@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "site/**"
+      - "docs/benchmarks.md"
       - "scripts/deploy-site.sh"
       - ".github/workflows/site.yml"
   push:
     branches: [main]
     paths:
       - "site/**"
+      - "docs/benchmarks.md"
       - "scripts/deploy-site.sh"
       - ".github/workflows/site.yml"
 
@@ -35,6 +37,9 @@ jobs:
           test -s site/dist/index.html
           test -s site/dist/about/index.html
           test -s site/dist/assets/hero-spiral.svg
+          test -s site/dist/gallery/index.html
+          test -s site/dist/benchmarks/index.html
+          test -s site/dist/assets/benchmarks/scaling.svg
 
   deploy:
     name: Deploy to Cloudflare Pages

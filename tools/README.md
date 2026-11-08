@@ -15,6 +15,8 @@ of them ship in the published crates.
 | `fasthenry_oracle_run.py` | The runner behind the FastHenry oracle (below): runs each self-authored deck in a directory through a black-box FastHenry binary in its own fresh run directory and writes exit status, stdout, stderr and produced files (e.g. `Zc.mat`) per deck. | `.github/workflows/fasthenry-oracle.yml` (new); Builders via the workflow |
 | `test_fasthenry_oracle_run.py` | Unit tests for the runner's fresh-directory and rejected-deck behaviour, against a stub binary (`python3 -m unittest test_fasthenry_oracle_run`, run from this directory). | Local |
 | `test_bench_table.py` | Unit tests for `bench_table.py`'s table formatting (`python3 -m unittest test_bench_table`, run from this directory). | `bench.yml` |
+| `gallery_figures.py` | Runs the built CLI on the six committed decks and writes `site/assets/gallery/` (JSON + SVG figures) for the site's Gallery page. | manual (`python3 tools/gallery_figures.py`) |
+| `test_gallery_figures.py` | Unit tests for `gallery_figures.py` and `site/render.py` (`python3 -m unittest test_gallery_figures`, run from this directory). | manual |
 
 Each script's module docstring — or, for the shell script, its `--help` — has
 its full usage.

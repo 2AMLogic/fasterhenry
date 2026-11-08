@@ -20,6 +20,9 @@ import json, re, shutil, sys
 from html import escape
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import render
+
 SITE = Path(__file__).resolve().parent
 DIST = SITE / "dist"
 REPO = "https://github.com/2AMLogic/fasterhenry"
@@ -59,6 +62,10 @@ def main():
     hero = json.loads((SITE / "assets/hero-spiral.json").read_text())
     subs = {"repo": REPO, "hero_version": hero["fasterhenry_version"],
             "hero_filaments": str(hero["filaments"]), "hero_command": escape(hero["command"])}
+    # Gallery: committed output of tools/gallery_figures.py. Benchmarks: rendered
+    # from docs/benchmarks.md, scaling plot drawn from its own table.
+    subs["gallery_body"] = render.gallery_body(json.loads((SITE / "assets/gallery/gallery.json").read_text()))
+    subs["benchmarks_body"], scaling_svg = render.benchmarks_body((SITE.parent / "docs/benchmarks.md").read_text())
     pages = {("" if p.stem == "index" else p.stem): p for p in sorted((SITE / "pages").glob("*.html"))}
     layout = (SITE / "layout.html").read_text()
     if DIST.exists():
@@ -77,6 +84,8 @@ def main():
         target.write_text(out)
     shutil.copy(SITE / "site.css", DIST / "site.css")
     shutil.copytree(SITE / "assets", DIST / "assets")
+    (DIST / "assets/benchmarks").mkdir()
+    (DIST / "assets/benchmarks/scaling.svg").write_text(scaling_svg + "\n")
     (DIST / "_headers").write_text("/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n/assets/*\n  Cache-Control: public, max-age=3600\n")
     left = [m for f in DIST.rglob("*.html") for m in re.findall(r"\{\{\w+\}\}", f.read_text())]
     if left:
