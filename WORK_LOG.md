@@ -4,6 +4,12 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-08
+
+- **PR #280**: feat(site): add static fasterhenry.org site, spiral hero figure and Pages deploy
+- **PR #262**: release: 0.2.0
+- **Issue #244** (closed): fasterhenry.org: site skeleton, landing, About and Cloudflare Pages deploy pipeline
+
 ### 2026-11-07
 
 - **PR #279**: chore(loom): resync installed Loom to v0.19.1275
