@@ -7,12 +7,12 @@ Prioritized roadmap of upcoming work, maintained by the Guide role.
 Released: **0.1.0** and **0.1.1** on crates.io (2026-09-27). Current
 milestone: **0.2.0 — drop-in FastHenry replacement** (epic #76). The deck
 reader, drop-in CLI mode, compat mode and the `cargo-deny` license gate have
-merged; remaining work is the compatibility long tail below.
+merged, and the 0.2.0 release PR (#262) has merged. Remaining work is the
+public demo site (#243) and the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
-- **#262**: release: 0.2.0 (`loom:pr` + `loom:blocked`, clean and mergeable; awaiting the operator's release decision)
-- **#280**: feat(site): static fasterhenry.org site, spiral hero figure and Pages deploy (`loom:pr` + `loom:blocked`; closes #244)
+- **#283**: feat(site): render validation and FastHenry-users pages from docs markdown (`loom:pr` + `loom:blocked`; part of #246)
 
 ## Important
 
@@ -24,13 +24,14 @@ _None._
 
 ## In Progress
 
-- **#244**: fasterhenry.org site skeleton, landing, About and Cloudflare Pages deploy pipeline (`loom:building`; PR #280 open)
+- **#245**: fasterhenry.org gallery and benchmarks pages (`loom:building`)
+- **#246**: fasterhenry.org validation and FastHenry-users pages (`loom:building`; PR #283 open)
 
 (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
 
 ## PRs Awaiting Review
 
-_None._
+- **#284**: feat(site): add Gallery and Benchmarks pages generated from committed decks and docs (`loom:review-requested`; for #245)
 
 ## Proposed
 
@@ -38,9 +39,7 @@ _None._
 
 ## Blocked / Operator-owned
 
-- **#243**: fasterhenry.org public demo site (umbrella; blocked by #244, #245, #246)
-- **#245**: fasterhenry.org gallery and benchmarks pages (blocked by #244)
-- **#246**: fasterhenry.org validation and FastHenry-users pages (blocked by #244)
+- **#243**: fasterhenry.org public demo site (umbrella; #244 done, waiting on #245 and #246)
 - **#186**: clean-room FastHenry oracle runner (operator must dispatch the smoke run)
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
@@ -62,10 +61,10 @@ _None._
 | Very important | 0 |
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
-| In Progress | 1 (#244) |
-| PRs awaiting review | 0 |
+| In Progress | 2 (#245, #246) |
+| PRs awaiting review | 1 (#284) |
 | Curated (proposed) | 0 |
-| Blocked | 10 (#16, #74, #171, #172, #186, #187, #208, #243, #245, #246) |
+| Blocked | 8 (#16, #74, #171, #172, #186, #187, #208, #243) |
 | Operator-gated (`loom:operator`) | 1 (#166) |
-| Operator merge-risk holds | 2 (#262, #280) |
+| Operator merge-risk holds | 1 (#283) |
 | Active epics | 1 (#76) |
