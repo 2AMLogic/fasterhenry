@@ -7,7 +7,7 @@ circuit) extraction of resistance and inductance of 3-D conductor geometries.
 This crate installs a binary named **`fasterhenry`** (the crate is
 `fasterhenry-cli`; the library crate owns the `fasterhenry` package name).
 
-> **Status: 0.1, early release.** Following semver for `0.x`, a minor release
+> **Status: 0.2, early release.** Following semver for `0.x`, a minor release
 > (`0.2`, `0.3`, …) may change the command-line interface; patch releases
 > stay compatible.
 

@@ -12,6 +12,8 @@ breaking changes to the API or the command-line interface; patch releases
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
 ### Added
 
 - Deck reader: under `--fasthenry-compat`, a diagonal `contact trace` is
@@ -786,6 +788,7 @@ First release to crates.io.
 - `fasterhenry-cli` now takes the library from `[workspace.dependencies]` with
   both a `path` and a `version`, so the CLI crate is publishable.
 
-[Unreleased]: https://github.com/2AMLogic/fasterhenry/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/2AMLogic/fasterhenry/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/2AMLogic/fasterhenry/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/2AMLogic/fasterhenry/releases/tag/v0.1.1
 [0.1.0]: https://github.com/2AMLogic/fasterhenry/releases/tag/v0.1.0
