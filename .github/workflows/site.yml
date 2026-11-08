@@ -29,11 +29,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build site/dist
         run: scripts/deploy-site.sh --no-deploy
+      - name: Renderer tests
+        run: python3 -m unittest discover -s site
       - name: Check the build output
         run: |
           set -euo pipefail
           test -s site/dist/index.html
           test -s site/dist/about/index.html
+          test -s site/dist/validation/index.html
+          test -s site/dist/fasthenry-users/index.html
+          # rendered docs must not leave relative .md hrefs behind
+          if grep -rEq 'href="[^h#][^"]*\.md' site/dist --include=index.html; then
+            echo "relative .md href left in rendered pages"; exit 1
+          fi
           test -s site/dist/assets/hero-spiral.svg
 
   deploy:
