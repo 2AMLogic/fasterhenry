@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 470" role="img" aria-labelledby="t d" font-family="system-ui,sans-serif" font-size="13" fill="#2b313b">
+<title id="t">Resistance and inductance of a 2-turn square spiral, 1 MHz to 1 GHz</title>
+<desc id="d">Computed by fasterhenry. Resistance rises from 49.4 to 59.4 milliohms; inductance falls from 14.7 to 14.4 nanohenries.</desc>
+<rect width="720" height="470" fill="#ffffff"/>
+<rect x="84" y="34" width="600" height="170" fill="none" stroke="#c9ced6"/>
+<line x1="84" x2="684" y1="204.0" y2="204.0" stroke="#e6e9ee"/>
+<text x="76" y="208.0" text-anchor="end">45</text>
+<line x1="84" x2="684" y1="161.5" y2="161.5" stroke="#e6e9ee"/>
+<text x="76" y="165.5" text-anchor="end">50</text>
+<line x1="84" x2="684" y1="119.0" y2="119.0" stroke="#e6e9ee"/>
+<text x="76" y="123.0" text-anchor="end">55</text>
+<line x1="84" x2="684" y1="76.5" y2="76.5" stroke="#e6e9ee"/>
+<text x="76" y="80.5" text-anchor="end">60</text>
+<line x1="84" x2="684" y1="34.0" y2="34.0" stroke="#e6e9ee"/>
+<text x="76" y="38.0" text-anchor="end">65</text>
+<line x1="84.0" x2="84.0" y1="34" y2="204" stroke="#e6e9ee"/>
+<line x1="284.0" x2="284.0" y1="34" y2="204" stroke="#e6e9ee"/>
+<line x1="484.0" x2="484.0" y1="34" y2="204" stroke="#e6e9ee"/>
+<line x1="684.0" x2="684.0" y1="34" y2="204" stroke="#e6e9ee"/>
+<polyline points="84.0,166.2 104.0,165.4 124.0,164.0 144.0,162.0 164.0,159.1 184.0,154.8 204.0,149.1 224.0,141.6 244.0,132.7 264.0,123.0 284.0,113.4 304.0,104.8 324.0,97.8 344.0,92.6 364.0,88.8 384.0,86.2 404.0,84.5 424.0,83.3 444.0,82.6 464.0,82.1 484.0,81.8 504.0,81.7 524.0,81.5 544.0,81.5 564.0,81.4 584.0,81.4 604.0,81.4 624.0,81.4 644.0,81.3 664.0,81.3 684.0,81.3" fill="none" stroke="#b4400a" stroke-width="2.5" stroke-linejoin="round"/>
+<text x="32" y="119.0" text-anchor="middle" transform="rotate(-90 32 119.0)">R (mΩ)</text>
+<rect x="84" y="244" width="600" height="170" fill="none" stroke="#c9ced6"/>
+<line x1="84" x2="684" y1="414.0" y2="414.0" stroke="#e6e9ee"/>
+<text x="76" y="418.0" text-anchor="end">14.2</text>
+<line x1="84" x2="684" y1="357.3" y2="357.3" stroke="#e6e9ee"/>
+<text x="76" y="361.3" text-anchor="end">14.4</text>
+<line x1="84" x2="684" y1="300.7" y2="300.7" stroke="#e6e9ee"/>
+<text x="76" y="304.7" text-anchor="end">14.6</text>
+<line x1="84" x2="684" y1="244.0" y2="244.0" stroke="#e6e9ee"/>
+<text x="76" y="248.0" text-anchor="end">14.8</text>
+<line x1="84.0" x2="84.0" y1="244" y2="414" stroke="#e6e9ee"/>
+<line x1="284.0" x2="284.0" y1="244" y2="414" stroke="#e6e9ee"/>
+<line x1="484.0" x2="484.0" y1="244" y2="414" stroke="#e6e9ee"/>
+<line x1="684.0" x2="684.0" y1="244" y2="414" stroke="#e6e9ee"/>
+<polyline points="84.0,285.6 104.0,286.3 124.0,287.3 144.0,288.8 164.0,291.0 184.0,294.1 204.0,298.3 224.0,303.6 244.0,309.8 264.0,316.6 284.0,323.2 304.0,329.1 324.0,333.9 344.0,337.5 364.0,340.1 384.0,341.9 404.0,343.1 424.0,343.9 444.0,344.4 464.0,344.7 484.0,344.9 504.0,345.0 524.0,345.1 544.0,345.1 564.0,345.2 584.0,345.2 604.0,345.2 624.0,345.2 644.0,345.2 664.0,345.2 684.0,345.2" fill="none" stroke="#0b5cad" stroke-width="2.5" stroke-linejoin="round"/>
+<text x="32" y="329.0" text-anchor="middle" transform="rotate(-90 32 329.0)">L (nH)</text>
+<text x="84" y="22" font-weight="600">R(f)</text><text x="84" y="232" font-weight="600">L(f)</text>
+<text x="84.0" y="434" text-anchor="middle">1 MHz</text>
+<text x="284.0" y="434" text-anchor="middle">10 MHz</text>
+<text x="484.0" y="434" text-anchor="middle">100 MHz</text>
+<text x="684.0" y="434" text-anchor="middle">1 GHz</text>
+<text x="384.0" y="460" text-anchor="middle">frequency</text></svg>
