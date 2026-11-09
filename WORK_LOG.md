@@ -6,6 +6,8 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-08
 
+- **PR #289**: fix: render whole-paragraph italic note on benchmarks page
+- **Issue #285** (closed): site: benchmarks page shows literal underscores around the 'Not yet regenerated' notice
 - **PR #284**: feat(site): add Gallery and Benchmarks pages generated from committed decks and docs
 - **PR #283**: feat(site): render validation and FastHenry-users pages from docs markdown
 - **PR #280**: feat(site): add static fasterhenry.org site, spiral hero figure and Pages deploy
