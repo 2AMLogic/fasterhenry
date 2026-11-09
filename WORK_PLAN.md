@@ -8,7 +8,7 @@ Released: **0.1.0** and **0.1.1** on crates.io (2026-09-27). Current
 milestone: **0.2.0 — drop-in FastHenry replacement** (epic #76). The deck
 reader, drop-in CLI mode, compat mode and the `cargo-deny` license gate have
 merged, and the 0.2.0 release PR (#262) has merged. Remaining work is the
-public demo site (#243, gallery and benchmarks pages in #245) and the compatibility long tail below.
+public demo site umbrella (#243; the gallery and benchmarks pages in #245 have merged) and the compatibility long tail below.
 
 ## Operator Attention: Merge-Risk Holds
 
@@ -24,13 +24,13 @@ _None._
 
 ## In Progress
 
-- **#245**: fasterhenry.org gallery and benchmarks pages (`loom:building`)
+_None._
 
 (#186 is `loom:blocked`, listed below: PR #189 merged, but it stays open until the operator dispatches `fasthenry-oracle.yml` and records the smoke run.)
 
 ## PRs Awaiting Review
 
-- **#284**: feat(site): add Gallery and Benchmarks pages generated from committed decks and docs (`loom:review-requested`; for #245)
+_None._
 
 ## Proposed
 
@@ -38,8 +38,7 @@ _None._
 
 ## Blocked / Operator-owned
 
-- **#285**: site benchmarks page shows literal underscores around the notice (blocked by PR #284)
-- **#243**: fasterhenry.org public demo site (umbrella; #244 and #246 done, waiting on #245)
+- **#243**: fasterhenry.org public demo site (umbrella; #244, #245 and #246 done, awaiting close-out)
 - **#186**: clean-room FastHenry oracle runner (operator must dispatch the smoke run)
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
