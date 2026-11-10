@@ -4,6 +4,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-10
+
+- **PR #296**: feat: expose per-filament currents, current density and power
+- **Issue #294** (closed): Output per-filament current density and dissipated power, with a power-balance check
+
 ### 2026-11-08
 
 - **PR #289**: fix: render whole-paragraph italic note on benchmarks page

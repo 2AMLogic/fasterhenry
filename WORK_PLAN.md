@@ -60,10 +60,10 @@ _None._
 | Very important | 0 |
 | Important | 1 (#166) |
 | Ready (`loom:issue`) | 0 |
-| In Progress | 1 (#245) |
-| PRs awaiting review | 1 (#284) |
+| In Progress | 0 |
+| PRs awaiting review | 0 |
 | Curated (proposed) | 0 |
-| Blocked | 9 (#16, #74, #171, #172, #186, #187, #208, #243, #285) |
-| Operator-gated (`loom:operator`) | 1 (#166) |
+| Blocked | 7 (#16, #74, #171, #172, #186, #187, #208) |
+| Operator-gated (`loom:operator`) | 2 (#166, #243) |
 | Operator merge-risk holds | 0 |
 | Active epics | 1 (#76) |
