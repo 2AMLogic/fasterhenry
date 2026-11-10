@@ -34,7 +34,7 @@ _None._
 
 ## Proposed
 
-_None._
+- **#295**: Conductivity models: temperature coefficient and nanoscale size effects (Fuchs–Sondheimer, Mayadas–Shatzkes) *(curated)*
 
 ## Blocked / Operator-owned
 
