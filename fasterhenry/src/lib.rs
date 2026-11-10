@@ -64,6 +64,7 @@
 #![warn(missing_docs)]
 
 pub mod coupling;
+pub mod currents;
 pub mod dense;
 pub mod filament;
 pub mod geometry;
@@ -77,6 +78,9 @@ pub mod result;
 pub mod solve;
 
 pub use coupling::{Coupling, CouplingError, TruncationWarning};
+pub use currents::{
+    unit_excitation, ConductorPeak, CurrentSolution, FilamentCurrent, PowerBalance, SegmentCurrent,
+};
 pub use filament::{
     discretize, discretize_graded, discretize_graded_per_axis, DiscretizeError, Filament,
 };

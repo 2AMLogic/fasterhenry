@@ -73,6 +73,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::coupling::{Coupling, CouplingError, TruncationWarning};
+use crate::currents::{assemble_solution, CurrentSolution, Layout};
 use crate::dense::lu_solve;
 use crate::filament::{
     discretize, discretize_graded_per_axis, graded_surface_extent, DiscretizeError, Filament,
@@ -584,6 +585,14 @@ pub enum SolveError {
     /// The [`Coupling`] does not fit the geometry.
     #[error(transparent)]
     Coupling(#[from] CouplingError),
+    /// The port-current excitation has the wrong length or a non-finite entry.
+    #[error("excitation must have one finite entry per port ({expected}), got {got} entries")]
+    InvalidExcitation {
+        /// Number of ports.
+        expected: usize,
+        /// Entries supplied.
+        got: usize,
+    },
     /// A frequency is negative or not finite.
     #[error("frequency {index} is {value} Hz; frequencies must be finite and non-negative")]
     InvalidFrequency {
@@ -640,6 +649,7 @@ pub struct MeshSystem {
     l_ee: DMatrix<f64>,
     l_ep: DMatrix<f64>,
     l_pp: DMatrix<f64>,
+    layout: Layout,
     counts: Counts,
     truncation_warnings: Vec<TruncationWarning>,
     inductance_seconds: f64,
@@ -742,6 +752,7 @@ impl MeshSystem {
             l_ee: block(&l_mesh, 0, 0, internal, internal),
             l_ep: block(&l_mesh, 0, internal, internal, port_count),
             l_pp: block(&l_mesh, internal, internal, port_count, port_count),
+            layout: Layout::new(geometry, &per_segment),
             mesh,
             counts,
             truncation_warnings,
@@ -819,6 +830,61 @@ impl MeshSystem {
         } else {
             Err(singular)
         }
+    }
+
+    /// Filament currents for the port-current phasors `excitation` (one per
+    /// port, amperes) at `frequency` hertz.
+    ///
+    /// Reuses the loop system [`impedance`](Self::impedance) solves: the
+    /// internal loop currents are `−Z_ee⁻¹·Z_ep·I_p`, mapped to filaments
+    /// through the loop basis. Conventions, units and the power balance are
+    /// documented in [`crate::currents`]. Use [`crate::unit_excitation`] for
+    /// 1 A into port 1 with the other ports open.
+    ///
+    /// # Errors
+    ///
+    /// [`SolveError::InvalidFrequency`], [`SolveError::InvalidExcitation`]
+    /// for a wrong-length or non-finite excitation, [`SolveError::Singular`].
+    pub fn currents(
+        &self,
+        frequency: f64,
+        excitation: &[Complex<f64>],
+    ) -> Result<CurrentSolution, SolveError> {
+        check_frequency(0, frequency)?;
+        check_excitation(self.counts.ports, excitation)?;
+        let singular = SolveError::Singular { frequency };
+        let omega = std::f64::consts::TAU * frequency;
+        let complex =
+            |r: &DMatrix<f64>, l: &DMatrix<f64>| r.zip_map(l, |r, l| Complex::new(r, omega * l));
+        let (ee, ep, pp) = (
+            complex(&self.r_ee, &self.l_ee),
+            complex(&self.r_ep, &self.l_ep),
+            complex(&self.r_pp, &self.l_pp),
+        );
+        let current = DMatrix::from_column_slice(excitation.len(), 1, excitation);
+        let internal = if ee.is_empty() {
+            DMatrix::zeros(0, 1)
+        } else {
+            -lu_solve(ee, &(&ep * &current)).ok_or(singular.clone())?
+        };
+        let voltage = &pp * &current + ep.transpose() * &internal;
+        if internal
+            .iter()
+            .chain(voltage.iter())
+            .any(|e| !(e.re.is_finite() && e.im.is_finite()))
+        {
+            return Err(singular);
+        }
+        Ok(assemble_solution(
+            &self.layout,
+            &self.filaments,
+            &self.resistances,
+            &self.mesh,
+            frequency,
+            excitation,
+            internal.as_slice(),
+            voltage.as_slice(),
+        ))
     }
 
     /// `Z(ω)` at every one of `frequencies` (hertz), with provenance.
@@ -948,6 +1014,24 @@ pub(crate) fn discretize_geometry(
         filaments.extend(bundle);
     }
     Ok((filaments, per_segment))
+}
+
+pub(crate) fn check_excitation(
+    ports: usize,
+    excitation: &[Complex<f64>],
+) -> Result<(), SolveError> {
+    if excitation.len() == ports
+        && excitation
+            .iter()
+            .all(|e| e.re.is_finite() && e.im.is_finite())
+    {
+        Ok(())
+    } else {
+        Err(SolveError::InvalidExcitation {
+            expected: ports,
+            got: excitation.len(),
+        })
+    }
 }
 
 pub(crate) fn check_frequency(index: usize, value: f64) -> Result<(), SolveError> {

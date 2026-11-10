@@ -18,7 +18,8 @@ pub use problem::Problem;
 use std::path::Path;
 
 use fasterhenry::{
-    IterativeParams, IterativeSystem, MeshSystem, Solver, SolverChoice, SweepResult,
+    CurrentSolution, IterativeParams, IterativeSystem, MeshSystem, Solver, SolverChoice,
+    SweepResult,
 };
 
 /// Reads a problem from a file: `.inp`/`.fh` decks by extension, anything
@@ -146,35 +147,139 @@ pub fn run_reporting_with(
     if problem.ports.is_empty() {
         return Err("no ports: give .external in the deck or ports in the document".to_string());
     }
+    let system = assemble_system(problem, choice)?;
+    let warnings = system.warnings();
+    let result = system.sweep(&frequencies)?;
+    Ok((result, warnings))
+}
+
+/// The assembled system of whichever solve path was chosen.
+enum System {
+    Dense(Box<MeshSystem>),
+    Iterative(Box<IterativeSystem>),
+}
+
+impl System {
+    /// Coupling-truncation warnings; always empty for the iterative path.
+    fn warnings(&self) -> Vec<String> {
+        match self {
+            Self::Dense(system) => system
+                .truncation_warnings()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            Self::Iterative(_) => Vec::new(),
+        }
+    }
+
+    fn sweep(&self, frequencies: &[f64]) -> Result<SweepResult, String> {
+        match self {
+            Self::Dense(system) => system.sweep(frequencies),
+            Self::Iterative(system) => system.sweep(frequencies),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    /// Currents for 1 A into port 1, the other ports open.
+    fn unit_currents(&self, frequency: f64, ports: usize) -> Result<CurrentSolution, String> {
+        let excitation = fasterhenry::unit_excitation(ports);
+        match self {
+            Self::Dense(system) => system.currents(frequency, &excitation),
+            Self::Iterative(system) => system.currents(frequency, &excitation),
+        }
+        .map_err(|error| error.to_string())
+    }
+}
+
+fn assemble_system(problem: &Problem, choice: SolverChoice) -> Result<System, String> {
     if solver_for(problem, choice)? == Solver::Iterative {
-        let system = IterativeSystem::assemble(
+        IterativeSystem::assemble(
             &problem.geometry,
             &problem.ports,
             &problem.discretization,
             &IterativeParams::default(),
         )
-        .map_err(|error| error.to_string())?;
-        let result = system
-            .sweep(&frequencies)
-            .map_err(|error| error.to_string())?;
-        return Ok((result, Vec::new()));
+        .map(|system| System::Iterative(Box::new(system)))
+    } else {
+        MeshSystem::assemble_with_coupling(
+            &problem.geometry,
+            &problem.ports,
+            &problem.discretization,
+            &problem.coupling,
+        )
+        .map(|system| System::Dense(Box::new(system)))
     }
-    let system = MeshSystem::assemble_with_coupling(
-        &problem.geometry,
-        &problem.ports,
-        &problem.discretization,
-        &problem.coupling,
-    )
-    .map_err(|error| error.to_string())?;
-    let warnings = system
-        .truncation_warnings()
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let result = system
-        .sweep(&frequencies)
-        .map_err(|error| error.to_string())?;
-    Ok((result, warnings))
+    .map_err(|error| error.to_string())
+}
+
+/// The header row of the `--currents` CSV.
+pub const CURRENTS_CSV_HEADER: &str = "frequency_hz,filament,segment,conductor,x_m,y_m,z_m,\
+current_re_a,current_im_a,current_abs_a,j_abs_a_per_m2,power_w";
+
+/// [`run_reporting_with`] that also computes the filament currents at every
+/// frequency (excitation: 1 A into port 1, the other ports open) and streams
+/// them to `csv`, one row per filament per frequency, holding only one
+/// frequency's rows in memory at a time. Returns the sweep, the truncation
+/// warnings and the `currents` JSON block (per-frequency power balance,
+/// per-segment sums and per-conductor peak `|J|`; no per-filament table).
+/// Columns, units and conventions: `docs/output-formats.md`.
+pub fn run_with_currents(
+    problem: &Problem,
+    frequency_override: Option<Vec<f64>>,
+    choice: SolverChoice,
+    csv: &mut dyn std::io::Write,
+) -> Result<(SweepResult, Vec<String>, serde_json::Value), String> {
+    let frequencies = frequency_override.unwrap_or_else(|| problem.frequencies_hz.clone());
+    if frequencies.is_empty() {
+        return Err(
+            "no frequencies: give .freq in the deck, frequencies_hz in the document, or --freq"
+                .to_string(),
+        );
+    }
+    if problem.ports.is_empty() {
+        return Err("no ports: give .external in the deck or ports in the document".to_string());
+    }
+    let system = assemble_system(problem, choice)?;
+    let warnings = system.warnings();
+    let result = system.sweep(&frequencies)?;
+    let io = |error: std::io::Error| format!("cannot write currents CSV: {error}");
+    writeln!(csv, "{CURRENTS_CSV_HEADER}").map_err(io)?;
+    let mut blocks = Vec::with_capacity(frequencies.len());
+    for &frequency in &frequencies {
+        let solution = system.unit_currents(frequency, problem.ports.len())?;
+        for f in &solution.filaments {
+            writeln!(
+                csv,
+                "{:e},{},{},{},{:e},{:e},{:e},{:e},{:e},{:e},{:e},{:e}",
+                frequency,
+                f.filament,
+                f.segment,
+                f.conductor,
+                f.location[0],
+                f.location[1],
+                f.location[2],
+                f.current.re,
+                f.current.im,
+                f.current.norm(),
+                f.current_density,
+                f.power_w
+            )
+            .map_err(io)?;
+        }
+        blocks.push(serde_json::json!({
+            "frequency_hz": frequency,
+            "power_balance": solution.power_balance,
+            "conductors": solution.conductors,
+            "segments": solution.segments,
+        }));
+    }
+    csv.flush().map_err(io)?;
+    let block = serde_json::json!({
+        "excitation": "1 A (peak phasor) into port 1, other ports open",
+        "power_convention": "time-average, peak phasors: P = 0.5*|I|^2*R",
+        "by_frequency": blocks,
+    });
+    Ok((result, warnings, block))
 }
 
 #[cfg(test)]

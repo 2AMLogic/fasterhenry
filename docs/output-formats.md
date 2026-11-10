@@ -66,6 +66,41 @@ exports `v1_2`, while a simple stem such as `spiral.inp` exports
 stamp is exact for AC analysis at `--spice-freq` by construction); a
 frequency-dependent rerun is a re-export.
 
+## `--currents out.csv` — filament currents
+
+Exposes the loop/filament currents the solve already determines (no new
+physics) for **1 A into port 1, every other port open**, at every frequency of
+the sweep. Library equivalents: `MeshSystem::currents` and
+`IterativeSystem::currents` (`fasterhenry::currents`), which take any
+port-current vector.
+
+**CSV**, streamed (one frequency's rows are in memory at a time), header then
+one row per filament per frequency:
+
+| column | unit | meaning |
+|---|---|---|
+| `frequency_hz` | Hz | sweep frequency |
+| `filament`, `segment`, `conductor` | – | indices; a conductor is a connected component of the segment graph |
+| `x_m`, `y_m`, `z_m` | m | filament centroid |
+| `current_re_a`, `current_im_a`, `current_abs_a` | A | complex phasor current, positive from the segment's `a` node to `b` |
+| `j_abs_a_per_m2` | A/m² | `\|I\|/(w·h)` of the filament |
+| `power_w` | W | `½·\|I\|²·R`, `R` = the filament's DC resistance |
+
+**Convention.** Currents are *peak* phasor amplitudes for the stated excitation;
+power is time-average power for peak phasors, `½\|I\|²R` (with RMS phasors it
+would be `\|I\|²R`).
+
+**JSON.** With the flag, the result gains a top-level `currents` object:
+`by_frequency[k]` holds `frequency_hz`, `power_balance`
+(`dissipated_w = Σ½\|I\|²R`, `input_w = ½Re(I_pᴴV_p)`, `relative_residual`),
+`segments` (summed current and power per segment) and `conductors` (peak `\|J\|`
+and its filament and location). The block is additive: without the flag the
+JSON, `Zc.mat` and SPICE outputs are unchanged and `schema_version` stays 1.
+
+**Power balance tolerance.** Dense path: `relative_residual ≲ 1e-9` on the
+validation fixtures. Iterative path: bounded by a small multiple of the GMRES
+relative-residual tolerance (default `1e-10`), not by machine epsilon.
+
 ## Validation of both formats
 
 `tests/roundtrip.rs` checks the MAT byte layout structurally; CI loads a
