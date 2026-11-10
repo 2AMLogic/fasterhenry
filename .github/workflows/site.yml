@@ -15,6 +15,10 @@ on:
       - "scripts/deploy-site.sh"
       - ".github/workflows/site.yml"
   workflow_dispatch:
+  schedule:
+    # Daily browser tests against the live site, so a broken domain, redirect
+    # or deployment is noticed without waiting for the next push.
+    - cron: "17 14 * * *"
 
 permissions:
   contents: read
@@ -50,11 +54,39 @@ jobs:
           test -s site/dist/benchmarks/index.html
           test -s site/dist/assets/benchmarks/scaling.svg
 
+  e2e:
+    name: Browser tests (local build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/e2e/package-lock.json
+      - name: Build site/dist
+        run: scripts/deploy-site.sh --no-deploy
+      - name: Install Playwright
+        working-directory: site/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run the browser tests against site/dist
+        working-directory: site/e2e
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-local
+          path: site/e2e/test-results
+          retention-days: 7
+
   deploy:
     name: Deploy to Cloudflare Pages
-    needs: build
+    needs: [build, e2e]
     # main only; a pull request never deploys.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -72,3 +104,37 @@ jobs:
             exit 1
           fi
           scripts/deploy-site.sh
+
+  e2e-live:
+    name: Browser tests (fasterhenry.org)
+    needs: deploy
+    # After every deploy from main, and daily on the schedule (where the
+    # deploy job is skipped).
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.deploy.result == 'success' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/e2e/package-lock.json
+      - name: Install Playwright
+        working-directory: site/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run the browser tests against the live site
+        working-directory: site/e2e
+        env:
+          BASE_URL: https://fasterhenry.org
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-live
+          path: site/e2e/test-results
+          retention-days: 7
