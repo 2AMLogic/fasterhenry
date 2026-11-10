@@ -6,6 +6,7 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-10
 
+- **PR #293**: chore(loom): resync installed Loom to v0.19.1283
 - **PR #296**: feat: expose per-filament currents, current density and power
 - **Issue #294** (closed): Output per-filament current density and dissipated power, with a power-balance check
 
