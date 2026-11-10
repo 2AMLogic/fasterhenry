@@ -377,3 +377,18 @@ ordinary workspace test prints `SKIPPED` and returns before any solve.
 FASTERHENRY_CROSS_SECTION_REFERENCE=target/cross_section_reference.json \
   cargo test --release -p fasterhenry --test width_graded_skin_validation -- --nocapture
 ```
+
+## Filament currents (issue #294)
+
+`fasterhenry/tests/currents.rs` checks the current output (`--currents`,
+`MeshSystem::currents`, `IterativeSystem::currents`) against:
+
+- **DC bar**: `|J| = I/A` uniform on both paths (tolerance `1e-6` relative), total
+  power `½I²R`.
+- **Skin effect**: the wide-slab profile `J(z) = I·k·cosh(kz)/(2w·sinh(kt/2))`
+  used for the impedance oracle in `skin_effect_validation.rs`, at `t = 4δ`
+  with a 40-filament thickness grid; pointwise error below 5 % of the surface
+  value.
+- **Power balance** `Σ½|I|²R` against the port-delivered `½Re(I_pᴴV_p)`:
+  `< 1e-9` dense, `< 1e-7` iterative on the ring fixture.
+- **Dense vs pFFT** currents agree to `1e-5` of the peak filament current.

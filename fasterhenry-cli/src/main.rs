@@ -11,7 +11,9 @@ use fasterhenry_cli::cli::{Invocation, RunArgs};
 use fasterhenry_cli::inp::{decade_sweep, ParseOptions};
 use fasterhenry_cli::outputs::{validate_destinations, Destination};
 use fasterhenry_cli::spice::{subckt_name_from_path, write_spice_subckt};
-use fasterhenry_cli::{read_inputs_reporting_with, run_reporting_with, solver_for};
+use fasterhenry_cli::{
+    read_inputs_reporting_with, run_reporting_with, run_with_currents, solver_for,
+};
 
 fn main() -> anyhow::Result<()> {
     let invocation = Invocation::parse();
@@ -25,6 +27,7 @@ fn main() -> anyhow::Result<()> {
         json,
         spice,
         spice_freq,
+        currents,
         solver,
         fasthenry_compat,
     } = invocation.into_args();
@@ -40,6 +43,7 @@ fn main() -> anyhow::Result<()> {
         ("--json", json.as_deref()),
         (zc_mat_role, zc_mat.as_deref()),
         ("--spice", spice.as_deref()),
+        ("--currents", currents.as_deref()),
     ]
     .into_iter()
     .filter_map(|(role, path)| path.map(|path| Destination { role, path }))
@@ -67,14 +71,36 @@ fn main() -> anyhow::Result<()> {
     {
         eprintln!("solver: iterative (matrix-free precorrected-FFT + GMRES)");
     }
-    let (result, warnings) = run_reporting_with(&problem, override_frequencies, choice)
-        .map_err(|m| anyhow::anyhow!("{m}"))?;
+    let (result, warnings, currents_block) = match &currents {
+        Some(path) => {
+            let file = std::fs::File::create(path)
+                .map_err(|e| anyhow::anyhow!("cannot write {}: {e}", path.display()))?;
+            let mut writer = std::io::BufWriter::new(file);
+            let (result, warnings, block) =
+                run_with_currents(&problem, override_frequencies, choice, &mut writer)
+                    .map_err(|m| anyhow::anyhow!("{m}"))?;
+            (result, warnings, Some(block))
+        }
+        None => {
+            let (result, warnings) = run_reporting_with(&problem, override_frequencies, choice)
+                .map_err(|m| anyhow::anyhow!("{m}"))?;
+            (result, warnings, None)
+        }
+    };
     // Truncation is a physical approximation; say so on stderr, so it
     // never hides inside the JSON on stdout.
     for warning in &warnings {
         eprintln!("warning: {warning}");
     }
-    let serialized = serde_json::to_string_pretty(&result)?;
+    let serialized = match currents_block {
+        // Additive: the result's own keys and `schema_version` are untouched.
+        Some(block) => {
+            let mut value = serde_json::to_value(&result)?;
+            value["currents"] = block;
+            serde_json::to_string_pretty(&value)?
+        }
+        None => serde_json::to_string_pretty(&result)?,
+    };
 
     match json {
         Some(path) => std::fs::write(&path, serialized)?,

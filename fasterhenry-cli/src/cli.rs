@@ -105,6 +105,13 @@ pub struct RunArgs {
     /// The frequency for `--spice`, in hertz; default: the last one.
     #[arg(long, value_name = "HZ")]
     pub spice_freq: Option<f64>,
+    /// Write the filament currents as CSV (one row per filament per
+    /// frequency, streamed) for 1 A into port 1 with the other ports open,
+    /// and add a `currents` block (power balance, per-segment sums,
+    /// per-conductor peak current density) to the JSON result. Columns,
+    /// units and the power convention are in `docs/output-formats.md`.
+    #[arg(long, value_name = "OUT_CSV")]
+    pub currents: Option<PathBuf>,
     /// Which solve path to use. `auto` keeps the dense path up to
     /// `fasterhenry::DENSE_PATH_MAX_FILAMENTS` filaments and switches to
     /// the matrix-free precorrected-FFT + GMRES path above it; `dense`

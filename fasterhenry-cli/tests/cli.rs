@@ -717,3 +717,76 @@ fn a_failing_final_mat_drain_is_a_nonzero_exit_naming_the_path() {
         "fails at the write, not at create: {message}"
     );
 }
+
+/// `--currents` streams one CSV row per filament per frequency, adds an
+/// additive `currents` block to the JSON, and leaves every existing key of
+/// the result (and `Zc.mat`) as it is without the flag.
+#[test]
+fn currents_flag_writes_csv_and_json_block_without_changing_other_outputs() {
+    let directory = scratch("currents-flag");
+    let deck = fixture("spiral.inp");
+    let deck = deck.to_str().unwrap();
+
+    let plain = fasterhenry(&directory, &["run", deck, "--zc-mat", "plain.mat"]);
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    let with = fasterhenry(
+        &directory,
+        &["run", deck, "--zc-mat", "with.mat", "--currents", "i.csv"],
+    );
+    assert!(with.status.success(), "{}", stderr(&with));
+    assert_eq!(
+        std::fs::read(directory.join("plain.mat")).unwrap(),
+        std::fs::read(directory.join("with.mat")).unwrap()
+    );
+
+    let mut plain_json: serde_json::Value = serde_json::from_slice(&plain.stdout).unwrap();
+    let mut with_json: serde_json::Value = serde_json::from_slice(&with.stdout).unwrap();
+    assert!(plain_json.get("currents").is_none());
+    let block = with_json
+        .as_object_mut()
+        .unwrap()
+        .remove("currents")
+        .unwrap();
+    // Timing is wall-clock; everything else is identical.
+    for json in [&mut plain_json, &mut with_json] {
+        json["provenance"]["timing"] = serde_json::Value::Null;
+    }
+    assert_eq!(plain_json, with_json);
+
+    let csv = std::fs::read_to_string(directory.join("i.csv")).unwrap();
+    let mut lines = csv.lines();
+    assert_eq!(lines.next().unwrap(), fasterhenry_cli::CURRENTS_CSV_HEADER);
+    let rows: Vec<&str> = lines.collect();
+    let filaments = plain_json["provenance"]["counts"]["filaments"]
+        .as_u64()
+        .unwrap() as usize;
+    let frequencies = plain_json["frequencies_hz"].as_array().unwrap().len();
+    assert_eq!(rows.len(), filaments * frequencies);
+    assert!(rows.iter().all(|r| r.split(',').count() == 12));
+
+    // The CSV's peak density agrees with the JSON block's, per frequency.
+    let by_frequency = block["by_frequency"].as_array().unwrap();
+    assert_eq!(by_frequency.len(), frequencies);
+    for (index, entry) in by_frequency.iter().enumerate() {
+        let peak_json = entry["conductors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["peak_current_density"].as_f64().unwrap())
+            .fold(0.0, f64::max);
+        let peak_csv = rows[index * filaments..(index + 1) * filaments]
+            .iter()
+            .map(|r| r.split(',').nth(10).unwrap().parse::<f64>().unwrap())
+            .fold(0.0, f64::max);
+        assert!(
+            (peak_json - peak_csv).abs() <= 1e-9 * peak_csv,
+            "{peak_json} {peak_csv}"
+        );
+        assert!(
+            entry["power_balance"]["relative_residual"]
+                .as_f64()
+                .unwrap()
+                < 1e-8
+        );
+    }
+}
