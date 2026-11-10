@@ -6,6 +6,8 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-10
 
+- **PR #301**: test(site): Playwright browser tests for fasterhenry.org, plus the two defects they found
+- **PR #300**: ci(site): fail the deploy when Cloudflare secrets are missing; allow manual runs
 - **PR #293**: chore(loom): resync installed Loom to v0.19.1283
 - **PR #296**: feat: expose per-filament currents, current density and power
 - **Issue #294** (closed): Output per-filament current density and dissipated power, with a power-balance check
