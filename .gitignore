@@ -137,3 +137,8 @@ Zc.mat
 
 # fasterhenry.org static site build output (site/build.py)
 site/dist/
+
+# fasterhenry.org browser tests (site/e2e)
+site/e2e/node_modules/
+site/e2e/test-results/
+site/e2e/playwright-report/

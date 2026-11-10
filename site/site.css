@@ -14,7 +14,7 @@ h1{font-size:2rem;line-height:1.2;margin:2rem 0 .75rem}
 h2{font-size:1.3rem;margin:2rem 0 .5rem}
 .lede{font-size:1.2rem;color:var(--fg)}
 pre,code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.95em;background:var(--code);border-radius:4px}
-code{padding:.1em .3em}pre{padding:.75rem 1rem;overflow-x:auto}pre code{padding:0;background:none}
+code{padding:.1em .3em;overflow-wrap:anywhere}pre{padding:.75rem 1rem;overflow-x:auto}pre code{padding:0;background:none;overflow-wrap:normal}
 figure{margin:1.5rem 0}figure img{width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
 figcaption{font-size:.95rem;color:var(--muted);margin-top:.5rem}
 .links{display:flex;gap:1.25rem;flex-wrap:wrap;padding:0;list-style:none}

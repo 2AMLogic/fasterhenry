@@ -261,7 +261,13 @@ def main():
         # body first so its own {{repo}} etc. are expanded by the second pass
         for _ in range(2):
             out = re.sub(r"\{\{(\w+)\}\}", lambda m: fill[m.group(1)], out)
-        target = DIST / slug / "index.html" if slug else DIST / "index.html"
+        # pages/404.html becomes /404.html, which Cloudflare Pages serves with
+        # status 404 for unknown paths. Without it Pages answers every unknown
+        # path with the landing page and status 200.
+        if slug == "404":
+            target = DIST / "404.html"
+        else:
+            target = DIST / slug / "index.html" if slug else DIST / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(out)
     shutil.copy(SITE / "site.css", DIST / "site.css")

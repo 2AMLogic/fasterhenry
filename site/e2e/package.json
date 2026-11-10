@@ -1,0 +1,12 @@
+{
+  "name": "fasterhenry-site-e2e",
+  "private": true,
+  "description": "Browser tests for fasterhenry.org (Playwright). See README.md.",
+  "scripts": {
+    "test": "playwright test",
+    "test:live": "BASE_URL=https://fasterhenry.org playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.57.0"
+  }
+}
