@@ -56,7 +56,8 @@ jobs:
 
   e2e:
     name: Browser tests (local build)
-    runs-on: ubuntu-latest
+    # pinned: Playwright 1.57 has no browser build for ubuntu-latest (26.04)
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +114,8 @@ jobs:
     if: >-
       always() && github.ref == 'refs/heads/main' &&
       (needs.deploy.result == 'success' || github.event_name == 'schedule')
-    runs-on: ubuntu-latest
+    # pinned: Playwright 1.57 has no browser build for ubuntu-latest (26.04)
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
