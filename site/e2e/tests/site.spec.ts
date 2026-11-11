@@ -201,6 +201,30 @@ test("follows the reader's dark colour scheme", async ({ page }) => {
   expect(await background()).not.toBe("rgb(255, 255, 255)");
 });
 
+test("every page has exactly one h1 and it is the first heading in main", async ({ page }) => {
+  for (const p of PAGES) {
+    await page.goto(p.path);
+    await expect(page.locator("h1")).toHaveCount(1);
+    const first = await page.locator("main").locator("h1, h2, h3, h4, h5, h6").first().evaluate((el) => el.tagName);
+    expect(first, `${p.path}: first heading in main`).toBe("H1");
+  }
+});
+
+test("the header stays compact on a phone", async ({ page }, info) => {
+  test.skip(info.project.name !== "mobile", "phone project only");
+  for (const p of PAGES) {
+    await page.goto(p.path);
+    const h = await page.locator("header").evaluate((el) => el.getBoundingClientRect().height);
+    expect(h, `${p.path}: header height`).toBeLessThanOrEqual(110);
+  }
+});
+
+test("the footer sits at the bottom of the viewport on a short page", async ({ page }) => {
+  await page.goto("/about/");
+  const gap = await page.evaluate(() => innerHeight - document.querySelector("footer")!.getBoundingClientRect().bottom);
+  expect(Math.abs(gap) < 60 || gap < 0).toBe(true);
+});
+
 test("an unknown path answers 404 with the not-found page", async ({ page }) => {
   const response = await page.goto("/no-such-page/");
   expect(response?.status()).toBe(404);

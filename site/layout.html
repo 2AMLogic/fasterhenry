@@ -5,12 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{title}}</title>
 <meta name="description" content="{{description}}">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
 <link rel="stylesheet" href="/site.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <header>
-<a class="brand" href="/">fasterhenry</a>
+<a class="brand" href="/"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" focusable="false"><path d="M3 3H21V21H6V8H16V16H11"/></svg>fasterhenry</a>
+<a class="ghlink" href="{{repo}}">GitHub</a>
 <nav aria-label="Primary"><ul>
 {{nav}}
 </ul></nav>
@@ -19,7 +21,7 @@
 {{body}}
 </main>
 <footer>
-<p>fasterhenry is MIT-licensed. <a href="{{repo}}">Source on GitHub</a> · <a href="https://docs.rs/fasterhenry">API docs</a></p>
+<p><span>fasterhenry {{version}}</span><span>MIT license</span><a href="{{repo}}">GitHub</a><a href="https://docs.rs/fasterhenry">docs.rs</a><a href="https://crates.io/crates/fasterhenry">crates.io</a></p>
 </footer>
 </body>
 </html>

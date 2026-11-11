@@ -17,10 +17,11 @@ BLOB = f"{REPO}/blob/main"
 
 
 def inline(md):
-    """Escape, then the three inline forms docs/benchmarks.md uses."""
+    """Escape, then the four inline forms docs/benchmarks.md uses."""
     s = escape(md, quote=False)
     s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
     s = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"(?<![\w*])\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*(?![\w*])", r"<em>\1</em>", s)
     return re.sub(r"(?<![\w*])_([^_]+)_(?![\w*])", r"<em>\1</em>", s)
 
 
