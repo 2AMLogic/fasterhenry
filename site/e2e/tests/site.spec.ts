@@ -333,14 +333,14 @@ test("charts follow the dark scheme: no white box, and the series stroke changes
       const c = getComputedStyle(el).backgroundColor;
       if (c !== "rgba(0, 0, 0, 0)" && c !== "transparent") { bg = c; break; }
     }
-    return { stroke: getComputedStyle(series).stroke, bg, ownRects: svg.querySelectorAll(":scope > rect").length };
+    return { stroke: getComputedStyle(series).stroke, bg, ownRects: Array.from(svg.querySelectorAll(":scope > rect")).filter((r) => getComputedStyle(r).fill !== "none").length };
   });
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
   const light = await probe();
   await page.emulateMedia({ colorScheme: "dark" });
   const dark = await probe();
-  expect(dark.ownRects, "a full-size background rect would paint a white box").toBe(0);
+  expect(dark.ownRects, "a filled background rect would paint a white box (the unfilled .fr panel frames are fine)").toBe(0);
   expect(dark.bg).not.toBe("rgb(255, 255, 255)");
   expect(dark.stroke).not.toBe(light.stroke);
   // series stroke against the chart background: at least 3:1 in both schemes
