@@ -62,5 +62,51 @@ class Build(unittest.TestCase):
         self.assertNotRegex(home, r"(Validation|FastHenry users) \(soon\)")
 
 
+class Benchmarks(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import render
+        cls.render = render
+        cls.doc = (build.SITE.parent / "docs/benchmarks.md").read_text()
+        cls.html, cls.svg = render.benchmarks_body(cls.doc)
+
+    def test_section_order(self):
+        h = self.html
+        order = ["Takeaway", "Scaling: dense vs pFFT", "Speed against FastHenry",
+                 "Accuracy against FastHenry", "How this was measured"]
+        pos = [h.index(f"<h2>{t}") for t in order]
+        self.assertEqual(pos, sorted(pos))
+        self.assertLess(h.index("<figure>"), h.index("<table>"))
+        # the per-thread caveat sits right under the speed table
+        self.assertRegex(h, r"</table></div>\n<p><strong>Per thread")
+
+    def test_accuracy_table_is_rendered_from_the_doc(self):
+        self.assertIn("relative difference", self.html)
+        self.assertIn("7.3e-4", self.html)
+
+    def test_empty_criterion_block_is_omitted(self):
+        self.assertNotIn("Not yet regenerated", self.html)
+        self.assertNotIn("Criterion bench suite", self.html)
+
+    def test_criterion_section_appears_with_a_table(self):
+        doc = self.doc.replace("_Not yet regenerated", "| n | t |\n|---|---|\n| 48 | 1 ms |\n\n_x")
+        html, _ = self.render.benchmarks_body(doc)
+        self.assertIn("<h2>Criterion bench suite</h2>", html)
+        self.assertIn("1 ms", html)
+
+    def test_chart_ticks_are_compact_and_inside_the_canvas(self):
+        for t in ("1k", "10k", "100k"):
+            self.assertIn(f">{t}</text>", self.svg)
+        self.assertNotIn("100,000", self.svg)
+        self.assertEqual(self.render.compact(100000), "100k")
+        self.assertEqual(self.render.compact(10), "10")
+        W = int(re.search(r'viewBox="0 0 (\d+) (\d+)"', self.svg).group(1))
+        H = int(re.search(r'viewBox="0 0 (\d+) (\d+)"', self.svg).group(2))
+        for x in re.findall(r'<text x="([\d.]+)" y="[\d.]+" text-anchor="middle">\d+k?</text>', self.svg):
+            self.assertLess(float(x) + 20, W)
+        axis = re.search(r'<text x="[\d.]+" y="([\d.]+)" text-anchor="middle">filaments', self.svg)
+        self.assertLess(float(axis.group(1)), H)
+
+
 if __name__ == "__main__":
     unittest.main()
