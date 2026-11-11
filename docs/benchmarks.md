@@ -43,7 +43,7 @@ Reading it honestly:
   20 k filaments single-threaded). Our dense wall-clock advantage is
   parallelism + SIMD + a blocked LU; it is not an algorithmic win.
   Precorrected-FFT acceleration (#24) is what converts this into one —
-  measured in "Scaling: dense vs pFFT + GMRES" below.
+  measured in "Scaling: dense vs pFFT + GMRES".
 
 ## Accuracy (the replacement claim)
 
