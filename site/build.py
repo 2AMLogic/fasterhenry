@@ -29,6 +29,7 @@ from html import escape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import compat
 import render
 import tablehtml
 
@@ -154,7 +155,7 @@ def _starts_block(line):
     return bool(_FENCE.match(line) or line.startswith("#") or (m and m.group(2) in ("-", "*", "+", "1.")))
 
 
-def _blocks(lines, src, seen):
+def _blocks(lines, src, seen, hook=None):
     out, i, n = [], 0, len(lines)
     while i < n:
         line = lines[i]
@@ -188,7 +189,8 @@ def _blocks(lines, src, seen):
                 rows.append(_cells(lines[i]))
                 i += 1
 
-            out.append(tablehtml.render_table(head, rows, lambda c: inline(c, src), aligns))
+            special = hook(head, rows) if hook else None
+            out.append(special or tablehtml.render_table(head, rows, lambda c: inline(c, src), aligns))
             continue
         im = _ITEM.match(line)
         if im:
@@ -218,7 +220,7 @@ def _blocks(lines, src, seen):
                     else:  # lazy paragraph continuation
                         item.append(cur)
                     i += 1
-                body = _blocks(item, src, seen)
+                body = _blocks(item, src, seen, hook)
                 if len(body) >= 1 and body[0].startswith("<p>") and len(body) == 1:
                     body = [body[0][3:-4]]
                 items.append("<li>" + "\n".join(body) + "</li>")
@@ -237,9 +239,118 @@ def _blocks(lines, src, seen):
     return out
 
 
-def render_markdown(text, src):
-    """Render markdown `text` read from repo path `src` to an HTML fragment."""
-    return "\n".join(_blocks(text.expandtabs(4).split("\n"), src, set())) + "\n"
+def render_markdown(text, src, seen=None, hook=None):
+    """Render markdown `text` read from repo path `src` to an HTML fragment.
+
+    `seen` is the set of heading ids already used on the page; `hook(head, rows)`
+    may return replacement HTML for a table (None keeps the normal table)."""
+    return "\n".join(_blocks(text.expandtabs(4).split("\n"), src, set() if seen is None else seen, hook)) + "\n"
+
+
+# ---- the FastHenry-users page ------------------------------------------------
+
+def _chunks(text):
+    """Split a document at its `## ` headings and its `### Decision:` headings (outside code fences).
+    -> (preface lines without the H1, [(level, title, body lines)])."""
+    pre, chunks, fenced = [], [], False
+    for line in text.expandtabs(4).split("\n"):
+        if _FENCE.match(line):
+            fenced = not fenced
+        m = None if fenced else re.match(r"^(#{2,3}) (.*?)\s*$", line)
+        if m and (len(m.group(1)) == 2 or m.group(2).startswith("Decision:")):
+            chunks.append((len(m.group(1)), m.group(2), []))
+        elif chunks:
+            chunks[-1][2].append(line)
+        elif not line.startswith("# "):
+            pre.append(line)
+    return pre, chunks
+
+
+def _section(path, heading):
+    """Body lines of the `## heading` section of a markdown file, up to the next `## `."""
+    pre, chunks = _chunks((ROOT / path).read_text())
+    for _, title, body in chunks:
+        if title.startswith(heading):
+            return body
+    sys.exit(f"{path}: no '## {heading}' section")
+
+
+def fasthenry_users_body():
+    """Three tiers, all rendered from committed docs: the migration quick answer
+    (CLI README + docs/output-formats.md), a per-family tally counted from the
+    audit's Status columns, then the audit itself as entry lists."""
+    cli, outs, compat_src = "fasterhenry-cli/README.md", "docs/output-formats.md", "docs/fasthenry-compat.md"
+    seen = set()
+
+    # Tier 1: migration quick answer
+    migrating = _section(cli, "Migrating from FastHenry")
+    cut = next((i for i, l in enumerate(migrating) if l.startswith("### ")), len(migrating))
+    # the quick answer is the opening paragraph, code block and bullet list; the rest folds away
+    items = [i for i, l in enumerate(migrating[:cut]) if re.match(r"- ", l)]
+    split = next((i for i in range(items[-1] + 1, cut) if not migrating[i].strip()), cut) if items else cut
+    flag = re.search(r"^ {6}(--fasthenry-compat\n(?: {10}.*\n)+)", (ROOT / cli).read_text().expandtabs(4), re.M)
+    if not flag:
+        sys.exit(f"{cli}: no --fasthenry-compat option in the --help block")
+    flag_text = "\n".join(l[10:] if l.startswith(" " * 10) else l for l in flag.group(1).splitlines())
+    o_pre, o_chunks = _chunks((ROOT / outs).read_text())
+    t1 = ['<section id="quick-answer">', '<h2 id="quick-answer-title">Migration quick answer</h2>',
+          render_markdown("\n".join(migrating[:split]), cli, seen)
+          + (f'<details class="doc" id="migration-more"><summary>More: what is not claimed, solver choice, version output</summary>\n'
+             + render_markdown("\n".join(migrating[split:cut]), cli, seen) + "</details>" if split < cut else ""),
+          '<h3 id="compat-flag">What <code>--fasthenry-compat</code> changes</h3>',
+          f'<p>From <code>fasterhenry --help</code>, in <a href="{{{{repo}}}}/blob/main/{cli}">{cli}</a>:</p>',
+          f"<pre><code>{escape(flag_text)}\n</code></pre>",
+          '<h3 id="output-mapping">How outputs map</h3>',
+          render_markdown("\n".join(o_pre), outs, seen)]
+    for _, title, body in o_chunks:
+        t1.append(f'<details class="doc" id="{compat.slug(title, seen)}"><summary>{inline(title, outs)}</summary>\n'
+                  + render_markdown("\n".join(body), outs, seen) + "</details>")
+    t1.append("</section>")
+
+    # Tier 3: the audit (rendered first so tier 2 can count it)
+    pre, chunks = _chunks((ROOT / compat_src).read_text())
+    families, t3 = [], ['<section id="full-reference">', '<h2 id="full-reference-title">Full reference</h2>',
+                        render_markdown("\n".join(pre), compat_src, seen)]
+    cur = None  # (title, id, kinds) of the family being rendered
+
+    def close():
+        nonlocal cur
+        if cur:
+            t3.append("</section>")
+            if cur[2]:
+                families.append(cur)
+        cur = None
+
+    for level, title, body in chunks:
+        if level == 3:  # a "Decision:" essay, kept inside the family it belongs to
+            t3.append(f'<details class="doc decision" id="{compat.slug(title, seen)}"><summary>{inline(title, compat_src)}</summary>\n'
+                      + render_markdown("\n".join(body), compat_src, seen) + "</details>")
+        elif title.startswith("Follow-ups filed"):
+            close()
+            t3.append(f'<details class="doc" id="{compat.slug(title, seen)}"><summary>{inline(title, compat_src)}</summary>\n'
+                      + render_markdown("\n".join(body), compat_src, seen) + "</details>")
+        else:
+            close()
+            kinds = []
+            fam = [None, kinds]
+
+            def hook(head, rows, title=title, kinds=kinds):
+                if not compat.is_audit_table(head):
+                    return None
+                html, ks = compat.entries_html(head, rows, lambda c: inline(c, compat_src), re.sub(r"[`]", "", title), seen)
+                kinds.extend(ks)
+                return html
+
+            html = render_markdown("\n".join([f"### {title}"] + body), compat_src, seen, hook)
+            fid = re.match(r'<h3 id="([^"]+)"', html).group(1)
+            t3.append(f'<section class="family" id="{fid}-family">\n' + html)
+            cur = (inline(title, compat_src), fid, kinds)
+    close()
+    t3.append("</section>")
+
+    glance = ['<section id="at-a-glance">', '<h2 id="at-a-glance-title">Support at a glance</h2>',
+              compat.glance_html(families), "</section>"]
+    return compat.link_issues("\n".join(t1 + glance + t3))
 
 
 def crate_version():
@@ -255,6 +366,7 @@ def main():
     # from docs/benchmarks.md, scaling plot drawn from its own table.
     subs["gallery_body"] = render.gallery_body(json.loads((SITE / "assets/gallery/gallery.json").read_text()))
     subs["benchmarks_body"], scaling_svg = render.benchmarks_body((SITE.parent / "docs/benchmarks.md").read_text())
+    subs["fasthenry_users_body"] = fasthenry_users_body()
     subs["validation_body"] = render.validation_body((ROOT / "docs/validation.md").read_text(),
                                                      (ROOT / "docs/benchmarks.md").read_text(), render_markdown)
     pages = {("" if p.stem == "index" else p.stem): p for p in sorted((SITE / "pages").glob("*.html"))}
@@ -267,8 +379,8 @@ def main():
         out = layout
         fill = {**subs, "title": escape(meta["title"]), "description": escape(meta["description"], quote=True),
                 "nav": nav_html(slug, set(pages)), "body": body}
-        # body first so its own {{repo}} etc. are expanded by the second pass
-        for _ in range(2):
+        # body first; a body placeholder (e.g. the page body) takes a pass, its own {{repo}} the next
+        for _ in range(3):
             out = re.sub(r"\{\{(\w+)\}\}", lambda m: fill[m.group(1)], out)
         # pages/404.html becomes /404.html, which Cloudflare Pages serves with
         # status 404 for unknown paths. Without it Pages answers every unknown
