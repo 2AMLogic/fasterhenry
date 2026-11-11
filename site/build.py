@@ -255,6 +255,8 @@ def main():
     # from docs/benchmarks.md, scaling plot drawn from its own table.
     subs["gallery_body"] = render.gallery_body(json.loads((SITE / "assets/gallery/gallery.json").read_text()))
     subs["benchmarks_body"], scaling_svg = render.benchmarks_body((SITE.parent / "docs/benchmarks.md").read_text())
+    subs["validation_body"] = render.validation_body((ROOT / "docs/validation.md").read_text(),
+                                                     (ROOT / "docs/benchmarks.md").read_text(), render_markdown)
     pages = {("" if p.stem == "index" else p.stem): p for p in sorted((SITE / "pages").glob("*.html"))}
     layout = (SITE / "layout.html").read_text()
     if DIST.exists():
