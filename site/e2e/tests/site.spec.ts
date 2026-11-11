@@ -5,7 +5,7 @@ const PAGES = [
   { path: "/gallery/", title: "Gallery: fasterhenry", h1: "Gallery" },
   { path: "/benchmarks/", title: "Benchmarks: fasterhenry", h1: "Benchmarks" },
   { path: "/validation/", title: "Validation: fasterhenry", h1: /.+/ },
-  { path: "/fasthenry-users/", title: "FastHenry users: fasterhenry", h1: /.+/ },
+  { path: "/fasthenry-users/", title: "FastHenry users: fasterhenry", h1: "FastHenry users" },
   { path: "/about/", title: "About: fasterhenry", h1: "About" },
 ];
 const NAV = ["Gallery", "Benchmarks", "Validation", "FastHenry users", "About"];
@@ -236,7 +236,7 @@ test("the benchmarks page leads with the chart, shows accuracy, and has no place
 });
 
 test("the doc-derived pages render their tables", async ({ page }) => {
-  for (const path of ["/validation/", "/fasthenry-users/"]) {
+  for (const path of ["/validation/"]) {
     await page.goto(path);
     expect(await page.locator("table").count(), path).toBeGreaterThan(0);
     await expect(page.locator("table").first()).toBeVisible();
@@ -300,6 +300,58 @@ test("no table cell breaks a word or number mid-token, and tables scroll inside 
     expect(result.overflow, `${path} scrolls sideways`).toBeLessThanOrEqual(0);
     for (const w of result.wraps) expect(w, path).toEqual({ tabindex: "0", role: "region", name: expect.stringMatching(/^Table: \S/) });
   }
+});
+
+test.describe("/fasthenry-users/ structure", () => {
+  test("has the three tiers in order, with the H1 matching the nav label", async ({ page }) => {
+    await page.goto("/fasthenry-users/");
+    const ids = await page.locator("main > section").evaluateAll((els) => els.map((e) => e.id));
+    expect(ids).toEqual(["quick-answer", "at-a-glance", "full-reference"]);
+    await expect(page.locator("h1")).toHaveText(await page.locator('nav [aria-current="page"]').innerText());
+    await expect(page.locator("#quick-answer pre").first()).toContainText("fasterhenry deck.inp");
+  });
+
+  test("renders audit rows as linkable entry lists with a text badge of each status kind", async ({ page }) => {
+    await page.goto("/fasthenry-users/");
+    expect(await page.locator("main table th", { hasText: /^(Status|Notes)$/ }).count(), "audit tables left").toBe(0);
+    const entries = page.locator("#full-reference .entry");
+    expect(await entries.count()).toBeGreaterThan(50);
+    expect(await page.locator("#full-reference .entry:not([id])").count()).toBe(0);
+    for (const kind of ["supported", "differs", "not-supported"]) {
+      const badge = page.locator(`#full-reference .entry .badge.s-${kind}`).first();
+      await expect(badge, kind).toBeVisible();
+      await expect(badge, `${kind} badge carries its word`).toHaveText(/Supported|Not supported/);
+    }
+    // the glance tally is counted from the same rows
+    const total = Number((await page.locator(".glance-total").innerText()).match(/^(\d+) audited/)![1]);
+    expect(total).toBe(await entries.count());
+    const first = await entries.first().getAttribute("id");
+    await page.goto(`/fasthenry-users/#${first}`);
+    await expect(page.locator(`#${first}`)).toBeInViewport();
+  });
+
+  test("shows no bare issue numbers and collapses the decision essays", async ({ page }) => {
+    await page.goto("/fasthenry-users/");
+    const bare = await page.locator("main").evaluate((m) => {
+      const out: string[] = [];
+      const w = document.createTreeWalker(m, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        if (/(^|[^\w&/#-])#\d+/.test(n.textContent ?? "") && !n.parentElement?.closest("a, pre")) out.push(n.textContent!.trim().slice(0, 60));
+      }
+      return out;
+    });
+    expect(bare).toEqual([]);
+    const open = await page.locator("details.doc[open], details.more[open]").count();
+    expect(open, "disclosures start closed").toBe(0);
+  });
+
+  test("stays under 12,000px tall at 1440px wide with every disclosure closed", async ({ page }, info) => {
+    test.skip(info.project.name !== "desktop", "desktop project only");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/fasthenry-users/");
+    const h = await page.evaluate(() => document.documentElement.scrollHeight);
+    expect(h).toBeLessThan(12000);
+  });
 });
 
 test("follows the reader's dark colour scheme", async ({ page }) => {

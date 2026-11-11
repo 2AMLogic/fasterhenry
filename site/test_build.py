@@ -3,7 +3,7 @@ import re, subprocess, sys, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build, tablehtml
+import build, compat, tablehtml
 
 SRC = "docs/validation.md"
 
@@ -81,7 +81,7 @@ class Build(unittest.TestCase):
         subprocess.run([sys.executable, str(build.SITE / "build.py")], check=True, capture_output=True)
         for slug in ("validation", "fasthenry-users"):
             html = (build.DIST / slug / "index.html").read_text()
-            self.assertIn("<table>", html)
+            self.assertIn("<table>" if slug == "validation" else "<dl", html)
             self.assertNotRegex(html, r'href="(?!https?://)[^"]*\.md')
             self.assertNotIn("{{", html)
         home = (build.DIST / "index.html").read_text()
@@ -89,7 +89,7 @@ class Build(unittest.TestCase):
 
 
     def test_doc_pages_lead_with_the_doc_h1_then_a_provenance_line(self):
-        for slug in ("validation", "fasthenry-users"):
+        for slug in ("validation",):
             html = (build.DIST / slug / "index.html").read_text()
             main = html[html.index("<main"):]
             self.assertEqual(main.count("<h1"), 1)
@@ -163,13 +163,79 @@ class BuiltPages(unittest.TestCase):
             html = self.page(slug)
             self.assertEqual(html.count('class="source"'), 1, slug)
             self.assertIn(f"blob/main/{src}", html.split('class="source"')[1])
-            self.assertNotIn("at build time", html)
+            self.assertNotIn("rendered at build time", html)
 
     def test_404_lists_every_nav_page(self):
         html = (build.DIST / "404.html").read_text()
         for _, slug in build.NAV:
             self.assertIn(f'href="/{slug}/"', html)
         self.assertNotIn('rel="next"', html)
+
+
+class Compat(unittest.TestCase):
+    TABLE = ["Field", "Status", "Notes"]
+
+    def test_status_words_stay_in_the_badge_and_qualifiers_beside_it(self):
+        c = compat.classify_status
+        self.assertEqual(c("Supported"), ("Supported", "supported", ""))
+        self.assertEqual(c("Supported, differs (opt-in)"), ("Supported", "differs", "differs (opt-in)"))
+        self.assertEqual(c("Supported, extended"), ("Supported", "extended", "extended"))
+        self.assertEqual(c("Supported (compat only)"), ("Supported", "compat", "compat only"))
+        self.assertEqual(c("Not supported, permanent"), ("Not supported", "not-supported", "permanent"))
+        self.assertEqual(c("Error, warns under `--fasthenry-compat`")[:2], ("Error", "error"))
+
+    def test_unknown_status_fails_the_build(self):
+        with self.assertRaises(SystemExit):
+            compat.classify_status("Mostly works")
+
+    def test_tally_is_counted_from_the_status_column(self):
+        rows = [["a", "Supported", "n"], ["b", "Supported", "n"], ["c", "Supported, differs", "n"], ["d", "Not supported", "n"]]
+        html, kinds = compat.entries_html(self.TABLE, rows, build.escape, "Fam", set())
+        self.assertEqual(compat.tally(kinds), {"supported": 2, "differs": 1, "not-supported": 1})
+        self.assertIn("<b>2</b> supported", compat.tally_html(compat.tally(kinds)))
+        self.assertIn("<b>1</b> not supported", compat.tally_html(compat.tally(kinds)))
+        self.assertNotIn("<table", html)
+        self.assertEqual(html.count('<div class="entry" id="'), 4)
+
+    def test_entry_ids_are_unique_and_a_long_note_folds_after_a_sentence(self):
+        note = "First sentence here is long enough to be the lead of this note. " + "More detail follows in this sentence. " * 8
+        html, _ = compat.entries_html(self.TABLE, [["`x`", "Supported", note], ["`x`", "Supported", "short"]], build.escape, "Fam", set())
+        ids = re.findall(r'<div class="entry" id="([^"]+)"', html)
+        self.assertEqual(len(set(ids)), 2)
+        self.assertIn('<details class="more">', html)
+        self.assertEqual(html.count('<details class="more">'), 1)
+
+    def test_split_note_never_cuts_a_code_span(self):
+        lead, rest = compat.split_note("Start of a note `a. b` and more text here. " + "tail words " * 40)
+        self.assertEqual(lead.count("`") % 2, 0)
+
+    def test_issue_refs_become_links_but_not_inside_links_or_pre(self):
+        out = compat.link_issues('<p>see #72 and <a href="x">#5</a></p><pre><code>#9</code></pre>')
+        self.assertIn('<a href="{{repo}}/issues/72">#72</a>', out)
+        self.assertIn('<a href="x">#5</a>', out)
+        self.assertIn("<pre><code>#9</code></pre>", out)
+
+    def test_page_has_three_tiers_in_order_no_tables_for_the_audit_and_no_bare_issue_numbers(self):
+        html = (build.DIST / "fasthenry-users" / "index.html").read_text()
+        main = html[html.index("<main"):]
+        order = [main.index(f'id="{i}"') for i in ("quick-answer", "at-a-glance", "full-reference")]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(main.count("<h1"), 1)
+        self.assertIn("<h1>FastHenry users</h1>", main)
+        for kind in ("supported", "differs", "not-supported"):
+            self.assertIn(f'class="badge s-{kind}"', main)
+        # no audit table is left as a <table>: the remaining tables are output-formats.md's
+        self.assertNotRegex(main, r"<th[^>]*>Notes</th>")
+        text = re.sub(r"<pre\b.*?</pre>|<a\b.*?</a>|<[^>]*>", "", main, flags=re.S)
+        self.assertEqual(re.findall(r".{0,20}(?<![\w&/#-])#\d+", text), [])
+        # every Decision essay and the follow-ups list sit inside a collapsed <details>
+        self.assertEqual(main.count('<details class="doc decision"'), 7)
+        self.assertRegex(main, r'<details class="doc" id="follow-ups-filed"')
+
+    def test_glance_tally_matches_the_entries_on_the_page(self):
+        html = (build.DIST / "fasthenry-users" / "index.html").read_text()
+        total = int(re.search(r'class="glance-total">(\d+) audited entries', html).group(1))
+        self.assertEqual(total, html.count('<div class="entry" id="'))
 
 
 class Benchmarks(unittest.TestCase):
