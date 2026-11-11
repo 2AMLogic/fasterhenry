@@ -6,6 +6,10 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-11
 
+- **PR #327**: test: update benchmark page fixture for Accuracy and Per-thread sections
+- **PR #322**: feat(site): rebuild FastHenry users page as quick answer, tally and entry lists
+- **Issue #325** (closed): tools/test_gallery_figures.py: BenchmarkPageTests fails on main with KeyError 'Accuracy'
+- **Issue #306** (closed): site: rebuild the FastHenry users page as migration answer, support summary and reference
 - **PR #324**: feat(site): gallery card grid with geometry sketches and computed results
 - **PR #320**: feat(site): validation page opens with a build-time summary table and section allowlist
 - **Issue #312** (closed): site: gallery as a curated card grid with human titles and geometry sketches
