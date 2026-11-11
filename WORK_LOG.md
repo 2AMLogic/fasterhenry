@@ -6,6 +6,10 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-11
 
+- **PR #324**: feat(site): gallery card grid with geometry sketches and computed results
+- **PR #320**: feat(site): validation page opens with a build-time summary table and section allowlist
+- **Issue #312** (closed): site: gallery as a curated card grid with human titles and geometry sketches
+- **Issue #308** (closed): site: Validation page leads with a 'what was checked' summary, not the CI runbook
 - **PR #319**: feat(site): datasheet visual system, new header and footer, one H1 per page
 - **PR #316**: docs: drop direction word from Speed caveat's scaling reference
 - **PR #314**: feat(site): size tables to content and add a two-width layout
