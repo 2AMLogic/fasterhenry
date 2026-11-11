@@ -6,6 +6,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-11
 
+- **PR #328**: feat(site): shared inline chart module that follows the page theme
+- **Issue #307** (closed): site: theme-aware charts from one shared chart module
+- **PR #329**: chore(loom): resync installed Loom to v0.19.1287
+- **PR #323**: feat(site): contents list, Next links, source footer and full 404 page list
+- **Issue #310** (closed): site: on-page contents for long pages and next-page links
 - **PR #327**: test: update benchmark page fixture for Accuracy and Per-thread sections
 - **PR #322**: feat(site): rebuild FastHenry users page as quick answer, tally and entry lists
 - **Issue #325** (closed): tools/test_gallery_figures.py: BenchmarkPageTests fails on main with KeyError 'Accuracy'
