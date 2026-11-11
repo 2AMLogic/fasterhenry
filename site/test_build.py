@@ -104,6 +104,74 @@ class Build(unittest.TestCase):
         self.assertIn('class="ghlink"', html)
 
 
+def headings(n):
+    return "<h1 id=\"t\">T</h1>\n" + "".join(f"<h2>Same</h2>\n" for _ in range(n))
+
+
+class Toc(unittest.TestCase):
+    def test_toc_at_eight_headings_not_at_seven(self):
+        body, has = build.add_toc(headings(8))
+        self.assertTrue(has)
+        self.assertEqual(body.count('aria-label="On this page"'), 1)
+        self.assertLess(body.index("</h1>"), body.index("<nav"))
+        self.assertFalse(build.add_toc(headings(7))[1])
+        self.assertNotIn("<nav", build.add_toc(headings(7))[0])
+
+    def test_duplicate_heading_text_gets_distinct_linked_ids(self):
+        body, _ = build.add_toc(headings(8))
+        ids = re.findall(r'<h2 id="([^"]+)">', body)
+        self.assertEqual(len(set(ids)), 8)
+        for i in ids:
+            self.assertIn(f'<a href="#{i}">Same</a>', body)
+
+    def test_existing_ids_are_kept_and_h3_is_listed(self):
+        body, _ = build.add_toc('<h1>T</h1><h2 id="a">A</h2>' + '<h3 id="b">B <code>x</code></h3>' + "<h2>C</h2>" * 6)
+        self.assertIn('<li class="l3"><a href="#b">B x</a></li>', body)
+
+    def test_next_chain_from_home_visits_every_page_once(self):
+        built = {"", "404"} | {slug for _, slug in build.NAV}
+        seen, cur = [""], ""
+        while True:
+            m = re.search(r'href="([^"]+)" rel="next"', build.next_html(cur, built))
+            if not m:
+                break
+            cur = m.group(1).strip("/")
+            seen.append(cur)
+        self.assertEqual(seen, [""] + [slug for _, slug in build.NAV])
+
+    def test_next_skips_unbuilt_pages(self):
+        self.assertIn('href="/about/"', build.next_html("", {"", "about"}))
+
+
+class BuiltPages(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        subprocess.run([sys.executable, str(build.SITE / "build.py")], check=True, capture_output=True)
+
+    def page(self, slug):
+        return (build.DIST / slug / "index.html").read_text()
+
+    def test_long_pages_have_a_toc_and_short_ones_do_not(self):
+        for slug in ("validation", "fasthenry-users"):
+            self.assertEqual(self.page(slug).count('aria-label="On this page"'), 1, slug)
+        for slug in ("about", "gallery"):
+            self.assertNotIn('aria-label="On this page"', self.page(slug), slug)
+
+    def test_source_line_replaces_provenance_in_the_lede(self):
+        for slug, src in (("validation", "docs/validation.md"), ("fasthenry-users", "docs/fasthenry-compat.md"),
+                          ("benchmarks", "docs/benchmarks.md")):
+            html = self.page(slug)
+            self.assertEqual(html.count('class="source"'), 1, slug)
+            self.assertIn(f"blob/main/{src}", html.split('class="source"')[1])
+            self.assertNotIn("rendered at build time", html)
+
+    def test_404_lists_every_nav_page(self):
+        html = (build.DIST / "404.html").read_text()
+        for _, slug in build.NAV:
+            self.assertIn(f'href="/{slug}/"', html)
+        self.assertNotIn('rel="next"', html)
+
+
 class Compat(unittest.TestCase):
     TABLE = ["Field", "Status", "Notes"]
 
