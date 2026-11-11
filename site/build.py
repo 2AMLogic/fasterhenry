@@ -12,6 +12,13 @@ NAV is the whole navigation. Pages that sibling issues will add are listed
 with ready=False: they render as plain text ("soon") until their fragment
 exists, then turn into links automatically.
 
+A fragment whose body comes from a placeholder (benchmarks) names its document
+with `<!-- origin: docs/x.md -->`; with `source` this yields the page's one
+"Source: docs/x.md" footer line. Every page also ends with a "Next" link that
+follows NAV (see page_sequence), and any page with TOC_MIN or more h2/h3
+headings gets an "On this page" contents list (add_toc) built from the final
+HTML, so placeholder-supplied bodies are covered too.
+
 A fragment may also carry `<!-- source: docs/x.md -->`: that markdown file is
 rendered (render_markdown, a small stdlib renderer for what the docs use:
 headings, paragraphs, fenced code, tables, lists, inline code, links,
@@ -25,7 +32,7 @@ the About quote was checked against marketing commit d3061f8, blob 7da7ca3e).
 Do not copy or paraphrase that file into this repository.
 """
 import json, posixpath, re, shutil, sys
-from html import escape
+from html import escape, unescape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -58,10 +65,72 @@ def nav_html(current, built):
     return "\n".join(items)
 
 
+TOC_MIN = 8  # h2/h3 headings at which a page gets an "On this page" list
+_HEADING = re.compile(r"<h([23])((?:\s[^>]*)?)>(.*?)</h\1>", re.S)
+
+
+def page_sequence(built):
+    """The one path through the site: home, then NAV order, skipping unbuilt pages."""
+    return [("Home", "")] + [(label, slug) for label, slug in NAV if slug in built]
+
+
+def next_html(current, built):
+    seq = page_sequence(built)
+    slugs = [slug for _, slug in seq]
+    if current not in slugs or slugs.index(current) == len(seq) - 1:
+        return ""
+    label, slug = seq[slugs.index(current) + 1]
+    return f'<p class="next"><a href="{slug_url(slug)}" rel="next"><span>Next</span> {escape(label)}</a></p>\n'
+
+
+def source_html(meta):
+    src = meta.get("source") or meta.get("origin")
+    if not src:
+        return ""
+    return f'<p class="source">Source: <a href="{{{{repo}}}}/blob/main/{escape(src, quote=True)}"><code>{escape(src)}</code></a></p>\n'
+
+
+def page_list_html(built):
+    """Every built page, for the 404 page (derived from NAV so it cannot drift)."""
+    return "<ul class=\"links\">\n" + "\n".join(
+        f'<li><a href="{slug_url(slug)}">{escape(label)}</a></li>' for label, slug in NAV if slug in built) + "\n</ul>"
+
+
+def add_toc(body):
+    """Give every h2/h3 an id and, at TOC_MIN or more, put an 'On this page' nav after the h1.
+
+    Returns (body, has_toc). One <nav>: a closed <details> below the wide breakpoint,
+    a plain list in a sticky rail above it (site.css picks one; no JavaScript)."""
+    seen = set(re.findall(r'\bid="([^"]*)"', body))
+    entries = []
+
+    def tag(m):
+        lvl, attrs, inner = m.group(1), m.group(2), m.group(3)
+        text = re.sub(r"<[^>]+>", "", inner)
+        idm = re.search(r'\bid="([^"]*)"', attrs)
+        if idm:
+            hid = idm.group(1)
+        else:
+            hid = _slug(unescape(text), seen)
+            attrs += f' id="{hid}"'
+        entries.append((lvl, hid, text))
+        return f"<h{lvl}{attrs}>{inner}</h{lvl}>"
+
+    body = _HEADING.sub(tag, body)
+    if len(entries) < TOC_MIN or "</h1>" not in body:
+        return body, False
+    items = "\n".join(f'<li class="l{lvl}"><a href="#{hid}">{text}</a></li>' for lvl, hid, text in entries)
+    toc = ('<nav class="toc" aria-label="On this page">\n'
+           f'<details><summary>On this page</summary>\n<ol>\n{items}\n</ol>\n</details>\n'
+           f'<div class="toc-rail"><p>On this page</p>\n<ol>\n{items}\n</ol></div>\n</nav>\n')
+    head, _, rest = body.partition("</h1>")
+    return head + "</h1>\n" + toc + rest.lstrip("\n"), True
+
+
 def parse(path):
     text = path.read_text()
-    meta = dict(re.findall(r"<!--\s*(title|description|source):\s*(.*?)\s*-->", text))
-    body = re.sub(r"<!--\s*(?:title|description|source):.*?-->\n?", "", text)
+    meta = dict(re.findall(r"<!--\s*(title|description|source|origin):\s*(.*?)\s*-->", text))
+    body = re.sub(r"<!--\s*(?:title|description|source|origin):.*?-->\n?", "", text)
     for k in ("title", "description"):
         if k not in meta:
             sys.exit(f"{path}: missing <!-- {k}: ... --> header")
@@ -257,14 +326,21 @@ def main():
     subs["benchmarks_body"], scaling_svg = render.benchmarks_body((SITE.parent / "docs/benchmarks.md").read_text())
     pages = {("" if p.stem == "index" else p.stem): p for p in sorted((SITE / "pages").glob("*.html"))}
     layout = (SITE / "layout.html").read_text()
+    subs["page_list"] = page_list_html(set(pages))
     if DIST.exists():
         shutil.rmtree(DIST)
     DIST.mkdir()
     for slug, path in pages.items():
         meta, body = parse(path)
         out = layout
+        # {{body}} placeholders (gallery, benchmarks, page_list) are expanded first so
+        # the contents list sees every heading on the final page
+        body = re.sub(r"\{\{(page_list|gallery_body|benchmarks_body)\}\}", lambda m: subs[m.group(1)], body)
+        body, has_toc = add_toc(body)
+        after = "" if slug == "404" else source_html(meta) + next_html(slug, set(pages))
         fill = {**subs, "title": escape(meta["title"]), "description": escape(meta["description"], quote=True),
-                "nav": nav_html(slug, set(pages)), "body": body}
+                "nav": nav_html(slug, set(pages)), "body": body, "after": after,
+                "mainclass": ' class="has-toc"' if has_toc else ""}
         # body first so its own {{repo}} etc. are expanded by the second pass
         for _ in range(2):
             out = re.sub(r"\{\{(\w+)\}\}", lambda m: fill[m.group(1)], out)

@@ -85,6 +85,71 @@ for (const p of PAGES) {
   });
 }
 
+const LONG = ["/validation/", "/fasthenry-users/"];
+const SHORT = ["/", "/about/", "/gallery/"];
+
+test("long pages have an On this page list whose links resolve; short pages have none", async ({ page }) => {
+  for (const path of LONG) {
+    await page.goto(path);
+    const toc = page.getByRole("navigation", { name: "On this page" });
+    await expect(toc).toHaveCount(1);
+    const links = await toc.locator("a[href^='#']").evaluateAll((as) => as.map((a) => a.getAttribute("href")!));
+    expect(links.length, path).toBeGreaterThanOrEqual(8);
+    for (const h of links) await expect(page.locator(`[id="${h.slice(1)}"]`), `${path} ${h}`).toHaveCount(1);
+  }
+  for (const path of SHORT) {
+    await page.goto(path);
+    await expect(page.getByRole("navigation", { name: "On this page" }), path).toHaveCount(0);
+  }
+});
+
+test("the contents list is a rail on wide screens and a closed block below", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/validation/");
+  const rail = page.locator(".toc-rail");
+  await expect(rail).toBeVisible();
+  await expect(page.locator(".toc details")).toBeHidden();
+  const h1 = await page.locator("h1").boundingBox();
+  const box = await rail.boundingBox();
+  expect(box!.x, "rail sits right of the text column").toBeGreaterThan(h1!.x + 600);
+  await page.mouse.wheel(0, 2000);
+  await page.waitForTimeout(100);
+  expect((await rail.boundingBox())!.y, "rail stays in view").toBeLessThan(200);
+  await page.setViewportSize({ width: 800, height: 900 });
+  await expect(rail).toBeHidden();
+  const details = page.locator(".toc details");
+  await expect(details).toBeVisible();
+  expect(await details.evaluate((d: HTMLDetailsElement) => d.open)).toBe(false);
+});
+
+test("following Next from home visits every page once and ends", async ({ page }) => {
+  const visited = ["/"];
+  await page.goto("/");
+  for (let i = 0; i < 20; i++) {
+    const next = page.locator("a[rel=next]");
+    if ((await next.count()) === 0) break;
+    await next.click();
+    visited.push(new URL(page.url()).pathname);
+  }
+  expect(visited).toEqual(["/", ...NAV.map((_, i) => PAGES[i + 1].path)]);
+});
+
+test("every page has a Next link except the last, and doc pages end with a Source line", async ({ page }) => {
+  for (const p of PAGES.slice(0, -1)) {
+    await page.goto(p.path);
+    await expect(page.locator("a[rel=next]"), p.path).toHaveCount(1);
+  }
+  for (const path of ["/benchmarks/", ...LONG]) {
+    await page.goto(path);
+    await expect(page.locator("p.source"), path).toContainText("Source: docs/");
+  }
+});
+
+test("the 404 page lists every page", async ({ page }) => {
+  await page.goto("/no-such-page/");
+  for (const label of NAV) await expect(page.locator("main").getByRole("link", { name: label, exact: true })).toBeVisible();
+});
+
 test("the primary navigation and the brand link go where they say", async ({ page }) => {
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Primary" });
