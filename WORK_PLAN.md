@@ -43,6 +43,7 @@ _None._
 - **#187**: measure FastHenry nonuniform-plane node placement (blocked by #186)
 - **#172**: Auditor request for a Rust toolchain (worker spec change needed)
 - **#171**: split `fasterhenry-cli/src/inp.rs` into a module directory (architect proposal, blocked)
+- **#317**: remove `site/gen_hero.py` (duplicates `tools/gallery_figures.py`; blocked by #311)
 - **#208**: move the inline test module out of `inp.rs` (hermit proposal, blocked behind #171)
 - **#166**: branch-protection ruleset migration (repo admin)
 - **#74**: real-deck corpus comparison against FastHenry (operator-run; #69-#72 closed, real corpus rerun still required)
@@ -51,6 +52,7 @@ _None._
 
 ## Epics
 
+- **#303**: fasterhenry.org redesign: tables that fit, readable pages, a real landing page (#307 and #310 done; #311 landing page open).
 - **#76**: 0.2.0 — drop-in FastHenry replacement. Children #69–#73, #75 are done; the remaining compatibility follow-ups (#186/#187) are in progress or blocked (#74 remains operator-run).
 
 ## Backlog Balance
@@ -63,7 +65,7 @@ _None._
 | In Progress | 0 |
 | PRs awaiting review | 0 |
 | Curated (proposed) | 0 |
-| Blocked | 7 (#16, #74, #171, #172, #186, #187, #208) |
+| Blocked | 8 (#16, #74, #171, #172, #186, #187, #208, #317) |
 | Operator-gated (`loom:operator`) | 2 (#166, #243) |
 | Operator merge-risk holds | 0 |
-| Active epics | 1 (#76) |
+| Active epics | 2 (#76, #303) |
