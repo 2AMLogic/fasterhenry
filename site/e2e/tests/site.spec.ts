@@ -137,10 +137,10 @@ test("the landing page shows the hero figure, its data and the install line", as
   expect(await standalone.text()).toContain("prefers-color-scheme:dark");
   const data = await request.get("/assets/hero-spiral.json");
   expect(data.status()).toBe(200);
-  const hero = await data.json();
+  const heroData = await data.json();
   // the caption quotes the version and command the committed data was made with
-  await expect(page.locator("figcaption")).toContainText(hero.fasterhenry_version);
-  await expect(page.locator("figcaption")).toContainText(hero.command);
+  await expect(page.locator("figcaption")).toContainText(heroData.fasterhenry_version);
+  await expect(page.locator("figcaption")).toContainText(heroData.command);
 });
 
 test("the gallery is a card grid with one titled card per committed entry, visible near the top", async ({ page, request }, testInfo) => {
