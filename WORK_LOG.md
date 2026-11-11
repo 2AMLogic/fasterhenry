@@ -6,9 +6,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-11
 
+- **PR #319**: feat(site): datasheet visual system, new header and footer, one H1 per page
 - **PR #316**: docs: drop direction word from Speed caveat's scaling reference
 - **PR #314**: feat(site): size tables to content and add a two-width layout
 - **PR #313**: feat(site): reorder Benchmarks page, add accuracy table, fix chart layout
+- **Issue #305** (closed): site: visual system — tokens, header and nav, type scale, one H1 per page (redesign phase 1)
 - **Issue #315** (closed): docs/benchmarks.md Speed caveat says scaling section is 'below'; site now shows it above
 - **Issue #309** (closed): site: Benchmarks page — takeaway and scaling chart first, add the missing Accuracy table
 - **Issue #304** (closed): site: tables that fit their content, and a two-width layout (redesign phase 1)
