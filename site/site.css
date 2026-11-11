@@ -80,7 +80,7 @@ section{padding-top:var(--s2)}
 .toc-rail{display:none}
 .toc-rail p{margin:0 0 var(--s2);font-weight:600;color:var(--fg)}
 @media (min-width:84rem){
-main.has-toc{display:grid;grid-template-columns:minmax(0,1fr) 15rem;column-gap:var(--s6);align-content:start}
+main.has-toc{display:grid;grid-template-columns:minmax(0,1fr) 11rem;column-gap:var(--s4);align-content:start}
 main.has-toc>*{grid-column:1}
 main.has-toc>.toc{grid-column:2;grid-row:1 / span 200;position:sticky;top:var(--s5);align-self:start;margin:var(--s8) 0 0;max-height:calc(100vh - var(--s8));overflow-y:auto}
 .toc details{display:none}
