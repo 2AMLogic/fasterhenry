@@ -4,6 +4,15 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-11
+
+- **PR #316**: docs: drop direction word from Speed caveat's scaling reference
+- **PR #314**: feat(site): size tables to content and add a two-width layout
+- **PR #313**: feat(site): reorder Benchmarks page, add accuracy table, fix chart layout
+- **Issue #315** (closed): docs/benchmarks.md Speed caveat says scaling section is 'below'; site now shows it above
+- **Issue #309** (closed): site: Benchmarks page — takeaway and scaling chart first, add the missing Accuracy table
+- **Issue #304** (closed): site: tables that fit their content, and a two-width layout (redesign phase 1)
+
 ### 2026-11-10
 
 - **PR #301**: test(site): Playwright browser tests for fasterhenry.org, plus the two defects they found
