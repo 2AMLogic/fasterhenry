@@ -27,29 +27,72 @@ def inline(md):
 
 # ---- gallery ---------------------------------------------------------------
 
+def pct(a, b):
+    """Signed relative change a -> b, e.g. '+20%', '-1.4%', '+0.25%'."""
+    p = (b - a) / a * 100
+    return f"{p:+.0f}%" if abs(p) >= 10 else f"{p:+.1f}%" if abs(p) >= 1 else f"{p:+.2f}%"
+
+
+def result_line(e):
+    """R and L at the two ends of the sweep, with their relative change, from the series."""
+    s = e["series"]
+    r0, r1, l0, l1 = s[0]["r_ohm"] * 1e3, s[-1]["r_ohm"] * 1e3, s[0]["l_h"] * 1e9, s[-1]["l_h"] * 1e9
+    f = lambda hz: f'{hz / 1e6:g}&nbsp;MHz' if hz < 1e9 else f'{hz / 1e9:g}&nbsp;GHz'
+    return (f'R {r0:.4g} to {r1:.4g}&nbsp;m&Omega; ({pct(r0, r1)}), L {l0:.4g} to {l1:.4g}&nbsp;nH ({pct(l0, l1)}), '
+            f'from {f(s[0]["f_hz"])} to {f(s[-1]["f_hz"])}')
+
+
 def gallery_body(data):
     m = data["machine"]
-    out = [f'<p>Every figure below is the output of <code>tools/gallery_figures.py</code> run on a deck committed in '
-           f'<a href="{BLOB}/fasterhenry-cli/tests/data">fasterhenry-cli/tests/data</a>. Plots show port 1&rsquo;s '
-           f'self-impedance, 1&nbsp;MHz to 1&nbsp;GHz, 10 points per decade. No FastHenry curve is overlaid on any entry: '
-           f'this repository does not commit FastHenry output.</p>',
-           f'<p>Wall time is the median process wall clock of {m["runs_per_deck"]} runs on the machine that generated the '
-           f'figures ({m["cpu_count"]} logical CPUs, {escape(m["platform"])}). It is a per-run timing, not a benchmark; see '
-           f'<a href="/benchmarks/">Benchmarks</a>.</p>']
-    for e in data["entries"]:
-        out.append(f'<section id="{escape(e["id"])}">\n<h2>{escape(e["title"])}</h2>')
-        if e["description"]:
-            out.append(f'<p>{inline(e["description"])}</p>')
+    entries = data["entries"]
+    variants = {}
+    for e in entries:
+        if e.get("variant_of"):
+            variants.setdefault(e["variant_of"], []).append(e)
+    out = ['<p class="lede">Each card is a deck committed in this repository, run through fasterhenry, '
+           'with its conductors drawn from the deck itself.</p>',
+           '<ul class="cards">']
+    for e in (e for e in entries if not e.get("variant_of")):
+        group = [e] + variants.get(e["id"], [])
+        out.append(f'<li class="card" id="{escape(e["id"])}">\n<h2>{escape(e["title"])}</h2>')
+        if e.get("summary"):
+            out.append(f'<p>{escape(e["summary"])}</p>')
+        out.append(f'<img src="/assets/gallery/{escape(e["geometry"])}" width="360" height="220" loading="lazy" '
+                   f'alt="Top view of the conductors in {escape(e["title"])}">')
         if e["status"] != "ok":
             out.append(f'<p><strong>This deck did not run.</strong> The CLI reported:</p><pre><code>{escape(e["error"])}</code></pre>')
         else:
             c = e["counts"]
-            out.append(f'<figure><img src="/assets/gallery/{escape(e["id"])}.svg" width="720" height="470" '
-                       f'alt="R and L versus frequency for {escape(e["title"])}">'
-                       f'<figcaption>R(f) and L(f) of port 1 · {c["filaments"]} filaments, {e["ports"]} port(s) · '
-                       f'wall time {e["wall_time_s"] * 1e3:.1f} ms · fasterhenry {escape(e["fasterhenry_version"])}</figcaption></figure>')
-        out.append(f'<p>Deck: <a href="{BLOB}/{escape(e["deck"])}"><code>{escape(e["deck"])}</code></a><br>'
-                   f'Command: <code>{escape(e["command"])}</code></p>\n</section>')
+            out.append(f'<p class="result">{result_line(e)}</p>')
+            out.append(f'<img src="/assets/gallery/{escape(e["id"])}.svg" width="720" height="470" loading="lazy" '
+                       f'alt="R and L versus frequency for {escape(e["title"])}">')
+            out.append(f'<p class="stats">{c["filaments"]} filaments &middot; {e["ports"]} port(s) &middot; '
+                       f'wall time {e["wall_time_s"] * 1e3:.1f}&nbsp;ms</p>')
+        out.append('<details><summary>Deck and command</summary>')
+        if len(group) > 1:
+            out.append(f'<p>This plane is committed in {len(group)} deck variants (two contact-refinement regions, '
+                       f'each in two syntaxes); the two syntaxes of a region give the same result.</p>')
+        for g in group:
+            out.append('<p>' + (f'{escape(g["variant"])}<br>' if g.get("variant") else "") +
+                       (f'{result_line(g)}<br>' if g["status"] == "ok" and len(group) > 1 else "") +
+                       f'Deck: <a href="{BLOB}/{escape(g["deck"])}"><code>{escape(g["deck"])}</code></a><br>'
+                       f'Command: <code>{escape(g["command"])}</code></p>')
+        out.append('</details>\n</li>')
+    out.append('</ul>')
+    fil = [e["counts"]["filaments"] for e in entries if e["status"] == "ok"]
+    size = f' (between {min(fil)} and {max(fil)} filaments)' if fil else ""
+    out.append(f'<p>These are small fixtures{size}, chosen to be readable rather than large. '
+               'For how run time scales to bigger problems, see <a href="/benchmarks/">Benchmarks</a>.</p>')
+    out.append('<h2 id="about">About these figures</h2>')
+    out.append(f'<p>Every figure is the output of <code>tools/gallery_figures.py</code> run on a deck committed in '
+               f'<a href="{BLOB}/fasterhenry-cli/tests/data">fasterhenry-cli/tests/data</a>. Plots show port 1&rsquo;s '
+               f'self-impedance, 1&nbsp;MHz to 1&nbsp;GHz, 10 points per decade. The vertical axes span at least 20% of '
+               f'the plotted value, so a change of a fraction of a percent is not drawn as a large one; the change is '
+               f'also stated in the line above each plot. No FastHenry curve is overlaid on any entry: '
+               f'this repository does not commit FastHenry output.</p>')
+    out.append(f'<p>Wall time is the median process wall clock of {m["runs_per_deck"]} runs on the machine that generated the '
+               f'figures ({m["cpu_count"]} logical CPUs, {escape(m["platform"])}). It is a per-run timing, not a benchmark; see '
+               f'<a href="/benchmarks/">Benchmarks</a>.</p>')
     return "\n".join(out)
 
 
