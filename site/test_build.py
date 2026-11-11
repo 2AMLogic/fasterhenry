@@ -73,6 +73,10 @@ class Classify(unittest.TestCase):
 
 
 class Build(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        subprocess.run([sys.executable, str(build.SITE / "build.py")], check=True, capture_output=True)
+
     def test_sources_render_into_pages_without_md_hrefs(self):
         subprocess.run([sys.executable, str(build.SITE / "build.py")], check=True, capture_output=True)
         for slug in ("validation", "fasthenry-users"):
@@ -84,6 +88,22 @@ class Build(unittest.TestCase):
         self.assertNotRegex(home, r"(Validation|FastHenry users) \(soon\)")
 
 
+    def test_doc_pages_lead_with_the_doc_h1_then_a_provenance_line(self):
+        for slug in ("validation", "fasthenry-users"):
+            html = (build.DIST / slug / "index.html").read_text()
+            main = html[html.index("<main"):]
+            self.assertEqual(main.count("<h1"), 1)
+            self.assertLess(main.index("<h1"), main.index('class="provenance"'))
+            self.assertNotIn('class="lede"', main)
+            self.assertLess(main.index('class="provenance"'), main.index("<h2"))
+
+    def test_footer_and_header_links(self):
+        html = (build.DIST / "about" / "index.html").read_text()
+        for s in ("docs.rs/fasterhenry", "crates.io/crates/fasterhenry", build.crate_version(), "MIT license"):
+            self.assertIn(s, html.split("<footer>")[1])
+        self.assertIn('class="ghlink"', html)
+
+
 class Benchmarks(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -91,6 +111,11 @@ class Benchmarks(unittest.TestCase):
         cls.render = render
         cls.doc = (build.SITE.parent / "docs/benchmarks.md").read_text()
         cls.html, cls.svg = render.benchmarks_body(cls.doc)
+
+    def test_single_asterisk_renders_as_emphasis(self):
+        self.assertEqual(self.render.inline("so *both* arms and **bold**"), "so <em>both</em> arms and <strong>bold</strong>")
+        self.assertEqual(self.render.inline("2*3*4 stays"), "2*3*4 stays")
+        self.assertNotRegex(self.html, r"(?<![*\w])\*[A-Za-z]")
 
     def test_section_order(self):
         h = self.html

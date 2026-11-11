@@ -69,8 +69,17 @@ def parse(path):
         src = ROOT / meta["source"]
         if not src.is_file():
             sys.exit(f"{path}: source {meta['source']} does not exist")
-        body += render_markdown(src.read_text(), meta["source"])
+        body = doc_page(body, render_markdown(src.read_text(), meta["source"]))
     return meta, body
+
+
+def doc_page(note, doc_html):
+    """Doc-derived page: the document's own H1 first, then the fragment's note as a
+    small muted provenance line, then the rest of the document (one H1 per page)."""
+    m = re.match(r"<h1 [^>]*>.*?</h1>\n?", doc_html, re.S)
+    head, rest = (m.group(0), doc_html[m.end():]) if m else ("", doc_html)
+    note = note.replace('<p class="lede">', '<p class="provenance">', 1)
+    return head + note + rest
 
 
 # ---- markdown rendering (stdlib only; covers what docs/*.md use) -----------
@@ -233,9 +242,14 @@ def render_markdown(text, src):
     return "\n".join(_blocks(text.expandtabs(4).split("\n"), src, set())) + "\n"
 
 
+def crate_version():
+    m = re.search(r'^version\s*=\s*"([^"]+)"', (ROOT / "Cargo.toml").read_text(), re.M)
+    return m.group(1) if m else sys.exit("Cargo.toml: no version found")
+
+
 def main():
     hero = json.loads((SITE / "assets/hero-spiral.json").read_text())
-    subs = {"repo": REPO, "hero_version": hero["fasterhenry_version"],
+    subs = {"repo": REPO, "version": crate_version(), "hero_version": hero["fasterhenry_version"],
             "hero_filaments": str(hero["filaments"]), "hero_command": escape(hero["command"])}
     # Gallery: committed output of tools/gallery_figures.py. Benchmarks: rendered
     # from docs/benchmarks.md, scaling plot drawn from its own table.
