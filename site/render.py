@@ -247,3 +247,147 @@ def benchmarks_body(md):
     o.append('<li><strong>SIMD:</strong> the partial-inductance kernels use 4-wide <code>f64</code> lanes (<code>wide::f64x4</code>), '
              f'as in <a href="{BLOB}/fasterhenry/src/inductance/neumann.rs"><code>neumann.rs</code></a>.</li></ul>')
     return "\n".join(o), scaling_svg(pts, markers)
+
+
+# ---- docs/validation.md ----------------------------------------------------
+
+# Level-2 sections rendered below the summary (everything else in the file,
+# including the runbook preamble, stays on GitHub).
+VALIDATION_SECTIONS = ["Fixture", "Measured", "Oracles", "Ground planes",
+                       "Surface-graded filaments", "Width-graded filaments", "Filament currents"]
+
+# Maintainer-only blocks dropped from the rendered sections: a paragraph (or the
+# table) is dropped when its text starts with one of these. Each must be found,
+# so a doc edit that moves one fails the build rather than leaking it onto the page.
+VALIDATION_DROPPED = [
+    "**Margin is thin", "| check | measured | bound | headroom |",
+    "Source: CI run", "If the gate fails", "The gate is the most expensive",
+    "The `--fixture plane`", "Both contact gates are", "To regenerate it", "**CI.**",
+]
+
+_ISSUE_TAG = re.compile(r"\s*\((?:issue #\d+[^)]*)\)")
+_ISSUE_REF = re.compile(r"(?<![\w&/])(?:issue )?#(\d+)\b")
+
+
+def plain_cell(cell):
+    return tablehtml.plain(cell)
+
+
+def find_row(rows, prefix):
+    for r in rows:
+        if plain_cell(r[0]).startswith(prefix):
+            return r
+    raise KeyError(prefix)
+
+
+def find_table(text, first_header):
+    for hd, rows in tables(text):
+        if hd[0] == first_header:
+            return hd, rows
+    raise KeyError(first_header)
+
+
+def capture(pattern, text, group=1):
+    m = re.search(pattern, text)
+    if not m:
+        raise KeyError(pattern)
+    return " ".join(m.group(group).split())
+
+
+def validation_summary(md, bench_md):
+    """[(check, reference, measured, bound)], every value read from the docs."""
+    measured = section(md, "Measured")
+    comp = find_table(measured, "comparison")[1]
+    planes = section(md, "Ground planes")
+    slot = find_row(find_table(planes, "quantity")[1], "ΔL (slot)")
+    slot_rel = plain_cell(slot[3])
+    contact_mesh = find_table(planes, "mesh")[1]
+    contact_sep = find_row([t for t in tables(planes) if t[0][0] == "quantity"][1][1], "ΔL (separation)")
+    sep_rel = plain_cell(contact_sep[3])
+    width = section(md, "Width-graded filaments")
+    skin = re.search(r"`R'` is within ([\d.]+ %) \(measured ≤ ([\d.]+ %)\)", width)
+    if not skin:
+        raise KeyError("R' is within")
+    fh = find_row(find_table(section(bench_md, "Accuracy"), "deck")[1], "spiral")
+    bounds = capture(r"Bounds: ([\d.]+ %)", planes)
+
+    def bound_of(cell):
+        return capture(r"bound ([^)]+)\)", cell)
+
+    def l_row(prefix):
+        r = find_row(comp, prefix)
+        return plain_cell(r[1]), plain_cell(r[2])
+
+    pb, pm = l_row("L vs PyPEEC")
+    gb, gm = l_row("L vs Greenhouse")
+    ab, am = l_row("R vs analytic")
+    graded = find_row(contact_mesh, "graded")
+    return [
+        ("Spiral inductance", "PyPEEC 5.8.0 voxel solve", pm, pb),
+        ("Spiral inductance", "Greenhouse segment summation", gm, gb),
+        ("Spiral DC resistance", "analytic series sum", am, ab),
+        ("Slot ΔL in a ground plane", "PyPEEC 5 µm voxels", capture(r"^([\d.]+ %)", slot_rel), bound_of(slot_rel)),
+        ("Graded contact mesh, L", "uniform 25 µm plane", plain_cell(graded[4]), bounds),
+        ("Contact separation ΔL", "PyPEEC 5 µm voxels", capture(r"^([\d.]+ %)", sep_rel), bound_of(sep_rel)),
+        ("Width-graded skin-effect R′", "2-D cross-section solve", "≤ " + skin.group(2), skin.group(1)),
+        ("Spiral impedance at 1 MHz", "FastHenry (operator-run)", plain_cell(fh[2]) + " relative", "not gated in CI"),
+    ]
+
+
+def _drop_blocks(text):
+    """Remove fenced code blocks and the VALIDATION_DROPPED paragraphs/tables."""
+    text = re.sub(r"^```.*?^```[ \t]*\n?", "", text, flags=re.M | re.S)
+    blocks, found = re.split(r"\n\s*\n", text), set()
+    keep = []
+    for b in blocks:
+        hit = next((p for p in VALIDATION_DROPPED if b.lstrip().startswith(p)), None)
+        if hit:
+            found.add(hit)
+        else:
+            keep.append(b)
+    missing = [p for p in VALIDATION_DROPPED if p not in found]
+    if missing:
+        raise KeyError(f"validation.md blocks expected to be dropped were not found: {missing}")
+    return "\n\n".join(keep)
+
+
+def _link_issues(html):
+    """Turn remaining `#NN` / `issue #NN` in text (not code, not links) into issue links."""
+    out, in_a = [], 0
+    for part in re.split(r"(<code>.*?</code>|<pre>.*?</pre>|<[^>]+>)", html, flags=re.S):
+        if part.startswith("<"):
+            if part.startswith("<a ") or part.startswith("<a>"):
+                in_a += 1
+            elif part == "</a>":
+                in_a -= 1
+            out.append(part)
+        else:
+            out.append(part if in_a else _ISSUE_REF.sub(
+                lambda m: f'<a href="{REPO}/issues/{m.group(1)}">{m.group(0)}</a>', part))
+    return "".join(out)
+
+
+def validation_body(md, bench_md, render_markdown):
+    """Summary table, then the allowlisted sections of docs/validation.md.
+    `render_markdown(text, src)` is build.render_markdown (passed in: build imports this module)."""
+    rows = validation_summary(md, bench_md)
+    o = ['<section id="what-was-checked">', '<h2>What was checked</h2>',
+         table_html(["check", "independent reference", "measured agreement", "bound"], [list(r) for r in rows]),
+         f'<p>Values are read from <a href="{BLOB}/docs/validation.md"><code>docs/validation.md</code></a> and '
+         f'<a href="{BLOB}/docs/benchmarks.md"><code>docs/benchmarks.md</code></a> when the site is built; '
+         'the build fails if one is missing.</p></section>']
+    parts = []
+    for h in VALIDATION_SECTIONS:
+        m = re.search(rf"^## {re.escape(h)}.*$", md, re.M)
+        if not m:
+            raise KeyError(h)
+        parts.append(m.group(0) + "\n" + section(md, h))
+    text = _drop_blocks("\n\n".join(parts))
+    text = "\n".join(_ISSUE_TAG.sub("", ln) if ln.startswith("#") else ln for ln in text.split("\n"))
+    o.append(_link_issues(render_markdown(text, "docs/validation.md")))
+    o.append('<details><summary>Reproduce</summary>'
+             f'<p>The commands to regenerate every reference, the CI gate markers and the maintainer notes are in '
+             f'<a href="{BLOB}/docs/validation.md"><code>docs/validation.md</code></a> on GitHub. '
+             f'The FastHenry oracle comparison is <a href="{BLOB}/tools/fasthenry_compare.py"><code>tools/fasthenry_compare.py</code></a>, '
+             f'run by <a href="{BLOB}/.github/workflows/fasthenry-oracle.yml"><code>fasthenry-oracle.yml</code></a>.</p></details>')
+    return "\n".join(o)
