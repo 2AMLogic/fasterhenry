@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 79" role="img" aria-labelledby="t" font-family="system-ui,sans-serif" font-size="11">
+<title id="t">Two parallel bars: top view of the conductors</title>
+<style>.cu{stroke:#a8400c;fill:none;stroke-linecap:square}.pl{fill:#a8400c;fill-opacity:.2;stroke:#a8400c;fill-rule:evenodd}.ct{fill:none;stroke:#525c69;stroke-dasharray:4 3}.pt{fill:#171c24}.tx{fill:#525c69}.sb{stroke:#525c69;fill:none}@media (prefers-color-scheme:dark){.cu{stroke:#f0935a}.pl{fill:#f0935a;stroke:#f0935a}.ct,.sb{stroke:#a3acb9}.pt{fill:#e6e9ee}.tx{fill:#a3acb9}}</style>
+<line class="cu" x1="16.0" y1="48.8" x2="344.0" y2="48.8" stroke-width="13.1"/>
+<line class="cu" x1="16.0" y1="16.0" x2="344.0" y2="16.0" stroke-width="13.1"/>
+<circle class="pt" cx="16.0" cy="48.8" r="3.5"/>
+<circle class="pt" cx="344.0" cy="48.8" r="3.5"/>
+<circle class="pt" cx="16.0" cy="16.0" r="3.5"/>
+<circle class="pt" cx="344.0" cy="16.0" r="3.5"/>
+<path class="sb" d="M16 67V71H81.6V67"/><text class="tx" x="87.6" y="71">1 mm · top view</text></svg>

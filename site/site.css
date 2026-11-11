@@ -67,3 +67,11 @@ th{color:var(--muted);font-size:.85rem;font-weight:600;white-space:nowrap;border
 td.na{color:var(--muted)}
 li{margin:.25rem 0}
 section{padding-top:var(--s2)}
+/* gallery cards */
+main ul.cards{max-width:none;list-style:none;padding:0;margin:var(--s5) 0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,20rem),1fr));gap:var(--s5)}
+.card{display:flex;flex-direction:column;gap:var(--s2);padding:var(--s4);border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);min-width:0}
+.card h2{margin:0;padding:0;border:0;font-size:var(--fs-3)}
+.card p{margin:0}.card img{width:100%;height:auto;border:1px solid var(--line);border-radius:var(--radius)}
+.card .result{font-size:var(--fs-0)}.card .stats{font-size:var(--fs-0);color:var(--muted)}
+.card details{margin-top:auto;font-size:var(--fs-0)}.card summary{min-height:var(--tap);display:flex;align-items:center;cursor:pointer}
+.card details p{margin:var(--s2) 0}

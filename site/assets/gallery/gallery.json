@@ -8,8 +8,7 @@
   "entries": [
     {
       "id": "spiral",
-      "title": "2-turn square spiral",
-      "description": "Self-authored fixture for the round-trip test (see ../roundtrip.rs). A 2-turn square spiral, outer extent 4 mm, drawn as the standard non-self-intersecting integer square spiral (step lengths 1, 1, 2, 2, 3, 3, 4, 4 turns of pitch 1 mm): 8 segments of 0.2 mm x 35 um copper trace.",
+      "title": "Two-turn square spiral",
       "deck": "fasterhenry-cli/tests/data/spiral.inp",
       "command": "fasterhenry fasterhenry-cli/tests/data/spiral.inp --freq 1e6 1e9 10 --json out.json",
       "overlay": null,
@@ -182,12 +181,13 @@
           "r_ohm": 0.05943091806137135,
           "l_h": 1.4442743858989712e-08
         }
-      ]
+      ],
+      "summary": "A copper trace wound into a two-turn square spiral, driven between its centre and its outer end.",
+      "geometry": "spiral_geometry.svg"
     },
     {
       "id": "twobar",
-      "title": "two parallel bars",
-      "description": "Self-authored two-port fixture for the CI SPICE-stamp check (see ci.yml). Two parallel 5 mm x 0.2 mm x 35 um copper bars, 0.5 mm apart, one port each, so the SPICE export carries a K mutual and off-diagonal H sources.",
+      "title": "Two parallel bars",
       "deck": "fasterhenry-cli/tests/data/twobar.inp",
       "command": "fasterhenry fasterhenry-cli/tests/data/twobar.inp --freq 1e6 1e9 10 --json out.json",
       "overlay": null,
@@ -360,12 +360,13 @@
           "r_ohm": 0.015257387451670427,
           "l_h": 4.191951247853226e-09
         }
-      ]
+      ],
+      "summary": "Two straight copper bars side by side, each with its own port, so the result includes the coupling between them.",
+      "geometry": "twobar_geometry.svg"
     },
     {
       "id": "plane_fasthenry",
-      "title": "plane_fasthenry",
-      "description": "Self-authored deck: a copper ground plane in the FastHenry corner-point `G` syntax, driven between two via landings.",
+      "title": "Ground plane with a hole",
       "deck": "fasterhenry-cli/tests/data/plane_fasthenry.inp",
       "command": "fasterhenry fasterhenry-cli/tests/data/plane_fasthenry.inp --freq 1e6 1e9 10 --json out.json",
       "overlay": null,
@@ -538,12 +539,14 @@
           "r_ohm": 0.001551936182540326,
           "l_h": 3.875970246544692e-09
         }
-      ]
+      ],
+      "summary": "A thin copper ground plane with a rectangular hole and a locally refined contact region, driven between two vias that land on it.",
+      "variant": "FastHenry corner-point syntax, contact rect",
+      "geometry": "plane_fasthenry_geometry.svg"
     },
     {
       "id": "plane_extension",
-      "title": "plane_extension",
-      "description": "The same problem as `tests/data/plane_fasthenry.inp`, written in this crate's own `G` / `.hole` / `.contact` extension syntax. The extension form names the plane's TOP surface, so its z is the corner-point form's mid-thickness z plus half the thickness (0 + 0.035/2 = 0.0175 mm).",
+      "title": "Ground plane with a hole",
       "deck": "fasterhenry-cli/tests/data/plane_extension.inp",
       "command": "fasterhenry fasterhenry-cli/tests/data/plane_extension.inp --freq 1e6 1e9 10 --json out.json",
       "overlay": null,
@@ -716,12 +719,15 @@
           "r_ohm": 0.001551936182540326,
           "l_h": 3.875970246544692e-09
         }
-      ]
+      ],
+      "summary": "",
+      "variant_of": "plane_fasthenry",
+      "variant": "fasterhenry G / .hole / .contact syntax, same contact region",
+      "geometry": "plane_extension_geometry.svg"
     },
     {
       "id": "plane_decay_rect",
-      "title": "plane_decay_rect",
-      "description": "Self-authored deck: the same copper ground plane as `tests/data/plane_fasthenry.inp`, but with its refined contact region declared as a `contact decay_rect` clause instead of a `contact rect` one \u2014 centre, full widths, the largest cell wanted inside the rectangle, and the largest cell the outward decay may grow to\u2026",
+      "title": "Ground plane with a hole",
       "deck": "fasterhenry-cli/tests/data/plane_decay_rect.inp",
       "command": "fasterhenry fasterhenry-cli/tests/data/plane_decay_rect.inp --freq 1e6 1e9 10 --json out.json",
       "overlay": null,
@@ -894,12 +900,15 @@
           "r_ohm": 0.0016708700997314931,
           "l_h": 3.891848624205572e-09
         }
-      ]
+      ],
+      "summary": "",
+      "variant_of": "plane_fasthenry",
+      "variant": "FastHenry corner-point syntax, contact decay_rect (wider refined region)",
+      "geometry": "plane_decay_rect_geometry.svg"
     },
     {
       "id": "plane_decay_extension",
-      "title": "plane_decay_extension",
-      "description": "The same problem as `tests/data/plane_decay_rect.inp`, written with this crate's own `G` / `.hole` / `.contact` extension syntax. The extension form names the plane's TOP surface, so its z is the corner-point form's mid-thickness z plus half the thickness (0 + 0.035/2 = 0.0175 mm).",
+      "title": "Ground plane with a hole",
       "deck": "fasterhenry-cli/tests/data/plane_decay_extension.inp",
       "command": "fasterhenry fasterhenry-cli/tests/data/plane_decay_extension.inp --freq 1e6 1e9 10 --json out.json",
       "overlay": null,
@@ -1072,7 +1081,11 @@
           "r_ohm": 0.0016708700997314931,
           "l_h": 3.891848624205572e-09
         }
-      ]
+      ],
+      "summary": "",
+      "variant_of": "plane_fasthenry",
+      "variant": "fasterhenry .contact syntax with nx, ny and ratio (wider refined region)",
+      "geometry": "plane_decay_extension_geometry.svg"
     }
   ]
 }

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 230" role="img" aria-labelledby="t" font-family="system-ui,sans-serif" font-size="11">
+<title id="t">Ground plane with a hole: top view of the conductors</title>
+<style>.cu{stroke:#a8400c;fill:none;stroke-linecap:square}.pl{fill:#a8400c;fill-opacity:.2;stroke:#a8400c;fill-rule:evenodd}.ct{fill:none;stroke:#525c69;stroke-dasharray:4 3}.pt{fill:#171c24}.tx{fill:#525c69}.sb{stroke:#525c69;fill:none}@media (prefers-color-scheme:dark){.cu{stroke:#f0935a}.pl{fill:#f0935a;stroke:#f0935a}.ct,.sb{stroke:#a3acb9}.pt{fill:#e6e9ee}.tx{fill:#a3acb9}}</style>
+<path class="pl" d="M26.7 200.0H333.3V16.0H26.7ZM42.0 62.0H72.7V31.3H42.0Z"/>
+<path class="ct" d="M149.3 138.7H210.7V77.3H149.3Z"/>
+<circle class="pt" cx="57.3" cy="169.3" r="3.5"/>
+<circle class="pt" cx="302.7" cy="46.7" r="3.5"/>
+<path class="sb" d="M16 218V222H77.3V218"/><text class="tx" x="83.3" y="222">2 mm · top view</text></svg>
