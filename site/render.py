@@ -10,6 +10,7 @@ import json, math, re
 from html import escape
 from pathlib import Path
 
+import charts
 import tablehtml
 
 REPO = "https://github.com/2AMLogic/fasterhenry"
@@ -42,6 +43,28 @@ def result_line(e):
             f'from {f(s[0]["f_hz"])} to {f(s[-1]["f_hz"])}')
 
 
+def _gf():
+    """tools/gallery_figures.py, which owns the gallery drawings and their text."""
+    import sys
+    tools = str(Path(__file__).resolve().parent.parent / "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import gallery_figures
+    return gallery_figures
+
+
+def rl_inline(e):
+    """Compact R/L drawing (cards are narrow) inlined, ids unique per card."""
+    gf = _gf()
+    return gf.svg(e, charts.COMPACT, False, f'g-{e["id"]}')
+
+
+def geometry_inline(e):
+    gf = _gf()
+    text = (Path(__file__).resolve().parent.parent / e["deck"]).read_text()
+    return gf.geometry_svg(gf.parse_geometry(text), e["title"], f'g-{e["id"]}-geo', False)
+
+
 def gallery_body(data):
     m = data["machine"]
     entries = data["entries"]
@@ -57,18 +80,19 @@ def gallery_body(data):
         out.append(f'<li class="card" id="{escape(e["id"])}">\n<h2>{escape(e["title"])}</h2>')
         if e.get("summary"):
             out.append(f'<p>{escape(e["summary"])}</p>')
-        out.append(f'<img src="/assets/gallery/{escape(e["geometry"])}" width="360" height="220" loading="lazy" '
-                   f'alt="Top view of the conductors in {escape(e["title"])}">')
+        out.append(f'<div class="fig">{geometry_inline(e)}</div>')
         if e["status"] != "ok":
             out.append(f'<p><strong>This deck did not run.</strong> The CLI reported:</p><pre><code>{escape(e["error"])}</code></pre>')
         else:
             c = e["counts"]
             out.append(f'<p class="result">{result_line(e)}</p>')
-            out.append(f'<img src="/assets/gallery/{escape(e["id"])}.svg" width="720" height="470" loading="lazy" '
-                       f'alt="R and L versus frequency for {escape(e["title"])}">')
+            out.append(f'<div class="fig">{rl_inline(e)}</div>')
             out.append(f'<p class="stats">{c["filaments"]} filaments &middot; {e["ports"]} port(s) &middot; '
                        f'wall time {e["wall_time_s"] * 1e3:.1f}&nbsp;ms</p>')
         out.append('<details><summary>Deck and command</summary>')
+        if e["status"] == "ok":
+            out.append(f'<p>Standalone figures: <a href="/assets/gallery/{escape(e["id"])}.svg">R and L</a>, '
+                       f'<a href="/assets/gallery/{escape(e["geometry"])}">geometry</a> (SVG, light or dark to match your system).</p>')
         if len(group) > 1:
             out.append(f'<p>This plane is committed in {len(group)} deck variants (two contact-refinement regions, '
                        f'each in two syntaxes); the two syntaxes of a region give the same result.</p>')
@@ -147,48 +171,18 @@ def scaling_points(scaling_text):
 
 
 def compact(n):
-    """1000 -> '1k', 100000 -> '100k', 10 -> '10'."""
-    return f"{n // 1000}k" if n >= 1000 and n % 1000 == 0 else f"{n:g}"
+    return charts.compact_count(n)
 
 
-def scaling_svg(points, markers):
-    """Log-log wall clock vs filaments; `markers` = [(x, label)] vertical guides."""
-    W, H, x0, y0, w, h = 720, 410, 76, 24, 590, 340
-    xs = [p[0] for p in points]
-    ys = [v for p in points for v in p[1:] if v]
-    lx0, lx1 = math.floor(math.log10(min(xs))), math.ceil(math.log10(max(xs)))
-    ly0, ly1 = math.floor(math.log10(min(ys))), math.ceil(math.log10(max(ys)))
-    px = lambda x: x0 + (math.log10(x) - lx0) / (lx1 - lx0) * w
-    py = lambda y: y0 + h - (math.log10(y) - ly0) / (ly1 - ly0) * h
-    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" role="img" aria-labelledby="t d" font-family="system-ui,sans-serif" font-size="13" fill="#2b313b">',
-         '<title id="t">Dense versus pFFT + GMRES wall clock against filament count</title>',
-         '<desc id="d">Log-log plot from the scaling table in docs/benchmarks.md. The dense path grows faster than the iterative path and stops where it does not fit in memory.</desc>',
-         f'<rect width="{W}" height="{H}" fill="#ffffff"/>',
-         f'<rect x="{x0}" y="{y0}" width="{w}" height="{h}" fill="none" stroke="#c9ced6"/>']
-    for d in range(lx0, lx1 + 1):
-        o.append(f'<line x1="{px(10**d):.1f}" x2="{px(10**d):.1f}" y1="{y0}" y2="{y0+h}" stroke="#e6e9ee"/>')
-        o.append(f'<text x="{px(10**d):.1f}" y="{y0+h+18}" text-anchor="middle">{compact(10**d)}</text>')
-    for d in range(ly0, ly1 + 1):
-        o.append(f'<line x1="{x0}" x2="{x0+w}" y1="{py(10**d):.1f}" y2="{py(10**d):.1f}" stroke="#e6e9ee"/>')
-        o.append(f'<text x="{x0-8}" y="{py(10**d)+4:.1f}" text-anchor="end">{10**d:g} s</text>')
-    # Guide labels sit at the top: the left-most guide's label ends at its line,
-    # the next one starts at its line, so no label crosses another guide.
-    ms = sorted(m for m in markers if min(xs) <= m[0] <= max(xs))
-    for i, (mx, lab) in enumerate(ms):
-        o.append(f'<line x1="{px(mx):.1f}" x2="{px(mx):.1f}" y1="{y0}" y2="{y0+h}" stroke="#6b7480" stroke-dasharray="5 4"/>')
-        left = i % 2 == 0 and len(ms) > 1
-        o.append(f'<text x="{px(mx)+(-5 if left else 5):.1f}" y="{y0+16}" text-anchor="{"end" if left else "start"}" fill="#4a5360">{escape(lab)}</text>')
-    # Series names live in a legend in the empty top-left corner, not on the lines.
-    for k, color, name in ((1, "#b4400a", "dense"), (2, "#0b5cad", "pFFT + GMRES")):
-        pts = [(p[0], p[k]) for p in points if p[k]]
-        o.append('<polyline points="' + " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in pts) +
-                 f'" fill="none" stroke="{color}" stroke-width="2.5" stroke-linejoin="round"/>')
-        o += [f'<circle cx="{px(x):.1f}" cy="{py(y):.1f}" r="4" fill="{color}"/>' for x, y in pts]
-        ly = y0 + 18 + 20 * (k - 1)
-        o.append(f'<line x1="{x0+12}" x2="{x0+36}" y1="{ly-4}" y2="{ly-4}" stroke="{color}" stroke-width="2.5"/>')
-        o.append(f'<text x="{x0+42}" y="{ly}" fill="{color}" font-weight="600">{name}</text>')
-    o.append(f'<text x="{x0+w/2}" y="{y0+h+40}" text-anchor="middle">filaments</text></svg>')
-    return "\n".join(o)
+SCALING_TITLE = "Dense versus pFFT + GMRES wall clock against filament count"
+SCALING_DESC = ("Log-log plot from the scaling table in docs/benchmarks.md. The dense path grows faster than "
+                "the iterative path and stops where it does not fit in memory.")
+
+
+def scaling_svg(points, markers, layout=charts.WIDE, standalone=True, uid="scaling"):
+    """Log-log wall clock vs filaments; `markers` = [(x, label)] vertical guides.
+    Default is the standalone wide file build.py writes to assets/benchmarks/."""
+    return charts.scaling_figure(points, markers, SCALING_TITLE, SCALING_DESC, uid, layout, standalone)
 
 
 def note_html(text):
@@ -247,8 +241,8 @@ def benchmarks_body(md):
          f'<p>Quoted from {doc}, which is where every number on this page comes from.</p>']
 
     o.append('<h2>Scaling: dense vs pFFT + GMRES</h2>')
-    o.append(f'<figure><img src="/assets/benchmarks/scaling.svg" width="720" height="410" '
-             'alt="Log-log plot of wall clock against filament count for the dense and the pFFT plus GMRES paths">'
+    o.append('<figure class="chartfig">' + charts.both_layouts(
+                 lambda layout, uid: scaling_svg(pts, markers, layout, False, uid), "scaling") +
              '<figcaption>Wall clock of <code>assemble</code> + one-frequency <code>sweep</code>, single thread. '
              'The dense arm stops where its model memory no longer fits; the table is the data.</figcaption></figure>')
     o.append('<details><summary>Scaling table</summary>')

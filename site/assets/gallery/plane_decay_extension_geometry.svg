@@ -1,8 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 230" role="img" aria-labelledby="t" font-family="system-ui,sans-serif" font-size="11">
-<title id="t">Ground plane with a hole: top view of the conductors</title>
-<style>.cu{stroke:#a8400c;fill:none;stroke-linecap:square}.pl{fill:#a8400c;fill-opacity:.2;stroke:#a8400c;fill-rule:evenodd}.ct{fill:none;stroke:#525c69;stroke-dasharray:4 3}.pt{fill:#171c24}.tx{fill:#525c69}.sb{stroke:#525c69;fill:none}@media (prefers-color-scheme:dark){.cu{stroke:#f0935a}.pl{fill:#f0935a;stroke:#f0935a}.ct,.sb{stroke:#a3acb9}.pt{fill:#e6e9ee}.tx{fill:#a3acb9}}</style>
-<path class="pl" d="M26.7 200.0H333.3V16.0H26.7ZM42.0 62.0H72.7V31.3H42.0Z"/>
-<path class="ct" d="M118.7 138.7H241.3V77.3H118.7Z"/>
-<circle class="pt" cx="57.3" cy="169.3" r="3.5"/>
-<circle class="pt" cx="302.7" cy="46.7" r="3.5"/>
-<path class="sb" d="M16 218V222H77.3V218"/><text class="tx" x="83.3" y="222">2 mm · top view</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" class="chart geometry" role="img" aria-labelledby="g-plane_decay_extension-geo-t" aria-describedby="g-plane_decay_extension-geo-d" font-family="system-ui,sans-serif" font-size="11">
+<title id="g-plane_decay_extension-geo-t">Ground plane with a hole: top view of the conductors</title>
+<desc id="g-plane_decay_extension-geo-d">Top view (x-y) of the deck's conductors: copper traces, ground plane outline with holes, refined contact regions dashed, port nodes as dots.</desc>
+<style>.cu,.ct,.sb{fill:none}.cu{stroke-linecap:square}.pl{fill:#a8400c;fill-opacity:.2;fill-rule:evenodd}.ct{stroke-dasharray:4 3}.fr,.gr,.s1,.s2,.gd,.ln{fill:none}.fr,.gr,.gd{stroke-width:1}.s1,.s2,.ln{stroke-width:2.5;stroke-linejoin:round}.dt{stroke:none}.gd{stroke-dasharray:5 4}.b{font-weight:600}.tx{fill:#171c24}.mu{fill:#525c69}.fr{stroke:#6f7885}.gr{stroke:#d9dde3}.s1{stroke:#a8400c}.s2{stroke:#0b5cad}.f1{fill:#a8400c}.f2{fill:#0b5cad}.gd{stroke:#525c69}.cu{stroke:#a8400c}.pl{stroke:#a8400c}.ct{stroke:#525c69}.pt{fill:#171c24}.sb{stroke:#525c69}@media (prefers-color-scheme:dark){.pl{fill:#f0935a}.tx{fill:#e6e9ee}.mu{fill:#a3acb9}.fr{stroke:#7c8697}.gr{stroke:#2a313b}.s1{stroke:#f0935a}.s2{stroke:#7db8ff}.f1{fill:#f0935a}.f2{fill:#7db8ff}.gd{stroke:#a3acb9}.cu{stroke:#f0935a}.pl{stroke:#f0935a}.ct{stroke:#a3acb9}.pt{fill:#e6e9ee}.sb{stroke:#a3acb9}}</style>
+<path class="pl" d="M18.3 172.0H281.7V14.0H18.3ZM31.5 53.5H57.8V27.2H31.5Z"/>
+<path class="ct" d="M97.3 119.3H202.7V66.7H97.3Z"/>
+<circle class="pt" cx="44.7" cy="145.7" r="3.5"/>
+<circle class="pt" cx="255.3" cy="40.3" r="3.5"/>
+<path class="sb" d="M14 188V192H66.7V188"/><text class="mu" x="72.7" y="192">2 mm · top view</text>
+</svg>

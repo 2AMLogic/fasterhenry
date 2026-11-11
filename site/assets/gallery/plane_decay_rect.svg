@@ -1,38 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 470" role="img" aria-labelledby="t d" font-family="system-ui,sans-serif" font-size="13" fill="#2b313b">
-<title id="t">Ground plane with a hole: port 1 self-impedance, 1 MHz to 1 GHz</title>
-<desc id="d">Computed by fasterhenry. Resistance goes from 1.667 to 1.671 milliohms; inductance from 3.894 to 3.892 nanohenries.</desc>
-<rect width="720" height="470" fill="#ffffff"/>
-<rect x="90" y="34" width="594" height="170" fill="none" stroke="#c9ced6"/>
-<line x1="90" x2="684" y1="154.1" y2="154.1" stroke="#e6e9ee"/>
-<text x="82" y="158.1" text-anchor="end">1.6</text>
-<line x1="90" x2="684" y1="103.2" y2="103.2" stroke="#e6e9ee"/>
-<text x="82" y="107.2" text-anchor="end">1.7</text>
-<line x1="90" x2="684" y1="52.3" y2="52.3" stroke="#e6e9ee"/>
-<text x="82" y="56.3" text-anchor="end">1.8</text>
-<line x1="90.0" x2="90.0" y1="34" y2="204" stroke="#e6e9ee"/>
-<line x1="288.0" x2="288.0" y1="34" y2="204" stroke="#e6e9ee"/>
-<line x1="486.0" x2="486.0" y1="34" y2="204" stroke="#e6e9ee"/>
-<line x1="684.0" x2="684.0" y1="34" y2="204" stroke="#e6e9ee"/>
-<polyline points="90.0,120.0 109.8,119.3 129.6,118.8 149.4,118.6 169.2,118.4 189.0,118.2 208.8,118.2 228.6,118.1 248.4,118.1 268.2,118.1 288.0,118.1 307.8,118.1 327.6,118.0 347.4,118.0 367.2,118.0 387.0,118.0 406.8,118.0 426.6,118.0 446.4,118.0 466.2,118.0 486.0,118.0 505.8,118.0 525.6,118.0 545.4,118.0 565.2,118.0 585.0,118.0 604.8,118.0 624.6,118.0 644.4,118.0 664.2,118.0 684.0,118.0" fill="none" stroke="#b4400a" stroke-width="2.5" stroke-linejoin="round"/>
-<text x="32" y="119.0" text-anchor="middle" transform="rotate(-90 32 119.0)">R (mΩ)</text>
-<rect x="90" y="244" width="594" height="170" fill="none" stroke="#c9ced6"/>
-<line x1="90" x2="684" y1="393.0" y2="393.0" stroke="#e6e9ee"/>
-<text x="82" y="397.0" text-anchor="end">3.6</text>
-<line x1="90" x2="684" y1="349.3" y2="349.3" stroke="#e6e9ee"/>
-<text x="82" y="353.3" text-anchor="end">3.8</text>
-<line x1="90" x2="684" y1="305.6" y2="305.6" stroke="#e6e9ee"/>
-<text x="82" y="309.6" text-anchor="end">4</text>
-<line x1="90" x2="684" y1="262.0" y2="262.0" stroke="#e6e9ee"/>
-<text x="82" y="266.0" text-anchor="end">4.2</text>
-<line x1="90.0" x2="90.0" y1="244" y2="414" stroke="#e6e9ee"/>
-<line x1="288.0" x2="288.0" y1="244" y2="414" stroke="#e6e9ee"/>
-<line x1="486.0" x2="486.0" y1="244" y2="414" stroke="#e6e9ee"/>
-<line x1="684.0" x2="684.0" y1="244" y2="414" stroke="#e6e9ee"/>
-<polyline points="90.0,328.7 109.8,328.9 129.6,329.0 149.4,329.1 169.2,329.2 189.0,329.2 208.8,329.2 228.6,329.2 248.4,329.2 268.2,329.2 288.0,329.3 307.8,329.3 327.6,329.3 347.4,329.3 367.2,329.3 387.0,329.3 406.8,329.3 426.6,329.3 446.4,329.3 466.2,329.3 486.0,329.3 505.8,329.3 525.6,329.3 545.4,329.3 565.2,329.3 585.0,329.3 604.8,329.3 624.6,329.3 644.4,329.3 664.2,329.3 684.0,329.3" fill="none" stroke="#0b5cad" stroke-width="2.5" stroke-linejoin="round"/>
-<text x="32" y="329.0" text-anchor="middle" transform="rotate(-90 32 329.0)">L (nH)</text>
-<text x="90" y="22" font-weight="600">R(f)</text><text x="90" y="232" font-weight="600">L(f)</text>
-<text x="90.0" y="434" text-anchor="middle">1 MHz</text>
-<text x="288.0" y="434" text-anchor="middle">10 MHz</text>
-<text x="486.0" y="434" text-anchor="middle">100 MHz</text>
-<text x="684.0" y="434" text-anchor="middle">1 GHz</text>
-<text x="387.0" y="460" text-anchor="middle">frequency</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 437" class="chart wide" role="img" aria-labelledby="g-plane_decay_rect-t" aria-describedby="g-plane_decay_rect-d" font-family="system-ui,sans-serif" font-size="13">
+<title id="g-plane_decay_rect-t">Ground plane with a hole: port 1 self-impedance, 1 MHz to 1 GHz</title>
+<desc id="g-plane_decay_rect-d">Computed by fasterhenry. Resistance goes from 1.667 to 1.671 milliohms; inductance from 3.894 to 3.892 nanohenries.</desc>
+<style>.cu,.ct,.sb{fill:none}.cu{stroke-linecap:square}.pl{fill:#a8400c;fill-opacity:.2;fill-rule:evenodd}.ct{stroke-dasharray:4 3}.fr,.gr,.s1,.s2,.gd,.ln{fill:none}.fr,.gr,.gd{stroke-width:1}.s1,.s2,.ln{stroke-width:2.5;stroke-linejoin:round}.dt{stroke:none}.gd{stroke-dasharray:5 4}.b{font-weight:600}.tx{fill:#171c24}.mu{fill:#525c69}.fr{stroke:#6f7885}.gr{stroke:#d9dde3}.s1{stroke:#a8400c}.s2{stroke:#0b5cad}.f1{fill:#a8400c}.f2{fill:#0b5cad}.gd{stroke:#525c69}.cu{stroke:#a8400c}.pl{stroke:#a8400c}.ct{stroke:#525c69}.pt{fill:#171c24}.sb{stroke:#525c69}@media (prefers-color-scheme:dark){.pl{fill:#f0935a}.tx{fill:#e6e9ee}.mu{fill:#a3acb9}.fr{stroke:#7c8697}.gr{stroke:#2a313b}.s1{stroke:#f0935a}.s2{stroke:#7db8ff}.f1{fill:#f0935a}.f2{fill:#7db8ff}.gd{stroke:#a3acb9}.cu{stroke:#f0935a}.pl{stroke:#f0935a}.ct{stroke:#a3acb9}.pt{fill:#e6e9ee}.sb{stroke:#a3acb9}}</style>
+<text class="tx b" x="84" y="21">R, mΩ</text>
+<rect class="fr" x="84" y="29" width="600" height="170"/>
+<line class="gr" x1="84" x2="684" y1="149.1" y2="149.1"/>
+<text class="tx" x="78" y="153.3" text-anchor="end">1.6</text>
+<line class="gr" x1="84" x2="684" y1="98.2" y2="98.2"/>
+<text class="tx" x="78" y="102.4" text-anchor="end">1.7</text>
+<line class="gr" x1="84" x2="684" y1="47.3" y2="47.3"/>
+<text class="tx" x="78" y="51.5" text-anchor="end">1.8</text>
+<line class="gr" x1="84.0" x2="84.0" y1="29" y2="199"/>
+<line class="gr" x1="284.0" x2="284.0" y1="29" y2="199"/>
+<line class="gr" x1="484.0" x2="484.0" y1="29" y2="199"/>
+<line class="gr" x1="684.0" x2="684.0" y1="29" y2="199"/>
+<polyline class="s1" points="84.0,115.0 104.0,114.3 124.0,113.8 144.0,113.6 164.0,113.4 184.0,113.2 204.0,113.2 224.0,113.1 244.0,113.1 264.0,113.1 284.0,113.1 304.0,113.1 324.0,113.0 344.0,113.0 364.0,113.0 384.0,113.0 404.0,113.0 424.0,113.0 444.0,113.0 464.0,113.0 484.0,113.0 504.0,113.0 524.0,113.0 544.0,113.0 564.0,113.0 584.0,113.0 604.0,113.0 624.0,113.0 644.0,113.0 664.0,113.0 684.0,113.0"/>
+<text class="tx b" x="84" y="226">L, nH</text>
+<rect class="fr" x="84" y="234" width="600" height="170"/>
+<line class="gr" x1="84" x2="684" y1="383.0" y2="383.0"/>
+<text class="tx" x="78" y="387.1" text-anchor="end">3.6</text>
+<line class="gr" x1="84" x2="684" y1="339.3" y2="339.3"/>
+<text class="tx" x="78" y="343.5" text-anchor="end">3.8</text>
+<line class="gr" x1="84" x2="684" y1="295.6" y2="295.6"/>
+<text class="tx" x="78" y="299.8" text-anchor="end">4</text>
+<line class="gr" x1="84" x2="684" y1="252.0" y2="252.0"/>
+<text class="tx" x="78" y="256.2" text-anchor="end">4.2</text>
+<line class="gr" x1="84.0" x2="84.0" y1="234" y2="404"/>
+<line class="gr" x1="284.0" x2="284.0" y1="234" y2="404"/>
+<line class="gr" x1="484.0" x2="484.0" y1="234" y2="404"/>
+<line class="gr" x1="684.0" x2="684.0" y1="234" y2="404"/>
+<polyline class="s2" points="84.0,318.7 104.0,318.9 124.0,319.0 144.0,319.1 164.0,319.2 184.0,319.2 204.0,319.2 224.0,319.2 244.0,319.2 264.0,319.2 284.0,319.3 304.0,319.3 324.0,319.3 344.0,319.3 364.0,319.3 384.0,319.3 404.0,319.3 424.0,319.3 444.0,319.3 464.0,319.3 484.0,319.3 504.0,319.3 524.0,319.3 544.0,319.3 564.0,319.3 584.0,319.3 604.0,319.3 624.0,319.3 644.0,319.3 664.0,319.3 684.0,319.3"/>
+<text class="tx" x="84.0" y="423" text-anchor="middle">1 MHz</text>
+<text class="tx" x="284.0" y="423" text-anchor="middle">10 MHz</text>
+<text class="tx" x="484.0" y="423" text-anchor="middle">100 MHz</text>
+<text class="tx" x="684.0" y="423" text-anchor="middle">1 GHz</text>
+</svg>

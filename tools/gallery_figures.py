@@ -30,6 +30,10 @@ gallery.json under "machine".
 import argparse, json, math, os, platform, re, statistics, subprocess, sys, tempfile, time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "site"))
+import charts
+from charts import axis_range, nice_ticks, MIN_REL_SPAN   # noqa: F401  (re-exported for tests)
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = "fasterhenry-cli/tests/data"
 DECKS = ["spiral", "twobar", "plane_fasthenry", "plane_extension", "plane_decay_rect", "plane_decay_extension"]
@@ -179,11 +183,12 @@ def scale_bar_mm(span_mm):
     return max((m * mag for m in (1, 2, 5, 10) if m * mag <= span_mm / 3), default=mag)
 
 
-def geometry_svg(geom, title):
+def geometry_svg(geom, title, uid="g", standalone=True):
     """Top view (x-y) of the conductors; copper traces, plane outline with holes
     cut out, refined contact regions dashed, port nodes dotted. Light and dark
-    colours switch inside the file, since an <img> cannot see the page's CSS."""
-    W, HMAX, PAD = 360, 230, 16
+    colours come from the shared classes: inline they follow the site tokens,
+    standalone they switch with the OS scheme. 11 px text at 300 units wide."""
+    W, HMAX, PAD = 300, 200, 14
     xs, ys = [], []
     for pl in geom["planes"]:
         xs += [pl["rect"][0], pl["rect"][2]]
@@ -199,11 +204,9 @@ def geometry_svg(geom, title):
     px = lambda x: PAD + (x - x0) * sc + (W - 2 * PAD - bw * sc) / 2
     py = lambda y: PAD + (y1 - y) * sc
     rp = lambda r: f"M{px(r[0]):.1f} {py(r[1]):.1f}H{px(r[2]):.1f}V{py(r[3]):.1f}H{px(r[0]):.1f}Z"
-    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" role="img" aria-labelledby="t" font-family="system-ui,sans-serif" font-size="11">',
-         f'<title id="t">{title.replace("&", "&amp;")}: top view of the conductors</title>',
-         '<style>.cu{stroke:#a8400c;fill:none;stroke-linecap:square}.pl{fill:#a8400c;fill-opacity:.2;stroke:#a8400c;fill-rule:evenodd}'
-         '.ct{fill:none;stroke:#525c69;stroke-dasharray:4 3}.pt{fill:#171c24}.tx{fill:#525c69}.sb{stroke:#525c69;fill:none}'
-         '@media (prefers-color-scheme:dark){.cu{stroke:#f0935a}.pl{fill:#f0935a;stroke:#f0935a}.ct,.sb{stroke:#a3acb9}.pt{fill:#e6e9ee}.tx{fill:#a3acb9}}</style>']
+    o = charts.open_svg(W, H, uid, f"{title}: top view of the conductors",
+                        "Top view (x-y) of the deck's conductors: copper traces, ground plane outline with holes, "
+                        "refined contact regions dashed, port nodes as dots.", 11, "chart geometry", standalone)
     for pl in geom["planes"]:
         o.append(f'<path class="pl" d="{rp(pl["rect"])}{"".join(rp(h) for h in pl["holes"])}"/>')
         o += [f'<path class="ct" d="{rp(c)}"/>' for c in pl["contacts"]]
@@ -217,76 +220,26 @@ def geometry_svg(geom, title):
     bar = scale_bar_mm(bw)
     sx, sy = PAD, H - 8
     o.append(f'<path class="sb" d="M{sx} {sy-4}V{sy}H{sx+bar*sc:.1f}V{sy-4}"/>'
-             f'<text class="tx" x="{sx+bar*sc+6:.1f}" y="{sy}">{bar:g} mm · top view</text></svg>')
-    return "\n".join(o)
+             f'<text class="mu" x="{sx+bar*sc+6:.1f}" y="{sy}">{bar:g} mm · top view</text>')
+    return charts.close_svg(o)
 
 
-def nice_ticks(lo, hi, n=4):
-    """About n round tick values spanning [lo, hi] (hi > lo)."""
-    raw = (hi - lo) / n
-    mag = 10 ** math.floor(math.log10(raw))
-    step = next(m * mag for m in (1, 2, 2.5, 5, 10) if m * mag >= raw)
-    first = math.ceil(lo / step - 1e-9)
-    ticks = []
-    while first * step <= hi + step * 1e-9:
-        ticks.append(round(first * step, 12))
-        first += 1
-    return ticks
+def rl_title(e):
+    return f'{e["title"]}: port 1 self-impedance, 1 MHz to 1 GHz'
 
 
-MIN_REL_SPAN = 0.2   # the y-axis always spans at least 20% of the plotted value
-
-
-def axis_range(vals):
-    """Padded range of the data, widened to MIN_REL_SPAN of its magnitude so a
-    change of a fraction of a percent reads as the small change it is."""
-    lo, hi = min(vals), max(vals)
-    mag = max(abs(lo), abs(hi))
-    span = max((hi - lo) * 1.16, MIN_REL_SPAN * mag) or 1.0
-    mid = (lo + hi) / 2
-    return mid - span / 2, mid + span / 2
-
-
-def fmt_tick(v):
-    return f"{v:.4g}"
-
-
-def panel(x0, y0, w, h, fs, vals, label, color):
-    lo, hi = math.log10(fs[0]), math.log10(fs[-1])
-    ylo, yhi = axis_range(vals)
-    px = lambda f: x0 + (math.log10(f) - lo) / (hi - lo) * w
-    py = lambda v: y0 + h - (v - ylo) / (yhi - ylo) * h
-    o = [f'<rect x="{x0}" y="{y0}" width="{w}" height="{h}" fill="none" stroke="#c9ced6"/>']
-    for t in nice_ticks(ylo, yhi):
-        o.append(f'<line x1="{x0}" x2="{x0+w}" y1="{py(t):.1f}" y2="{py(t):.1f}" stroke="#e6e9ee"/>')
-        o.append(f'<text x="{x0-8}" y="{py(t)+4:.1f}" text-anchor="end">{fmt_tick(t)}</text>')
-    for d in range(math.ceil(lo), math.floor(hi) + 1):
-        o.append(f'<line x1="{px(10**d):.1f}" x2="{px(10**d):.1f}" y1="{y0}" y2="{y0+h}" stroke="#e6e9ee"/>')
-    pts = " ".join(f"{px(f):.1f},{py(v):.1f}" for f, v in zip(fs, vals))
-    o.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2.5" stroke-linejoin="round"/>')
-    o.append(f'<text x="{x0-58}" y="{y0+h/2}" text-anchor="middle" transform="rotate(-90 {x0-58} {y0+h/2})">{label}</text>')
-    return o, px
-
-
-def svg(e):
+def rl_desc(e):
     s = e["series"]
-    fs = [p["f_hz"] for p in s]
-    r = [p["r_ohm"] * 1e3 for p in s]   # mOhm
-    l = [p["l_h"] * 1e9 for p in s]     # nH
-    W, H, x0, w = 720, 470, 90, 594
-    title = f'{e["title"]}: port 1 self-impedance, 1 MHz to 1 GHz'
-    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" role="img" aria-labelledby="t d" font-family="system-ui,sans-serif" font-size="13" fill="#2b313b">',
-         f'<title id="t">{title}</title>'.replace("&", "&amp;"),
-         f'<desc id="d">Computed by fasterhenry. Resistance goes from {r[0]:.4g} to {r[-1]:.4g} milliohms; inductance from {l[0]:.4g} to {l[-1]:.4g} nanohenries.</desc>',
-         f'<rect width="{W}" height="{H}" fill="#ffffff"/>']
-    a, _ = panel(x0, 34, w, 170, fs, r, "R (mΩ)", "#b4400a")
-    b, px = panel(x0, 244, w, 170, fs, l, "L (nH)", "#0b5cad")
-    o += a + b
-    o.append(f'<text x="{x0}" y="22" font-weight="600">R(f)</text><text x="{x0}" y="232" font-weight="600">L(f)</text>')
-    for d, lab in zip(range(6, 10), ["1 MHz", "10 MHz", "100 MHz", "1 GHz"]):
-        o.append(f'<text x="{px(10**d):.1f}" y="434" text-anchor="middle">{lab}</text>')
-    o.append(f'<text x="{x0+w/2}" y="460" text-anchor="middle">frequency</text></svg>')
-    return "\n".join(o)
+    r, l = [p["r_ohm"] * 1e3 for p in s], [p["l_h"] * 1e9 for p in s]
+    return (f"Computed by fasterhenry. Resistance goes from {r[0]:.4g} to {r[-1]:.4g} milliohms; "
+            f"inductance from {l[0]:.4g} to {l[-1]:.4g} nanohenries.")
+
+
+def svg(e, layout=charts.WIDE, standalone=True, uid=None):
+    """R(f)/L(f) figure of an entry. Default: the standalone wide file; the site
+    inlines the compact layout with standalone=False (see render.gallery_body)."""
+    uid = uid or f'g-{e.get("id", "x")}'
+    return charts.rl_figure(e["series"], rl_title(e), rl_desc(e), uid, layout, standalone)
 
 
 def main():
@@ -313,7 +266,7 @@ def main():
         old.unlink()
     for e in entries:
         text = (ROOT / DATA / f'{e["id"]}.inp').read_text()
-        (OUT / e["geometry"]).write_text(geometry_svg(parse_geometry(text), e["title"]) + "\n")
+        (OUT / e["geometry"]).write_text(geometry_svg(parse_geometry(text), e["title"], f'g-{e["id"]}-geo') + "\n")
         if e["status"] == "ok":
             (OUT / f'{e["id"]}.svg').write_text(svg(e) + "\n")
         else:

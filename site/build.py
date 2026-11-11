@@ -6,7 +6,8 @@
 Pages are site/pages/*.html fragments carrying `<!-- title: ... -->` and
 `<!-- description: ... -->` headers; layout.html wraps them. `index.html`
 becomes /index.html, any other `name.html` becomes /name/index.html. The hero
-figure under site/assets/ is committed (regenerate: site/gen_hero.py).
+figure data under site/assets/ is committed (regenerate: site/gen_hero.py);
+charts are drawn by site/charts.py and inlined so they follow the page theme.
 
 NAV is the whole navigation. Pages that sibling issues will add are listed
 with ready=False: they render as plain text ("soon") until their fragment
@@ -29,6 +30,7 @@ from html import escape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gen_hero
 import render
 import tablehtml
 
@@ -250,7 +252,8 @@ def crate_version():
 def main():
     hero = json.loads((SITE / "assets/hero-spiral.json").read_text())
     subs = {"repo": REPO, "version": crate_version(), "hero_version": hero["fasterhenry_version"],
-            "hero_filaments": str(hero["filaments"]), "hero_command": escape(hero["command"])}
+            "hero_filaments": str(hero["filaments"]), "hero_command": escape(hero["command"]),
+            "hero_figure": gen_hero.inline_figure(hero)}
     # Gallery: committed output of tools/gallery_figures.py. Benchmarks: rendered
     # from docs/benchmarks.md, scaling plot drawn from its own table.
     subs["gallery_body"] = render.gallery_body(json.loads((SITE / "assets/gallery/gallery.json").read_text()))
