@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import render
+import tablehtml
 
 SITE = Path(__file__).resolve().parent
 ROOT = SITE.parent
@@ -178,15 +179,7 @@ def _blocks(lines, src, seen):
                 rows.append(_cells(lines[i]))
                 i += 1
 
-            def row(cells, tag):
-                tds = []
-                for k, c in enumerate(cells):
-                    a = f' style="text-align:{aligns[k]}"' if k < len(aligns) and aligns[k] else ""
-                    tds.append(f"<{tag}{a}>{inline(c, src)}</{tag}>")
-                return "<tr>" + "".join(tds) + "</tr>"
-
-            out.append('<div class="table-wrap"><table>\n<thead>' + row(head, "th") + "</thead>\n<tbody>\n"
-                       + "\n".join(row(r, "td") for r in rows) + "\n</tbody></table></div>")
+            out.append(tablehtml.render_table(head, rows, lambda c: inline(c, src), aligns))
             continue
         im = _ITEM.match(line)
         if im:
