@@ -257,7 +257,7 @@ class Benchmarks(unittest.TestCase):
                  "Accuracy against FastHenry", "How this was measured"]
         pos = [h.index(f"<h2>{t}") for t in order]
         self.assertEqual(pos, sorted(pos))
-        self.assertLess(h.index("<figure>"), h.index("<table>"))
+        self.assertLess(h.index("<figure"), h.index("<table>"))
         # the per-thread caveat sits right under the speed table
         self.assertRegex(h, r"</table></div>\n<p><strong>Per thread")
 
@@ -283,9 +283,9 @@ class Benchmarks(unittest.TestCase):
         self.assertEqual(self.render.compact(10), "10")
         W = int(re.search(r'viewBox="0 0 (\d+) (\d+)"', self.svg).group(1))
         H = int(re.search(r'viewBox="0 0 (\d+) (\d+)"', self.svg).group(2))
-        for x in re.findall(r'<text x="([\d.]+)" y="[\d.]+" text-anchor="middle">\d+k?</text>', self.svg):
+        for x in re.findall(r'<text class="tx" x="([\d.]+)" y="[\d.]+" text-anchor="middle">\d+k?</text>', self.svg):
             self.assertLess(float(x) + 20, W)
-        axis = re.search(r'<text x="[\d.]+" y="([\d.]+)" text-anchor="middle">filaments', self.svg)
+        axis = re.search(r'<text class="tx" x="[\d.]+" y="([\d.]+)" text-anchor="middle">filaments', self.svg)
         self.assertLess(float(axis.group(1)), H)
 
 
@@ -330,3 +330,65 @@ class Validation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Charts(unittest.TestCase):
+    """The shared chart module and the inline figures (issue #307)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import charts, gen_hero
+        cls.charts, cls.gen_hero = charts, gen_hero
+        cls.hero = __import__("json").loads((build.SITE / "assets/hero-spiral.json").read_text())
+
+    def test_series_colours_meet_3_to_1_on_the_background_in_both_themes(self):
+        P = self.charts.PALETTE
+        for i in (0, 1):
+            for k in ("s1", "s2"):
+                self.assertGreaterEqual(self.charts.contrast(P[k][i], P["bg"][i]), 3.0, (k, i))
+
+    def test_site_css_tokens_match_the_palette(self):
+        css = (build.SITE / "site.css").read_text()
+        P = self.charts.PALETTE
+        css = css.replace("--bg:#fff;", "--bg:#ffffff;")   # the palette spells it out
+        light, dark = css.split("@media (prefers-color-scheme:dark){:root{")
+        for key, var in (("fg", "fg"), ("muted", "muted"), ("frame", "frame"), ("grid", "line"),
+                         ("s1", "copper"), ("s2", "link"), ("bg", "bg")):
+            self.assertIn(f"--{var}:{P[key][0]};", light, key)
+            self.assertIn(f"--{var}:{P[key][1]};", dark, key)
+
+    def test_inline_has_no_background_or_style_and_standalone_has_both_schemes(self):
+        inline = self.gen_hero.figure(self.hero)
+        self.assertNotIn("<rect width=", inline)
+        self.assertNotIn("<style", inline)
+        self.assertNotIn("#ffffff", inline)
+        alone = self.gen_hero.figure(self.hero, standalone=True)
+        self.assertIn("prefers-color-scheme:dark", alone)
+        self.assertNotIn("<rect width=", alone)   # transparent: no white box on a dark page
+
+    def test_ids_are_unique_across_a_page_and_charts_are_named(self):
+        for page in ("index", "gallery", "benchmarks"):
+            html = (build.DIST / ("index.html" if page == "index" else f"{page}/index.html")).read_text()
+            ids = re.findall(r'\bid="([^"]+)"', html)
+            self.assertEqual(len(ids), len(set(ids)), page)
+            for svg in re.findall(r"<svg[^>]*class=\"chart[^>]*>", html):
+                self.assertIn("aria-labelledby=", svg)
+                self.assertIn("aria-describedby=", svg)
+
+    def test_units_are_in_panel_titles_not_a_rotated_label(self):
+        svg = self.gen_hero.figure(self.hero)
+        self.assertIn(">R, mΩ<", svg)
+        self.assertIn(">L, nH<", svg)
+        self.assertNotIn("rotate(", svg)
+
+    def test_compact_text_is_at_least_11px_at_phone_width(self):
+        # a 412 px phone gives a content column of about 330 px >= the 300 unit viewBox
+        self.assertGreaterEqual(self.charts.COMPACT["fs"] * 330 / self.charts.COMPACT["W"], 11)
+        svg = self.gen_hero.figure(self.hero, self.charts.COMPACT)
+        self.assertIn('font-size="11"', svg)
+        self.assertNotRegex(svg, r"font-size=\"(?:[0-9]|10)\"")
+
+    def test_compact_text_stays_inside_the_canvas(self):
+        svg = self.gen_hero.figure(self.hero, self.charts.COMPACT)
+        for x, anchor in re.findall(r'<text class="tx" x="([\d.]+)" y="[\d.]+" text-anchor="(\w+)"', svg):
+            self.assertLess(float(x), 300 - 18 + 1)

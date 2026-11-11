@@ -1,36 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 470" role="img" aria-labelledby="t d" font-family="system-ui,sans-serif" font-size="13" fill="#2b313b">
-<title id="t">Two parallel bars: port 1 self-impedance, 1 MHz to 1 GHz</title>
-<desc id="d">Computed by fasterhenry. Resistance goes from 12.39 to 15.26 milliohms; inductance from 4.26 to 4.192 nanohenries.</desc>
-<rect width="720" height="470" fill="#ffffff"/>
-<rect x="90" y="34" width="594" height="170" fill="none" stroke="#c9ced6"/>
-<line x1="90" x2="684" y1="161.0" y2="161.0" stroke="#e6e9ee"/>
-<text x="82" y="165.0" text-anchor="end">13</text>
-<line x1="90" x2="684" y1="109.9" y2="109.9" stroke="#e6e9ee"/>
-<text x="82" y="113.9" text-anchor="end">14</text>
-<line x1="90" x2="684" y1="58.9" y2="58.9" stroke="#e6e9ee"/>
-<text x="82" y="62.9" text-anchor="end">15</text>
-<line x1="90.0" x2="90.0" y1="34" y2="204" stroke="#e6e9ee"/>
-<line x1="288.0" x2="288.0" y1="34" y2="204" stroke="#e6e9ee"/>
-<line x1="486.0" x2="486.0" y1="34" y2="204" stroke="#e6e9ee"/>
-<line x1="684.0" x2="684.0" y1="34" y2="204" stroke="#e6e9ee"/>
-<polyline points="90.0,192.3 109.8,190.3 129.6,187.3 149.4,182.9 169.2,176.8 189.0,168.4 208.8,157.6 228.6,144.3 248.4,129.0 268.2,112.8 288.0,97.0 307.8,83.2 327.6,71.9 347.4,63.5 367.2,57.5 387.0,53.4 406.8,50.7 426.6,48.9 446.4,47.7 466.2,47.0 486.0,46.5 505.8,46.2 525.6,46.0 545.4,45.9 565.2,45.8 585.0,45.8 604.8,45.8 624.6,45.7 644.4,45.7 664.2,45.7 684.0,45.7" fill="none" stroke="#b4400a" stroke-width="2.5" stroke-linejoin="round"/>
-<text x="32" y="119.0" text-anchor="middle" transform="rotate(-90 32 119.0)">R (mΩ)</text>
-<rect x="90" y="244" width="594" height="170" fill="none" stroke="#c9ced6"/>
-<line x1="90" x2="684" y1="374.1" y2="374.1" stroke="#e6e9ee"/>
-<text x="82" y="378.1" text-anchor="end">4</text>
-<line x1="90" x2="684" y1="324.2" y2="324.2" stroke="#e6e9ee"/>
-<text x="82" y="328.2" text-anchor="end">4.25</text>
-<line x1="90" x2="684" y1="274.3" y2="274.3" stroke="#e6e9ee"/>
-<text x="82" y="278.3" text-anchor="end">4.5</text>
-<line x1="90.0" x2="90.0" y1="244" y2="414" stroke="#e6e9ee"/>
-<line x1="288.0" x2="288.0" y1="244" y2="414" stroke="#e6e9ee"/>
-<line x1="486.0" x2="486.0" y1="244" y2="414" stroke="#e6e9ee"/>
-<line x1="684.0" x2="684.0" y1="244" y2="414" stroke="#e6e9ee"/>
-<polyline points="90.0,322.2 109.8,322.5 129.6,322.8 149.4,323.3 169.2,324.0 189.0,324.9 208.8,326.0 228.6,327.3 248.4,328.7 268.2,330.1 288.0,331.5 307.8,332.6 327.6,333.6 347.4,334.3 367.2,334.8 387.0,335.1 406.8,335.4 426.6,335.5 446.4,335.6 466.2,335.7 486.0,335.7 505.8,335.7 525.6,335.7 545.4,335.8 565.2,335.8 585.0,335.8 604.8,335.8 624.6,335.8 644.4,335.8 664.2,335.8 684.0,335.8" fill="none" stroke="#0b5cad" stroke-width="2.5" stroke-linejoin="round"/>
-<text x="32" y="329.0" text-anchor="middle" transform="rotate(-90 32 329.0)">L (nH)</text>
-<text x="90" y="22" font-weight="600">R(f)</text><text x="90" y="232" font-weight="600">L(f)</text>
-<text x="90.0" y="434" text-anchor="middle">1 MHz</text>
-<text x="288.0" y="434" text-anchor="middle">10 MHz</text>
-<text x="486.0" y="434" text-anchor="middle">100 MHz</text>
-<text x="684.0" y="434" text-anchor="middle">1 GHz</text>
-<text x="387.0" y="460" text-anchor="middle">frequency</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 437" class="chart wide" role="img" aria-labelledby="g-twobar-t" aria-describedby="g-twobar-d" font-family="system-ui,sans-serif" font-size="13">
+<title id="g-twobar-t">Two parallel bars: port 1 self-impedance, 1 MHz to 1 GHz</title>
+<desc id="g-twobar-d">Computed by fasterhenry. Resistance goes from 12.39 to 15.26 milliohms; inductance from 4.26 to 4.192 nanohenries.</desc>
+<style>.cu,.ct,.sb{fill:none}.cu{stroke-linecap:square}.pl{fill:#a8400c;fill-opacity:.2;fill-rule:evenodd}.ct{stroke-dasharray:4 3}.fr,.gr,.s1,.s2,.gd,.ln{fill:none}.fr,.gr,.gd{stroke-width:1}.s1,.s2,.ln{stroke-width:2.5;stroke-linejoin:round}.dt{stroke:none}.gd{stroke-dasharray:5 4}.b{font-weight:600}.tx{fill:#171c24}.mu{fill:#525c69}.fr{stroke:#6f7885}.gr{stroke:#d9dde3}.s1{stroke:#a8400c}.s2{stroke:#0b5cad}.f1{fill:#a8400c}.f2{fill:#0b5cad}.gd{stroke:#525c69}.cu{stroke:#a8400c}.pl{stroke:#a8400c}.ct{stroke:#525c69}.pt{fill:#171c24}.sb{stroke:#525c69}@media (prefers-color-scheme:dark){.pl{fill:#f0935a}.tx{fill:#e6e9ee}.mu{fill:#a3acb9}.fr{stroke:#7c8697}.gr{stroke:#2a313b}.s1{stroke:#f0935a}.s2{stroke:#7db8ff}.f1{fill:#f0935a}.f2{fill:#7db8ff}.gd{stroke:#a3acb9}.cu{stroke:#f0935a}.pl{stroke:#f0935a}.ct{stroke:#a3acb9}.pt{fill:#e6e9ee}.sb{stroke:#a3acb9}}</style>
+<text class="tx b" x="84" y="21">R, mΩ</text>
+<rect class="fr" x="84" y="29" width="600" height="170"/>
+<line class="gr" x1="84" x2="684" y1="156.0" y2="156.0"/>
+<text class="tx" x="78" y="160.1" text-anchor="end">13</text>
+<line class="gr" x1="84" x2="684" y1="104.9" y2="104.9"/>
+<text class="tx" x="78" y="109.1" text-anchor="end">14</text>
+<line class="gr" x1="84" x2="684" y1="53.9" y2="53.9"/>
+<text class="tx" x="78" y="58.0" text-anchor="end">15</text>
+<line class="gr" x1="84.0" x2="84.0" y1="29" y2="199"/>
+<line class="gr" x1="284.0" x2="284.0" y1="29" y2="199"/>
+<line class="gr" x1="484.0" x2="484.0" y1="29" y2="199"/>
+<line class="gr" x1="684.0" x2="684.0" y1="29" y2="199"/>
+<polyline class="s1" points="84.0,187.3 104.0,185.3 124.0,182.3 144.0,177.9 164.0,171.8 184.0,163.4 204.0,152.6 224.0,139.3 244.0,124.0 264.0,107.8 284.0,92.0 304.0,78.2 324.0,66.9 344.0,58.5 364.0,52.5 384.0,48.4 404.0,45.7 424.0,43.9 444.0,42.7 464.0,42.0 484.0,41.5 504.0,41.2 524.0,41.0 544.0,40.9 564.0,40.8 584.0,40.8 604.0,40.8 624.0,40.7 644.0,40.7 664.0,40.7 684.0,40.7"/>
+<text class="tx b" x="84" y="226">L, nH</text>
+<rect class="fr" x="84" y="234" width="600" height="170"/>
+<line class="gr" x1="84" x2="684" y1="364.1" y2="364.1"/>
+<text class="tx" x="78" y="368.2" text-anchor="end">4</text>
+<line class="gr" x1="84" x2="684" y1="314.2" y2="314.2"/>
+<text class="tx" x="78" y="318.3" text-anchor="end">4.25</text>
+<line class="gr" x1="84" x2="684" y1="264.3" y2="264.3"/>
+<text class="tx" x="78" y="268.5" text-anchor="end">4.5</text>
+<line class="gr" x1="84.0" x2="84.0" y1="234" y2="404"/>
+<line class="gr" x1="284.0" x2="284.0" y1="234" y2="404"/>
+<line class="gr" x1="484.0" x2="484.0" y1="234" y2="404"/>
+<line class="gr" x1="684.0" x2="684.0" y1="234" y2="404"/>
+<polyline class="s2" points="84.0,312.2 104.0,312.5 124.0,312.8 144.0,313.3 164.0,314.0 184.0,314.9 204.0,316.0 224.0,317.3 244.0,318.7 264.0,320.1 284.0,321.5 304.0,322.6 324.0,323.6 344.0,324.3 364.0,324.8 384.0,325.1 404.0,325.4 424.0,325.5 444.0,325.6 464.0,325.7 484.0,325.7 504.0,325.7 524.0,325.7 544.0,325.8 564.0,325.8 584.0,325.8 604.0,325.8 624.0,325.8 644.0,325.8 664.0,325.8 684.0,325.8"/>
+<text class="tx" x="84.0" y="423" text-anchor="middle">1 MHz</text>
+<text class="tx" x="284.0" y="423" text-anchor="middle">10 MHz</text>
+<text class="tx" x="484.0" y="423" text-anchor="middle">100 MHz</text>
+<text class="tx" x="684.0" y="423" text-anchor="middle">1 GHz</text>
+</svg>

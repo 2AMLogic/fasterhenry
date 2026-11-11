@@ -101,7 +101,7 @@ class GalleryPageTests(unittest.TestCase):
     machine = {"cpu_count": 2, "platform": "p", "runs_per_deck": 3}
 
     def ok(self, id="a", **kw):
-        e = {"id": id, "title": "A", "summary": "About a.", "geometry": f"{id}_geometry.svg", "deck": f"d/{id}.inp",
+        e = {"id": id, "title": "A", "summary": "About a.", "geometry": f"{id}_geometry.svg", "deck": "fasterhenry-cli/tests/data/spiral.inp",
              "command": f"fasterhenry d/{id}.inp", "status": "ok", "wall_time_s": 0.0123, "counts": {"filaments": 5},
              "ports": 1, "fasterhenry_version": "0.2.0", "overlay": None,
              "series": [{"f_hz": 1e6, "r_ohm": 0.05, "l_h": 1e-8}, {"f_hz": 1e9, "r_ohm": 0.06, "l_h": 9e-9}]}
@@ -109,7 +109,7 @@ class GalleryPageTests(unittest.TestCase):
         return e
 
     def test_failed_deck_is_reported_and_has_no_plot(self) -> None:
-        e = {"id": "bad", "title": "Bad", "summary": "", "geometry": "bad_geometry.svg", "deck": "d/bad.inp",
+        e = {"id": "bad", "title": "Bad", "summary": "", "geometry": "bad_geometry.svg", "deck": "fasterhenry-cli/tests/data/spiral.inp",
              "command": "c", "status": "failed", "error": "parse error <x>"}
         html = render.gallery_body({"machine": self.machine, "entries": [e]})
         self.assertIn("did not run", html)
@@ -118,8 +118,10 @@ class GalleryPageTests(unittest.TestCase):
 
     def test_card_has_title_summary_result_plot_and_closed_details(self) -> None:
         html = render.gallery_body({"machine": self.machine, "entries": [self.ok()]})
-        self.assertIn("/assets/gallery/a.svg", html)
-        self.assertIn("/assets/gallery/a_geometry.svg", html)
+        self.assertIn("/assets/gallery/a.svg", html)             # linked as a standalone download
+        self.assertIn('<svg xmlns="http://www.w3.org/2000/svg" viewBox', html)   # and drawn inline
+        self.assertNotIn("<img", html)
+        self.assertIn('id="g-a-t"', html)
         self.assertIn("12.3&nbsp;ms", html)
         self.assertIn("About a.", html)
         self.assertIn("R 50 to 60&nbsp;m&Omega; (+20%)", html)    # computed from the series
@@ -135,7 +137,7 @@ class GalleryPageTests(unittest.TestCase):
         html = render.gallery_body({"machine": self.machine, "entries": [self.ok(), v]})
         self.assertEqual(html.count('class="card"'), 1)
         self.assertIn("other syntax", html)
-        self.assertIn("d/b.inp", html)
+        self.assertIn("fasterhenry d/b.inp", html)
 
     def test_pct_precision(self) -> None:
         self.assertEqual(render.pct(1.548, 1.5519), "+0.25%")

@@ -1,11 +1,11 @@
 :root{color-scheme:light dark;
---bg:#fff;--surface:#f4f5f7;--fg:#171c24;--muted:#525c69;--line:#d9dde3;--link:#0b5cad;--copper:#a8400c;--shade:rgba(0,0,0,.22);
+--bg:#fff;--surface:#f4f5f7;--fg:#171c24;--muted:#525c69;--line:#d9dde3;--link:#0b5cad;--copper:#a8400c;--frame:#6f7885;--shade:rgba(0,0,0,.22);
 --font:system-ui,-apple-system,"Segoe UI",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;
 --fs-0:.875rem;--fs-1:1rem;--fs-2:1.0625rem;--fs-3:1.25rem;--fs-4:1.6rem;--fs-5:2.25rem;
 --s1:.25rem;--s2:.5rem;--s3:.75rem;--s4:1rem;--s5:1.5rem;--s6:2rem;--s8:3rem;--s12:4.5rem;
 --b-supported-bg:#e0f2e4;--b-supported-fg:#11471f;--b-extended-bg:#e0ecfa;--b-extended-fg:#0f3a70;--b-differs-bg:#fcefcf;--b-differs-fg:#63380a;--b-not-supported-bg:#fbe3df;--b-not-supported-fg:#80190d;--b-error-bg:#f0e3f4;--b-error-fg:#55206a;--b-neutral-bg:#e8eaee;--b-neutral-fg:#2f3742;
 --w-page:72rem;--w-prose:46rem;--radius:6px;--tap:2.75rem}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--surface:#181d25;--fg:#e6e9ee;--muted:#a3acb9;--line:#2a313b;--link:#7db8ff;--copper:#f0935a;--shade:rgba(0,0,0,.6);--b-supported-bg:#16301f;--b-supported-fg:#abe8bb;--b-extended-bg:#12263f;--b-extended-fg:#acd0f8;--b-differs-bg:#3a2c0a;--b-differs-fg:#f4d58f;--b-not-supported-bg:#3d1a15;--b-not-supported-fg:#f7b9af;--b-error-bg:#2f1c38;--b-error-fg:#e0b9ee;--b-neutral-bg:#252c36;--b-neutral-fg:#c5ccd6}}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--surface:#181d25;--fg:#e6e9ee;--muted:#a3acb9;--line:#2a313b;--link:#7db8ff;--copper:#f0935a;--frame:#7c8697;--shade:rgba(0,0,0,.6);--b-supported-bg:#16301f;--b-supported-fg:#abe8bb;--b-extended-bg:#12263f;--b-extended-fg:#acd0f8;--b-differs-bg:#3a2c0a;--b-differs-fg:#f4d58f;--b-not-supported-bg:#3d1a15;--b-not-supported-fg:#f7b9af;--b-error-bg:#2f1c38;--b-error-fg:#e0b9ee;--b-neutral-bg:#252c36;--b-neutral-fg:#c5ccd6}}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:flex;flex-direction:column;font:var(--fs-2)/1.6 var(--font);color:var(--fg);background:var(--bg)}
 main{flex:1}
@@ -128,3 +128,20 @@ main ul.cards{max-width:none;list-style:none;padding:0;margin:var(--s5) 0;displa
 .card .result{font-size:var(--fs-0)}.card .stats{font-size:var(--fs-0);color:var(--muted)}
 .card details{margin-top:auto;font-size:var(--fs-0)}.card summary{min-height:var(--tap);display:flex;align-items:center;cursor:pointer}
 .card details p{margin:var(--s2) 0}
+
+/* charts: inline SVG from site/charts.py, coloured by the tokens above (site/charts.py PALETTE holds the same values for standalone files) */
+svg.chart{display:block;width:100%;height:auto;overflow:visible}
+svg.chart .tx{fill:var(--fg)}svg.chart .mu{fill:var(--muted)}svg.chart .b{font-weight:600}
+svg.chart .fr{fill:none;stroke:var(--frame)}svg.chart .gr{fill:none;stroke:var(--line)}svg.chart .gd{fill:none;stroke:var(--muted);stroke-dasharray:5 4}
+svg.chart .s1,svg.chart .s2{fill:none;stroke-width:2.5;stroke-linejoin:round}
+svg.chart .s1{stroke:var(--copper)}svg.chart .s2{stroke:var(--link)}
+svg.chart .dt{stroke:none}svg.chart .f1{fill:var(--copper)}svg.chart .f2{fill:var(--link)}
+svg.chart .cu{fill:none;stroke:var(--copper);stroke-linecap:square}
+svg.chart .pl{fill:var(--copper);fill-opacity:.2;stroke:var(--copper);fill-rule:evenodd}
+svg.chart .ct{fill:none;stroke:var(--muted);stroke-dasharray:4 3}svg.chart .sb{fill:none;stroke:var(--muted)}
+svg.chart .pt{fill:var(--fg)}
+.chartfig{margin:var(--s5) 0;max-width:56rem}
+.card .fig{min-width:0}
+/* full-width figures draw twice (wide, compact); show the one whose text stays readable */
+.chartfig svg.wide{display:none}.chartfig svg.compact{max-width:30rem}
+@media (min-width:48rem){.chartfig svg.wide{display:block}.chartfig svg.compact{display:none}}

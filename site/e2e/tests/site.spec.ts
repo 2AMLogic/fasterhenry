@@ -54,6 +54,22 @@ for (const p of PAGES) {
       }
     });
 
+    test("every visible inline chart has an accessible name and description", async ({ page }) => {
+      await page.goto(p.path, { waitUntil: "load" });
+      const charts = page.locator("svg.chart:visible");
+      for (const svg of await charts.all()) {
+        const [name, desc] = await svg.evaluate((el) => {
+          const text = (attr: string) => (el.getAttribute(attr) ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "").join(" ").trim();
+          return [text("aria-labelledby"), text("aria-describedby")];
+        });
+        expect(name.length, "chart has no accessible name").toBeGreaterThan(10);
+        expect(desc.length, "chart has no description").toBeGreaterThan(10);
+        await expect(svg).toHaveAttribute("role", "img");
+      }
+      const ids = await page.locator("[id]").evaluateAll((els) => els.map((e) => e.id));
+      expect(new Set(ids).size, "duplicate ids on the page").toBe(ids.length);
+    });
+
     test("does not scroll sideways", async ({ page }) => {
       await page.goto(p.path, { waitUntil: "load" });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -175,15 +191,21 @@ test("the skip link is the first tab stop and moves to the main content", async 
 
 test("the landing page shows the hero figure, its data and the install line", async ({ page, request }) => {
   await page.goto("/");
-  await expect(page.locator('img[src="/assets/hero-spiral.svg"]')).toBeVisible();
+  const hero = page.locator("figure svg.chart:visible");
+  await expect(hero).toHaveCount(1);
+  await expect(hero).toBeVisible();
+  await expect(hero.locator("title")).toContainText("2-turn square spiral");
   await expect(page.locator("pre", { hasText: "cargo install fasterhenry-cli" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Repository" })).toHaveAttribute("href", "https://github.com/2AMLogic/fasterhenry");
+  const standalone = await request.get("/assets/hero-spiral.svg");   // still published for the README and sharing
+  expect(standalone.status()).toBe(200);
+  expect(await standalone.text()).toContain("prefers-color-scheme:dark");
   const data = await request.get("/assets/hero-spiral.json");
   expect(data.status()).toBe(200);
-  const hero = await data.json();
+  const heroData = await data.json();
   // the caption quotes the version and command the committed data was made with
-  await expect(page.locator("figcaption")).toContainText(hero.fasterhenry_version);
-  await expect(page.locator("figcaption")).toContainText(hero.command);
+  await expect(page.locator("figcaption")).toContainText(heroData.fasterhenry_version);
+  await expect(page.locator("figcaption")).toContainText(heroData.command);
 });
 
 test("the gallery is a card grid with one titled card per committed entry, visible near the top", async ({ page, request }, testInfo) => {
@@ -200,8 +222,9 @@ test("the gallery is a card grid with one titled card per committed entry, visib
     expect(title).toBe(cardEntries[i].title);
     expect(title).not.toMatch(/^[a-z0-9_]+$/);
     expect(title).not.toBe(cardEntries[i].id);
-    await expect(cards.nth(i).locator(`img[src="/assets/gallery/${cardEntries[i].id}.svg"]`)).toHaveCount(1);
-    await expect(cards.nth(i).locator(`img[src="/assets/gallery/${cardEntries[i].geometry}"]`)).toHaveCount(1);
+    await expect(cards.nth(i).locator("svg.chart.compact")).toHaveCount(1);
+    await expect(cards.nth(i).locator("svg.chart.geometry")).toHaveCount(1);
+    await expect(cards.nth(i).locator(`a[href="/assets/gallery/${cardEntries[i].id}.svg"]`)).toHaveCount(1);
     await expect(cards.nth(i).locator("details")).not.toHaveAttribute("open", /.*/);
   }
   // the machine string and methodology live at the foot, not the head
@@ -223,12 +246,13 @@ test("the gallery is a card grid with one titled card per committed entry, visib
 
 test("the benchmarks page draws the scaling plot", async ({ page }) => {
   await page.goto("/benchmarks/");
-  await expect(page.locator('img[src="/assets/benchmarks/scaling.svg"]')).toBeVisible();
+  await expect(page.locator("figure svg.chart:visible")).toHaveCount(1);
+  await expect(page.locator("figure svg.chart:visible")).toBeVisible();
 });
 
 test("the benchmarks page leads with the chart, shows accuracy, and has no placeholder", async ({ page }) => {
   await page.goto("/benchmarks/");
-  const chart = await page.locator('img[src="/assets/benchmarks/scaling.svg"]').boundingBox();
+  const chart = await page.locator("figure svg.chart:visible").boundingBox();
   const firstTable = await page.locator("table").first().boundingBox();
   expect(chart!.y).toBeLessThan(firstTable!.y);
   await expect(page.locator("table", { hasText: "relative difference" })).toHaveCount(1);
@@ -361,6 +385,57 @@ test("follows the reader's dark colour scheme", async ({ page }) => {
   expect(await background()).toBe("rgb(255, 255, 255)");
   await page.emulateMedia({ colorScheme: "dark" });
   expect(await background()).not.toBe("rgb(255, 255, 255)");
+});
+
+test("charts follow the dark scheme: no white box, and the series stroke changes", async ({ page }) => {
+  const probe = () => page.evaluate(() => {
+    const svg = Array.from(document.querySelectorAll("figure svg.chart")).find((e) => getComputedStyle(e).display !== "none")!;
+    const series = svg.querySelector("polyline.s1")!;
+    const rgb = (c: string) => c.match(/\d+/g)!.slice(0, 3).map(Number);
+    // the chart paints no background of its own: walk up to the first opaque one
+    let bg = "rgba(0, 0, 0, 0)";
+    for (let el: Element | null = svg; el; el = el.parentElement) {
+      const c = getComputedStyle(el).backgroundColor;
+      if (c !== "rgba(0, 0, 0, 0)" && c !== "transparent") { bg = c; break; }
+    }
+    return { stroke: getComputedStyle(series).stroke, bg, ownRects: Array.from(svg.querySelectorAll(":scope > rect")).filter((r) => getComputedStyle(r).fill !== "none").length };
+  });
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/");
+  const light = await probe();
+  await page.emulateMedia({ colorScheme: "dark" });
+  const dark = await probe();
+  expect(dark.ownRects, "a filled background rect would paint a white box (the unfilled .fr panel frames are fine)").toBe(0);
+  expect(dark.bg).not.toBe("rgb(255, 255, 255)");
+  expect(dark.stroke).not.toBe(light.stroke);
+  // series stroke against the chart background: at least 3:1 in both schemes
+  const lum = (c: string) => {
+    const [r, g, b] = (c.match(/\d+/g) ?? []).slice(0, 3).map((v) => { const x = Number(v) / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  for (const m of [light, dark]) {
+    const [hi, lo] = [lum(m.stroke), lum(m.bg)].sort((a, b) => b - a);
+    expect((hi + 0.05) / (lo + 0.05)).toBeGreaterThanOrEqual(3);
+  }
+});
+
+test("chart text is at least 11px as drawn on the phone project", async ({ page }, info) => {
+  test.skip(info.project.name !== "mobile", "phone project only");
+  for (const path of ["/", "/gallery/", "/benchmarks/"]) {
+    await page.goto(path);
+    const small = await page.evaluate(() => {
+      const bad: string[] = [];
+      for (const t of Array.from(document.querySelectorAll("svg.chart text"))) {
+        const svg = t.ownerSVGElement!;
+        if (getComputedStyle(svg).display === "none") continue;
+        const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width;
+        const px = parseFloat(getComputedStyle(t).fontSize) * scale;
+        if (px < 10.95) bad.push(`${t.textContent}: ${px.toFixed(1)}px`);
+      }
+      return bad;
+    });
+    expect(small, `${path}: chart text under 11px`).toEqual([]);
+  }
 });
 
 test("every page has exactly one h1 and it is the first heading in main", async ({ page }) => {

@@ -2,8 +2,8 @@
 <!-- description: A clean-room, MIT-licensed Rust PEEC resistance and inductance extractor for 3-D conductors. FastHenry's problem class, none of its code. -->
 <h1>fasterhenry</h1>
 <p class="lede">A clean-room, MIT-licensed Rust PEEC R/L extractor for 3-D conductors: FastHenry's problem class, none of its code.</p>
-<figure>
-<img src="/assets/hero-spiral.svg" width="720" height="470" alt="Two line charts of a 2-turn square spiral from 1 MHz to 1 GHz: resistance rises from about 49 to 59 milliohms and inductance falls slightly from about 14.7 to 14.4 nanohenries.">
+<figure class="chartfig">
+{{hero_figure}}
 <figcaption>R(f) and L(f) of the 2-turn square spiral deck <a href="{{repo}}/blob/main/fasterhenry-cli/tests/data/spiral.inp"><code>spiral.inp</code></a> (8 segments of 0.2 mm × 35 µm copper, {{hero_filaments}} filaments), fasterhenry {{hero_version}}, 1 MHz to 1 GHz at 10 points per decade. Produced by <code>{{hero_command}}</code> (<a href="{{repo}}/blob/main/site/gen_hero.py"><code>site/gen_hero.py</code></a> regenerates this figure; <a href="/assets/hero-spiral.json">data</a>). This curve is fasterhenry only. Its agreement with FastHenry on this deck, 7.3e-4 relative at 1 MHz and 4.5e-3 at 10 MHz, is recorded in <a href="{{repo}}/blob/main/docs/benchmarks.md">docs/benchmarks.md</a>; FastHenry's own curves are not committed, so none are drawn.</figcaption>
 </figure>
 <h2>Install</h2>
