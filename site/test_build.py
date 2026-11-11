@@ -223,5 +223,44 @@ class Benchmarks(unittest.TestCase):
         self.assertLess(float(axis.group(1)), H)
 
 
+class Validation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import render
+        cls.render = render
+        cls.doc = (build.SITE.parent / "docs/validation.md").read_text()
+        cls.bench = (build.SITE.parent / "docs/benchmarks.md").read_text()
+        cls.html = render.validation_body(cls.doc, cls.bench, build.render_markdown)
+
+    def test_summary_comes_first_with_values_from_the_docs(self):
+        h = self.html
+        self.assertLess(h.index("What was checked"), h.index("<h2 id="))
+        rows = self.render.validation_summary(self.doc, self.bench)
+        self.assertGreaterEqual(len(rows), 5)
+        for r in rows:
+            self.assertTrue(all(r), r)
+        self.assertIn("4.97 %", h)
+        self.assertIn("5.5 %", h)
+
+    def test_maintainer_material_is_not_rendered(self):
+        for s in ("<pre", "How CI asserts", "Margin is thin", "36162393794", "venv", "Regenerate everything"):
+            self.assertNotIn(s, self.html)
+
+    def test_issue_tags_are_dropped_from_headings_and_refs_are_links(self):
+        for hd in re.findall(r"<h[23][^>]*>.*?</h[23]>", self.html):
+            self.assertNotIn("issue #", hd)
+        self.assertNotRegex(re.sub(r"<a [^>]*>.*?</a>|<code>.*?</code>", "", self.html), r"#\d+")
+
+    def test_missing_summary_value_fails_the_build(self):
+        with self.assertRaises(KeyError):
+            self.render.validation_summary(self.doc.replace("| L vs Greenhouse |", "| L vs Gone |"), self.bench)
+        with self.assertRaises(KeyError):
+            self.render.validation_summary(self.doc, self.bench.replace("| spiral |", "| coil |"))
+
+    def test_dropped_block_that_moved_fails_the_build(self):
+        with self.assertRaises(KeyError):
+            self.render.validation_body(self.doc.replace("**Margin is thin", "**Margin"), self.bench, build.render_markdown)
+
+
 if __name__ == "__main__":
     unittest.main()

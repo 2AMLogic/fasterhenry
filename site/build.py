@@ -324,6 +324,8 @@ def main():
     # from docs/benchmarks.md, scaling plot drawn from its own table.
     subs["gallery_body"] = render.gallery_body(json.loads((SITE / "assets/gallery/gallery.json").read_text()))
     subs["benchmarks_body"], scaling_svg = render.benchmarks_body((SITE.parent / "docs/benchmarks.md").read_text())
+    subs["validation_body"] = render.validation_body((ROOT / "docs/validation.md").read_text(),
+                                                     (ROOT / "docs/benchmarks.md").read_text(), render_markdown)
     pages = {("" if p.stem == "index" else p.stem): p for p in sorted((SITE / "pages").glob("*.html"))}
     layout = (SITE / "layout.html").read_text()
     subs["page_list"] = page_list_html(set(pages))
@@ -333,9 +335,9 @@ def main():
     for slug, path in pages.items():
         meta, body = parse(path)
         out = layout
-        # {{body}} placeholders (gallery, benchmarks, page_list) are expanded first so
+        # {{body}} placeholders (gallery, benchmarks, validation, page_list) are expanded first so
         # the contents list sees every heading on the final page
-        body = re.sub(r"\{\{(page_list|gallery_body|benchmarks_body)\}\}", lambda m: subs[m.group(1)], body)
+        body = re.sub(r"\{\{(page_list|gallery_body|benchmarks_body|validation_body)\}\}", lambda m: subs[m.group(1)], body)
         body, has_toc = add_toc(body)
         after = "" if slug == "404" else source_html(meta) + next_html(slug, set(pages))
         fill = {**subs, "title": escape(meta["title"]), "description": escape(meta["description"], quote=True),

@@ -216,6 +216,24 @@ test("the doc-derived pages render their tables", async ({ page }) => {
   }
 });
 
+test("validation opens with the summary table, before any code block", async ({ page }) => {
+  await page.goto("/validation/");
+  const first = page.locator("table").first();
+  await expect(first).toBeVisible();
+  await expect(page.locator("#what-was-checked table").first()).toHaveCount(1);
+  expect(await first.evaluate((t) => !!t.closest("#what-was-checked"))).toBe(true);
+  expect(await first.locator("tbody tr").count()).toBeGreaterThanOrEqual(5);
+  const preAbove = await page.evaluate(() => {
+    const t = document.querySelector("table")!;
+    return Array.from(document.querySelectorAll("pre")).filter(
+      (p) => t.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_PRECEDING).length;
+  });
+  expect(preAbove).toBe(0);
+  const box = await first.boundingBox();
+  const vp = page.viewportSize()!;
+  if (vp.width >= 1200) expect(box!.y).toBeLessThan(900);
+});
+
 test("no table cell breaks a word or number mid-token, and tables scroll inside their wrapper", async ({ page }) => {
   for (const path of ["/benchmarks/", "/validation/", "/fasthenry-users/"]) {
     await page.goto(path);
