@@ -3,7 +3,7 @@ import re, subprocess, sys, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build
+import build, tablehtml
 
 SRC = "docs/validation.md"
 
@@ -26,7 +26,21 @@ class Render(unittest.TestCase):
         h = md("| a | b |\n|---|--:|\n| `x\\|y` | `|t|` |\n")
         self.assertIn("<th>a</th>", h)
         self.assertIn('<th style="text-align:right">b</th>', h)
-        self.assertIn("<td><code>x|y</code></td><td style=\"text-align:right\"><code>|t|</code></td>", h)
+        self.assertIn("<td><code><span class=\"tok\">x|y</span></code></td><td style=\"text-align:right\"><code><span class=\"tok\">|t|</span></code></td>", h)
+
+    def test_tables_use_one_wrapper_and_classify_columns(self):
+        h = md("| k | n | note |\n|---|---|---|\n| a | 1 000 | " + "x" * 90 + " |\n| b | 2.5 ms | y |\n| c | — | y |\n")
+        self.assertIn('<div class="tablewrap" role="region" tabindex="0" aria-label="Table: k, n, note">', h)
+        self.assertIn('<th class="num">n</th>', h)
+        self.assertIn('<td class="num">1 000</td>', h)
+        self.assertIn('<td class="num na">—</td>', h)
+        self.assertIn('<th class="prose">note</th>', h)
+        self.assertNotIn("table-wrap", h)
+
+    def test_wide_only_without_prose_and_six_columns(self):
+        six = "| a | b | c | d | e | f |\n|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 |\n"
+        self.assertIn('class="tablewrap wide"', md(six))
+        self.assertNotIn(" wide", md("| a | b |\n|---|---|\n| 1 | 2 |\n"))
 
     def test_lists_with_continuation_and_nested_code(self):
         h = md("- one\n  more\n- two\n\n1. a\n\n   ```\n   x\n   ```\n2. b\n")
@@ -48,6 +62,14 @@ class Render(unittest.TestCase):
     def test_broken_relative_link_fails_the_build(self):
         with self.assertRaises(SystemExit):
             md("[x](no-such-file.md)")
+
+
+class Classify(unittest.TestCase):
+    def test_numeric_forms(self):
+        for c in ("0.63746 nH", "19\u202f600", "2 497 MB", "<0.001 %", "−0.46 / +0.39", "~250", "1.7e-2", "0.5 pp (~10 %)", "**0.84**", "—"):
+            self.assertTrue(tablehtml.is_numeric(c) or tablehtml.is_empty(c), c)
+        for c in ("spiral", "Supported", "t/δ = 0.3", "graded(36, 10, 1.2)"):
+            self.assertFalse(tablehtml.is_numeric(c), c)
 
 
 class Build(unittest.TestCase):

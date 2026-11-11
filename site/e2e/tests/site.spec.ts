@@ -142,6 +142,47 @@ test("the doc-derived pages render their tables", async ({ page }) => {
   }
 });
 
+test("no table cell breaks a word or number mid-token, and tables scroll inside their wrapper", async ({ page }) => {
+  for (const path of ["/benchmarks/", "/validation/", "/fasthenry-users/"]) {
+    await page.goto(path);
+    const result = await page.evaluate(() => {
+      const broken: string[] = [];
+      // table cells stretch to the row height, so measure the text itself
+      const lines = (el: Element) => {
+        const r = document.createRange();
+        r.selectNodeContents(el);
+        const cs = getComputedStyle(el);
+        const lh = cs.lineHeight === "normal" ? parseFloat(cs.fontSize) * 1.2 : parseFloat(cs.lineHeight);
+        return Math.round(r.getBoundingClientRect().height / lh);
+      };
+      for (const cell of Array.from(document.querySelectorAll("th, td"))) {
+        // a token (split on plain spaces only, so "19 600" is one) must sit on one line
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          for (const m of (n.textContent ?? "").matchAll(/[^ ]+/g)) {
+            const r = document.createRange();
+            r.setStart(n, m.index!);
+            r.setEnd(n, m.index! + m[0].length);
+            const wrapped = new Set(Array.from(r.getClientRects()).map((q) => Math.round(q.top))).size > 1;
+            // plain words may wrap after a hyphen ("line-numbered"); identifiers in <code> may not
+            const hyphenated = m[0].includes("-") && !n.parentElement?.closest("code");
+            if (wrapped && !hyphenated) broken.push(m[0]);
+          }
+        }
+        if (cell.tagName === "TH" && lines(cell) > 2) broken.push(`th over two lines: ${cell.textContent}`);
+        if (cell.classList.contains("num") && lines(cell) > 1) broken.push(`num cell over one line: ${cell.textContent}`);
+      }
+      const wraps = Array.from(document.querySelectorAll(".tablewrap")).map((w) => ({
+        tabindex: w.getAttribute("tabindex"), role: w.getAttribute("role"), name: w.getAttribute("aria-label"),
+      }));
+      return { broken, wraps, overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+    });
+    expect(result.broken, path).toEqual([]);
+    expect(result.overflow, `${path} scrolls sideways`).toBeLessThanOrEqual(0);
+    for (const w of result.wraps) expect(w, path).toEqual({ tabindex: "0", role: "region", name: expect.stringMatching(/^Table: \S/) });
+  }
+});
+
 test("follows the reader's dark colour scheme", async ({ page }) => {
   const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   await page.emulateMedia({ colorScheme: "light" });

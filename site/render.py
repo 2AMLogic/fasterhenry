@@ -10,6 +10,8 @@ import json, math, re
 from html import escape
 from pathlib import Path
 
+import tablehtml
+
 REPO = "https://github.com/2AMLogic/fasterhenry"
 BLOB = f"{REPO}/blob/main"
 
@@ -77,9 +79,7 @@ def tables(text):
 
 
 def table_html(header, rows):
-    h = "".join(f"<th>{inline(c)}</th>" for c in header)
-    b = "\n".join("<tr>" + "".join(f"<td>{inline(c)}</td>" for c in r) + "</tr>" for r in rows)
-    return f'<div class="tablewrap"><table>\n<thead><tr>{h}</tr></thead>\n<tbody>\n{b}\n</tbody>\n</table></div>'
+    return tablehtml.render_table(header, rows, inline)
 
 
 def number(cell):
