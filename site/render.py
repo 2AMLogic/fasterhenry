@@ -102,9 +102,14 @@ def scaling_points(scaling_text):
     raise KeyError("scaling table")
 
 
+def compact(n):
+    """1000 -> '1k', 100000 -> '100k', 10 -> '10'."""
+    return f"{n // 1000}k" if n >= 1000 and n % 1000 == 0 else f"{n:g}"
+
+
 def scaling_svg(points, markers):
     """Log-log wall clock vs filaments; `markers` = [(x, label)] vertical guides."""
-    W, H, x0, y0, w, h = 720, 440, 76, 24, 620, 340
+    W, H, x0, y0, w, h = 720, 410, 76, 24, 590, 340
     xs = [p[0] for p in points]
     ys = [v for p in points for v in p[1:] if v]
     lx0, lx1 = math.floor(math.log10(min(xs))), math.ceil(math.log10(max(xs)))
@@ -118,22 +123,27 @@ def scaling_svg(points, markers):
          f'<rect x="{x0}" y="{y0}" width="{w}" height="{h}" fill="none" stroke="#c9ced6"/>']
     for d in range(lx0, lx1 + 1):
         o.append(f'<line x1="{px(10**d):.1f}" x2="{px(10**d):.1f}" y1="{y0}" y2="{y0+h}" stroke="#e6e9ee"/>')
-        o.append(f'<text x="{px(10**d):.1f}" y="{y0+h+18}" text-anchor="middle">{10**d:,}</text>')
+        o.append(f'<text x="{px(10**d):.1f}" y="{y0+h+18}" text-anchor="middle">{compact(10**d)}</text>')
     for d in range(ly0, ly1 + 1):
         o.append(f'<line x1="{x0}" x2="{x0+w}" y1="{py(10**d):.1f}" y2="{py(10**d):.1f}" stroke="#e6e9ee"/>')
         o.append(f'<text x="{x0-8}" y="{py(10**d)+4:.1f}" text-anchor="end">{10**d:g} s</text>')
-    for i, (mx, lab) in enumerate(markers):
-        if min(xs) <= mx <= max(xs):
-            o.append(f'<line x1="{px(mx):.1f}" x2="{px(mx):.1f}" y1="{y0}" y2="{y0+h}" stroke="#6b7480" stroke-dasharray="5 4"/>')
-            o.append(f'<text x="{px(mx)+5:.1f}" y="{y0+16+16*i}" fill="#4a5360">{escape(lab)}</text>')
+    # Guide labels sit at the top: the left-most guide's label ends at its line,
+    # the next one starts at its line, so no label crosses another guide.
+    ms = sorted(m for m in markers if min(xs) <= m[0] <= max(xs))
+    for i, (mx, lab) in enumerate(ms):
+        o.append(f'<line x1="{px(mx):.1f}" x2="{px(mx):.1f}" y1="{y0}" y2="{y0+h}" stroke="#6b7480" stroke-dasharray="5 4"/>')
+        left = i % 2 == 0 and len(ms) > 1
+        o.append(f'<text x="{px(mx)+(-5 if left else 5):.1f}" y="{y0+16}" text-anchor="{"end" if left else "start"}" fill="#4a5360">{escape(lab)}</text>')
+    # Series names live in a legend in the empty top-left corner, not on the lines.
     for k, color, name in ((1, "#b4400a", "dense"), (2, "#0b5cad", "pFFT + GMRES")):
         pts = [(p[0], p[k]) for p in points if p[k]]
         o.append('<polyline points="' + " ".join(f"{px(x):.1f},{py(y):.1f}" for x, y in pts) +
                  f'" fill="none" stroke="{color}" stroke-width="2.5" stroke-linejoin="round"/>')
         o += [f'<circle cx="{px(x):.1f}" cy="{py(y):.1f}" r="4" fill="{color}"/>' for x, y in pts]
-        ex, ey = pts[-1]
-        o.append(f'<text x="{px(ex)-6:.1f}" y="{py(ey)-9:.1f}" text-anchor="end" fill="{color}" font-weight="600">{name}</text>')
-    o.append(f'<text x="{x0+w/2}" y="{H-6}" text-anchor="middle">filaments</text></svg>')
+        ly = y0 + 18 + 20 * (k - 1)
+        o.append(f'<line x1="{x0+12}" x2="{x0+36}" y1="{ly-4}" y2="{ly-4}" stroke="{color}" stroke-width="2.5"/>')
+        o.append(f'<text x="{x0+42}" y="{ly}" fill="{color}" font-weight="600">{name}</text>')
+    o.append(f'<text x="{x0+w/2}" y="{y0+h+40}" text-anchor="middle">filaments</text></svg>')
     return "\n".join(o)
 
 
@@ -146,9 +156,27 @@ def note_html(text):
     return inline(t)
 
 
+def quote_after(text, prefix):
+    """The paragraph or bullet of `text` that starts with `prefix`, verbatim (whitespace joined)."""
+    m = re.search(rf"^(?:- )?({re.escape(prefix)}.*?)(?=\n\s*\n|^- |\Z)", text, re.M | re.S)
+    if not m:
+        raise KeyError(prefix)
+    return " ".join(m.group(1).split())
+
+
+def sentence(text, prefix):
+    """The sentence of `text` that starts with `prefix`, verbatim."""
+    t = " ".join(text.split())
+    m = re.search(rf"{re.escape(prefix)}.*?[.](?=\s|$)", t)
+    if not m:
+        raise KeyError(prefix)
+    return m.group(0)
+
+
 def benchmarks_body(md):
     setup = section(md, "Setup")
     speed = section(md, "Speed")
+    acc = section(md, "Accuracy")
     crit = section(md, "Committed criterion bench suite")
     scaling = section(md, "Scaling: dense vs pFFT")
     hw = bullet(setup, "Hardware")
@@ -165,44 +193,56 @@ def benchmarks_body(md):
     if m:
         markers.insert(0, (number(m.group(1)), "wall-clock crossover"))
 
-    o = ['<p>Two kinds of measurement, kept apart. The FastHenry comparison is operator-run, by hand, on one machine, and '
-         'CI never runs FastHenry. The criterion suite and the scaling run are scripted. Everything on this page is '
-         f'rendered by <code>site/build.py</code> from <a href="{BLOB}/docs/benchmarks.md"><code>docs/benchmarks.md</code></a>; '
-         'no number is typed into the page.</p>']
-    o.append('<h2>Machines</h2><ul>')
+    doc = f'<a href="{BLOB}/docs/benchmarks.md"><code>docs/benchmarks.md</code></a>'
+    # Takeaway: two sentences quoted verbatim from the doc, nothing newly written.
+    agree = quote_after(acc, "Sub-0.1 %")
+    caveat = quote_after(speed, "**Per thread")
+    advantage = sentence(caveat, "Our dense wall-clock advantage")
+    o = ['<h2>Takeaway</h2>',
+         f'<blockquote><p>{inline(agree)}</p><p>{inline(advantage)}</p></blockquote>',
+         f'<p>Quoted from {doc}, which is where every number on this page comes from.</p>']
+
+    o.append('<h2>Scaling: dense vs pFFT + GMRES</h2>')
+    o.append(f'<figure><img src="/assets/benchmarks/scaling.svg" width="720" height="410" '
+             'alt="Log-log plot of wall clock against filament count for the dense and the pFFT plus GMRES paths">'
+             '<figcaption>Wall clock of <code>assemble</code> + one-frequency <code>sweep</code>, single thread. '
+             'The dense arm stops where its model memory no longer fits; the table is the data.</figcaption></figure>')
+    o.append('<details><summary>Scaling table</summary>')
+    for hd, rows in tables(scaling):
+        if hd[0] == "filaments":
+            o.append(table_html(hd, rows))
+    o.append('</details>')
+    o.append(f'<p>Reproduce: <code>cargo bench -p fasterhenry --bench scaling -- __report_only__</code>. '
+             f'CI does not run this suite; it gates the headline with <code>iterative_path_holds_its_scaling_headline</code> in '
+             f'<a href="{BLOB}/fasterhenry/tests/perf_smoke.rs"><code>perf_smoke.rs</code></a>.</p>')
+
+    o.append('<h2>Speed against FastHenry</h2>')
+    for hd, rows in tables(speed):
+        o.append(table_html(hd, rows))
+    o.append(f'<p>{inline(caveat)}</p>')
+    o.append(f'<p>Operator-run, on one machine; method and caveats are in <a href="{BLOB}/docs/benchmarks.md#speed">docs/benchmarks.md</a>. '
+             'CI never runs FastHenry.</p>')
+
+    o.append('<h2>Accuracy against FastHenry</h2>')
+    lead = re.search(r"^Same decks.*?(?=\n\s*\n)", acc, re.M | re.S)
+    if lead:
+        o.append(f'<p>{inline(" ".join(lead.group(0).split()))}</p>')
+    for hd, rows in tables(acc):
+        o.append(table_html(hd, rows))
+
+    if ctab:
+        o.append('<h2>Criterion bench suite</h2>')
+        for hd, rows in ctab:
+            o.append(table_html(hd, rows))
+        o.append(f'<p>Regenerated by <a href="{BLOB}/.github/workflows/bench.yml"><code>.github/workflows/bench.yml</code></a> '
+                 'via <code>tools/bench_table.py</code>, which parses criterion&rsquo;s own JSON output. '
+                 'Locally: <code>cargo bench -p fasterhenry --bench assembly --bench solve &amp;&amp; python3 tools/bench_table.py</code>.</p>')
+
+    o.append('<h2>How this was measured</h2><ul>')
     if hw:
         o.append(f'<li><strong>FastHenry comparison and the criterion suite:</strong> {inline(hw)}</li>')
     if hw2:
         o.append(f'<li><strong>Scaling run:</strong> {inline(hw2)}</li>')
     o.append('<li><strong>SIMD:</strong> the partial-inductance kernels use 4-wide <code>f64</code> lanes (<code>wide::f64x4</code>), '
              f'as in <a href="{BLOB}/fasterhenry/src/inductance/neumann.rs"><code>neumann.rs</code></a>.</li></ul>')
-
-    o.append('<h2>Speed against FastHenry</h2>')
-    for hd, rows in tables(speed):
-        o.append(table_html(hd, rows))
-    o.append(f'<p>Operator-run; method and caveats are in <a href="{BLOB}/docs/benchmarks.md#speed">docs/benchmarks.md</a>. '
-             'The decks and the build of FastHenry are described in its Setup section.</p>')
-
-    o.append('<h2>Criterion bench suite</h2>')
-    if ctab:
-        for hd, rows in ctab:
-            o.append(table_html(hd, rows))
-    else:
-        o.append(f'<p>{note_html(block.group(1)) if block else "No table in docs/benchmarks.md."}</p>')
-    o.append(f'<p>Regenerated by <a href="{BLOB}/.github/workflows/bench.yml"><code>.github/workflows/bench.yml</code></a> '
-             'via <code>tools/bench_table.py</code>, which parses criterion&rsquo;s own JSON output. '
-             'Locally: <code>cargo bench -p fasterhenry --bench assembly --bench solve &amp;&amp; python3 tools/bench_table.py</code>.</p>')
-
-    o.append('<h2>Scaling: dense vs pFFT + GMRES</h2>')
-    o.append(f'<figure><img src="/assets/benchmarks/scaling.svg" width="720" height="440" '
-             'alt="Log-log plot of wall clock against filament count for the dense and the pFFT plus GMRES paths">'
-             '<figcaption>Wall clock of <code>assemble</code> + one-frequency <code>sweep</code>, single thread. '
-             'The dense arm stops where its model memory no longer fits; the table below is the data.</figcaption></figure>')
-    for hd, rows in tables(scaling):
-        if hd[0] == "filaments":
-            o.append(table_html(hd, rows))
-    o.append(f'<p>Reproduce: <code>cargo bench -p fasterhenry --bench scaling -- __report_only__</code>. '
-             f'CI does not run this suite; it gates the headline with <code>iterative_path_holds_its_scaling_headline</code> in '
-             f'<a href="{BLOB}/fasterhenry/tests/perf_smoke.rs"><code>perf_smoke.rs</code></a>. '
-             '</p>')
     return "\n".join(o), scaling_svg(pts, markers)

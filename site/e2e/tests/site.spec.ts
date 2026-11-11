@@ -134,6 +134,15 @@ test("the benchmarks page draws the scaling plot", async ({ page }) => {
   await expect(page.locator('img[src="/assets/benchmarks/scaling.svg"]')).toBeVisible();
 });
 
+test("the benchmarks page leads with the chart, shows accuracy, and has no placeholder", async ({ page }) => {
+  await page.goto("/benchmarks/");
+  const chart = await page.locator('img[src="/assets/benchmarks/scaling.svg"]').boundingBox();
+  const firstTable = await page.locator("table").first().boundingBox();
+  expect(chart!.y).toBeLessThan(firstTable!.y);
+  await expect(page.locator("table", { hasText: "relative difference" })).toHaveCount(1);
+  await expect(page.locator("body")).not.toContainText("Not yet regenerated");
+});
+
 test("the doc-derived pages render their tables", async ({ page }) => {
   for (const path of ["/validation/", "/fasthenry-users/"]) {
     await page.goto(path);
