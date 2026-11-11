@@ -186,12 +186,39 @@ test("the landing page shows the hero figure, its data and the install line", as
   await expect(page.locator("figcaption")).toContainText(hero.command);
 });
 
-test("the gallery shows one rendered figure per committed gallery entry", async ({ page, request }) => {
+test("the gallery is a card grid with one titled card per committed entry, visible near the top", async ({ page, request }, testInfo) => {
   const manifest = await (await request.get("/assets/gallery/gallery.json")).json();
   const entries = Array.isArray(manifest) ? manifest : (manifest.entries ?? manifest.decks ?? Object.values(manifest));
+  const cardEntries = entries.filter((e: { variant_of?: string }) => !e.variant_of);
   expect(entries.length).toBeGreaterThanOrEqual(6);
   await page.goto("/gallery/");
-  await expect(page.locator('img[src^="/assets/gallery/"]')).toHaveCount(entries.length);
+  const cards = page.locator("ul.cards > li.card");
+  await expect(cards).toHaveCount(cardEntries.length);
+  // each card: a human title (not a filename or id), a plot and a geometry sketch
+  for (let i = 0; i < cardEntries.length; i++) {
+    const title = (await cards.nth(i).locator("h2").innerText()).trim();
+    expect(title).toBe(cardEntries[i].title);
+    expect(title).not.toMatch(/^[a-z0-9_]+$/);
+    expect(title).not.toBe(cardEntries[i].id);
+    await expect(cards.nth(i).locator(`img[src="/assets/gallery/${cardEntries[i].id}.svg"]`)).toHaveCount(1);
+    await expect(cards.nth(i).locator(`img[src="/assets/gallery/${cardEntries[i].geometry}"]`)).toHaveCount(1);
+    await expect(cards.nth(i).locator("details")).not.toHaveAttribute("open", /.*/);
+  }
+  // the machine string and methodology live at the foot, not the head
+  const about = await page.locator("#about").boundingBox();
+  const last = await cards.last().boundingBox();
+  expect(about!.y).toBeGreaterThan(last!.y);
+  await expect(page.locator("main")).toContainText("small fixtures");
+  // the first card starts within the first 900px on desktop, and is a single column on a phone
+  const first = await cards.first().boundingBox();
+  if (testInfo.project.use.viewport && testInfo.project.use.viewport.width >= 1024) {
+    expect(first!.y).toBeLessThan(900);
+    const second = await cards.nth(1).boundingBox();
+    expect(Math.abs(second!.y - first!.y)).toBeLessThan(2);   // two or more columns
+  } else if (cardEntries.length > 1) {
+    const second = await cards.nth(1).boundingBox();
+    expect(second!.y).toBeGreaterThan(first!.y + first!.height - 1);   // one column
+  }
 });
 
 test("the benchmarks page draws the scaling plot", async ({ page }) => {
