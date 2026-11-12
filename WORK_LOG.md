@@ -6,6 +6,7 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-12
 
+- **PR #338**: chore(loom): resync installed Loom to v0.19.1294
 - **PR #336**: fix: iterate bar axes directly in separation() to satisfy needless_range_loop
 - **Issue #335** (closed): CI red on main toolchain: clippy::needless_range_loop in inductance/neumann.rs:112-114
 - **PR #333**: Bump Repo Skills 0.25.10 -> 0.26.1
