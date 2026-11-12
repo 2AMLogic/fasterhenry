@@ -109,9 +109,9 @@ pub(crate) fn separation(a: &Bar, b: &Bar) -> f64 {
         consider(a.axes[k]);
         consider(b.axes[k]);
     }
-    for i in 0..3 {
-        for j in 0..3 {
-            let n = a.axes[i].cross(&b.axes[j]);
+    for ai in &a.axes {
+        for bj in &b.axes {
+            let n = ai.cross(bj);
             let norm = n.norm();
             if norm > 1e-9 {
                 consider(n / norm);
