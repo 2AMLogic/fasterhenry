@@ -4,6 +4,12 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-12
+
+- **PR #336**: fix: iterate bar axes directly in separation() to satisfy needless_range_loop
+- **Issue #335** (closed): CI red on main toolchain: clippy::needless_range_loop in inductance/neumann.rs:112-114
+- **PR #333**: Bump Repo Skills 0.25.10 -> 0.26.1
+
 ### 2026-11-11
 
 - **PR #328**: feat(site): shared inline chart module that follows the page theme
