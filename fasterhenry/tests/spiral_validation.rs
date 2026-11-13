@@ -12,6 +12,10 @@
 //! inductance with all mutual coupling included, and `Re Z(0)` its DC
 //! resistance.
 //!
+//! The builder is `common::spiral_system`, not this file: `tests/pfft.rs`
+//! asserts the pFFT operator on the same spiral, and sharing one definition
+//! is what keeps "the same spiral" true.
+//!
 //! # References
 //!
 //! 1. **Greenhouse segment summation** (computed in this file, sharing no
@@ -36,61 +40,21 @@
 //!    square-spiral constants `K₁ = 2.34`, `K₂ = 2.75` — a ±20 %-class
 //!    estimate for a spiral this small, included for the record.
 
-use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
-use fasterhenry::mesh::Port;
-use fasterhenry::solve::{solve, Discretization, MeshSystem, Subdivision};
+use fasterhenry::solve::{solve, MeshSystem};
 use fasterhenry::{GridSpacing, IterativeParams, IterativeSystem, PfftParams, SweepResult};
 use std::path::PathBuf;
 
-const UM: f64 = 1e-6;
-const SIGMA: f64 = 5.8e7;
-const W_UM: f64 = 2.0;
-const T_UM: f64 = 2.0;
+// The fixture itself lives in `tests/common`, because `tests/pfft.rs`
+// asserts the pFFT operator on this same spiral and must get the same
+// geometry rather than a copy of it.
+#[allow(dead_code)]
+mod common;
+use common::{spiral_system, square_spiral_segments, Segment, COPPER, T_UM, UM, W_UM};
+
 const FREQ_HZ: f64 = 1.0e3; // skin depth 66 µm >> 2 µm: uniform current
 /// Printed only once the PyPEEC comparison has run and passed; CI counts
 /// it, so a skip (which prints to stderr) cannot look like a pass.
 const PASSED: &str = "SPIRAL GATE PASSED";
-
-type Segment = ((f64, f64), (f64, f64)); // centreline endpoints, µm
-
-/// The standard non-self-intersecting square spiral (winding order).
-fn square_spiral_segments(turns: usize, start_len_um: f64, pitch_um: f64) -> Vec<Segment> {
-    let directions = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
-    let mut position = (0.0, 0.0);
-    let mut length = start_len_um;
-    let mut segments = Vec::new();
-    for k in 0..turns * 4 {
-        let direction = directions[k % 4];
-        let end = (
-            position.0 + direction.0 * length,
-            position.1 + direction.1 * length,
-        );
-        segments.push((position, end));
-        position = end;
-        if k % 2 == 1 {
-            length += pitch_um;
-        }
-    }
-    segments
-}
-
-/// The fixture as a solvable geometry: 8 segments head-to-tail around 9
-/// shared vertices, the port closing the spiral from end back to start.
-fn spiral_system() -> (Geometry, Vec<Port>, Discretization) {
-    let segments = square_spiral_segments(2, 60.0, 15.0);
-    let mut nodes = Vec::new();
-    nodes.push(Node::new(0.0, 0.0, T_UM / 2.0 * UM));
-    for &(.., end) in &segments {
-        nodes.push(Node::new(end.0 * UM, end.1 * UM, T_UM / 2.0 * UM));
-    }
-    let defs: Vec<SegmentDef> = (0..segments.len())
-        .map(|i| SegmentDef::new(NodeId(i), NodeId(i + 1), W_UM * UM, T_UM * UM, SIGMA))
-        .collect();
-    let geometry = Geometry::from_parts(nodes, defs).unwrap();
-    let ports = vec![Port::new(NodeId(0), NodeId(segments.len())).named("spiral")];
-    let discretization = Discretization::PerSegment(vec![Subdivision::new(4, 4); segments.len()]);
-    (geometry, ports, discretization)
-}
 
 /// fasterhenry's total spiral inductance at `FREQ_HZ` and DC resistance.
 fn extract() -> (f64, f64, SweepResult) {
@@ -205,7 +169,7 @@ fn spiral_inductance_against_references() {
         .iter()
         .map(|&(start, end)| {
             ((end.0 - start.0).abs().max((end.1 - start.1).abs()) * UM)
-                / (SIGMA * W_UM * UM * T_UM * UM)
+                / (COPPER * W_UM * UM * T_UM * UM)
         })
         .sum::<f64>();
 

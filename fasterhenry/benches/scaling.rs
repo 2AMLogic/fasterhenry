@@ -41,12 +41,13 @@
 //!
 //! # The fixture
 //!
-//! A square meander (`meander`): `bars` conductor runs along ±x at a fixed
-//! pitch, each cut into `bars` collinear segments one pitch long and joined
-//! to the next run by a jog along +y, with one port across the whole chain.
-//! Three properties matter for a scaling sweep, and the serpentine of
-//! `benches/support.rs` (whole-bar segments, fixed 2 mm length) has only the
-//! first:
+//! A square meander (`support::meander`, shared with the smoke test that
+//! guards this measurement, `fasterhenry/tests/perf_smoke.rs`): `bars`
+//! conductor runs along ±x at a fixed pitch, each cut into `bars` collinear
+//! segments one pitch long and joined to the next run by a jog along +y,
+//! with one port across the whole chain. Three properties matter for a
+//! scaling sweep, and the serpentine of `benches/support.rs` (whole-bar
+//! segments, fixed 2 mm length) has only the first:
 //!
 //! * the filament count is `4·bars·(bars + 1)` at the 2 × 2 cross-section
 //!   subdivision used throughout the bench suite, and every filament carries
@@ -75,14 +76,14 @@ use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use fasterhenry::{
-    Discretization, Geometry, GmresParams, IterativeParams, IterativeSystem, MeshSystem, Node,
-    Port, SegmentDef, DENSE_PATH_MAX_FILAMENTS,
+    Discretization, GmresParams, IterativeParams, IterativeSystem, MeshSystem,
+    DENSE_PATH_MAX_FILAMENTS,
 };
 
 #[path = "support.rs"]
 #[allow(dead_code)]
 mod support;
-use support::{max_filaments, COPPER, SUBDIVISION_NH, SUBDIVISION_NW};
+use support::{max_filaments, meander, SUBDIVISION_NH, SUBDIVISION_NW};
 
 /// Bar counts of [`meander`], whose [`filament_count`] is about 1 000,
 /// 2 500, 5 000, 10 000, 30 000 and 100 000 — the three sizes issue #44 asks
@@ -92,14 +93,6 @@ const BARS: [usize; 6] = [15, 24, 34, 49, 86, 157];
 /// One representative frequency, as in `benches/solve.rs`: high enough that
 /// `L` is not dropped, low enough that the fixture stays physical.
 const FREQUENCY_HZ: f64 = 1e6;
-
-/// Conductor pitch, and the length of one segment: the meander's footprint
-/// is `bars · PITCH` square.
-const PITCH: f64 = 100e-6;
-/// Conductor width, in metres.
-const WIDTH: f64 = 20e-6;
-/// Conductor thickness, in metres.
-const THICKNESS: f64 = 10e-6;
 
 /// Filaments [`meander`] produces for a bar count, at the bench suite's
 /// 2 × 2 cross-section subdivision.
@@ -111,33 +104,6 @@ const fn filament_count(bars: usize) -> usize {
 /// segment at a 2 × 2 subdivision, and no closed conductor rings.
 const fn internal_loops(bars: usize) -> usize {
     bars * (bars + 1) * (SUBDIVISION_NW * SUBDIVISION_NH - 1)
-}
-
-/// A square meander of `bars` runs, each `bars` segments of [`PITCH`] long,
-/// with one port across the whole chain. See the module documentation.
-fn meander(bars: usize) -> (Geometry, Port) {
-    let mut geometry = Geometry::new();
-    let mut previous = geometry.add_node(Node::new(0.0, 0.0, 0.0)).unwrap();
-    let first = previous;
-    let add = |geometry: &mut Geometry, previous: &mut _, x: f64, y: f64| {
-        let node = geometry.add_node(Node::new(x, y, 0.0)).unwrap();
-        geometry
-            .add_segment(SegmentDef::new(*previous, node, WIDTH, THICKNESS, COPPER))
-            .unwrap();
-        *previous = node;
-    };
-    for bar in 0..bars {
-        let y = bar as f64 * PITCH;
-        // Even runs go towards +x, odd runs back towards −x.
-        for step in 1..=bars {
-            let along = if bar % 2 == 0 { step } else { bars - step };
-            add(&mut geometry, &mut previous, along as f64 * PITCH, y);
-        }
-        // The jog onto the next run, and a lead-out after the last one.
-        let x = if bar % 2 == 0 { bars } else { 0 } as f64 * PITCH;
-        add(&mut geometry, &mut previous, x, y + PITCH);
-    }
-    (geometry, Port::new(first, previous))
 }
 
 /// Bytes the dense path must hold at its peak: the `n × n` real

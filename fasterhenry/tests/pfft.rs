@@ -14,14 +14,20 @@
 
 use std::time::Instant;
 
-use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
+use fasterhenry::geometry::{Geometry, Node};
 use fasterhenry::mesh::Port;
 use fasterhenry::pfft::{GridSpacing, PfftError, PfftOperator, PfftParams};
-use fasterhenry::solve::{Discretization, MeshSystem, Subdivision};
+use fasterhenry::solve::{Discretization, MeshSystem};
 use fasterhenry::{discretize, partial_inductance_matrix, Filament, Segment};
 use nalgebra::DVector;
 
-const COPPER: f64 = 5.8e7;
+// The spiral and the coupled structure are the fixtures of
+// `spiral_validation.rs` and `solve.rs`; this file asserts the pFFT
+// operator on *those* geometries, so it reads their one definition rather
+// than restating them.
+#[allow(dead_code)]
+mod common;
+use common::COPPER;
 /// Acceptance bound on the norm-wise relative error with default parameters.
 const TOLERANCE: f64 = 1e-6;
 
@@ -169,83 +175,28 @@ fn application_is_linear_and_repeatable() {
 // The spiral and coupled-structure fixtures
 // ---------------------------------------------------------------------------
 
-/// The 2-turn square spiral of `spiral_validation.rs`: segment lengths 60,
-/// 60, 75, 75, 90, 90, 105, 105 µm, 2 × 2 µm copper, 4 × 4 filaments each.
-fn spiral_filaments() -> Vec<Filament> {
-    const UM: f64 = 1e-6;
-    let directions = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)];
-    let mut position = (0.0, 0.0);
-    let mut length = 60.0;
-    let mut nodes = vec![Node::new(0.0, 0.0, UM)];
-    for k in 0..8 {
-        let (dx, dy) = directions[k % 4];
-        position = (position.0 + dx * length, position.1 + dy * length);
-        nodes.push(Node::new(position.0 * UM, position.1 * UM, UM));
-        if k % 2 == 1 {
-            length += 15.0;
-        }
-    }
-    let defs = (0..8)
-        .map(|i| SegmentDef::new(NodeId(i), NodeId(i + 1), 2.0 * UM, 2.0 * UM, COPPER))
-        .collect();
-    let geometry = Geometry::from_parts(nodes, defs).unwrap();
-    let ports = [Port::new(NodeId(0), NodeId(8))];
-    let discretization = Discretization::PerSegment(vec![Subdivision::new(4, 4); 8]);
+/// The filaments a shared fixture discretizes into. The operator is tested
+/// against the dense matrix over a filament set, which is all these two
+/// fixtures are needed for here — the ports and the solve belong to the
+/// tests that validate the physics on them.
+fn filaments_of(system: (Geometry, Vec<Port>, Discretization)) -> Vec<Filament> {
+    let (geometry, ports, discretization) = system;
     MeshSystem::assemble(&geometry, &ports, &discretization)
         .unwrap()
         .filaments()
         .to_vec()
 }
 
+/// The 2-turn square spiral of `spiral_validation.rs`: segment lengths 60,
+/// 60, 75, 75, 90, 90, 105, 105 µm, 2 × 2 µm copper, 4 × 4 filaments each.
+fn spiral_filaments() -> Vec<Filament> {
+    filaments_of(common::spiral_system())
+}
+
 /// The coupled structure of `solve.rs`: two traces (one with a bend), a
 /// closed ring and a floating bar, with mixed subdivisions.
 fn coupled_structure_filaments() -> Vec<Filament> {
-    let points = [
-        [0.0, 0.0, 0.0],
-        [4e-3, 0.0, 0.0],
-        [4e-3, 2e-3, 0.0],
-        [0.5e-3, 0.0, 0.3e-3],
-        [3.5e-3, 0.0, 0.3e-3],
-        [0.0, -1e-3, 0.0],
-        [3e-3, -1e-3, 0.0],
-        [3e-3, -3e-3, 0.0],
-        [0.0, -3e-3, 0.0],
-        [1e-3, 1e-3, 0.0],
-        [3e-3, 1e-3, 0.0],
-    ];
-    let segments = [
-        (0, 1, 0.4e-3, 0.1e-3),
-        (1, 2, 0.4e-3, 0.1e-3),
-        (3, 4, 0.2e-3, 0.05e-3),
-        (5, 6, 0.2e-3, 0.1e-3),
-        (6, 7, 0.2e-3, 0.1e-3),
-        (7, 8, 0.2e-3, 0.1e-3),
-        (8, 5, 0.2e-3, 0.1e-3),
-        (9, 10, 0.2e-3, 0.1e-3),
-    ];
-    let mut geometry = Geometry::new();
-    for point in points {
-        geometry.add_node(Node::from(point)).unwrap();
-    }
-    for (a, b, width, height) in segments {
-        geometry
-            .add_segment(SegmentDef::new(NodeId(a), NodeId(b), width, height, COPPER))
-            .unwrap();
-    }
-    let ports = [
-        Port::new(NodeId(0), NodeId(2)),
-        Port::new(NodeId(4), NodeId(3)),
-        Port::new(NodeId(5), NodeId(7)),
-    ];
-    let mut subdivisions = vec![Subdivision::new(2, 2); 8];
-    subdivisions[0] = Subdivision::new(4, 3);
-    subdivisions[1] = Subdivision::new(3, 3);
-    subdivisions[2] = Subdivision::new(3, 1);
-    subdivisions[5] = Subdivision::SINGLE;
-    MeshSystem::assemble(&geometry, &ports, &Discretization::PerSegment(subdivisions))
-        .unwrap()
-        .filaments()
-        .to_vec()
+    filaments_of(common::coupled_structure())
 }
 
 #[test]

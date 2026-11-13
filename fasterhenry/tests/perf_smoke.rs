@@ -24,35 +24,19 @@
 
 use std::time::Instant;
 
-use fasterhenry::{
-    solve, Discretization, Geometry, GmresParams, IterativeParams, IterativeSystem, Node, Port,
-    SegmentDef,
-};
+use fasterhenry::{solve, Discretization, GmresParams, IterativeParams, IterativeSystem};
 
-const COPPER: f64 = 5.8e7;
-
-/// A planar serpentine: `bars` long traces along ±x at a fixed pitch, each
-/// joined to the next by a short jog along +y, with a final jog as lead-out.
-/// `2·bars` segments in one chain; the port spans the whole chain.
-fn serpentine(bars: usize) -> (Geometry, Port) {
-    let (length, pitch, width, thickness) = (2e-3, 60e-6, 20e-6, 10e-6);
-    let mut geometry = Geometry::new();
-    let mut previous = geometry.add_node(Node::new(0.0, 0.0, 0.0)).unwrap();
-    let first = previous;
-    for bar in 0..bars {
-        let y = bar as f64 * pitch;
-        // Even bars run towards +x, odd bars back towards −x.
-        let x_far = if bar % 2 == 0 { length } else { 0.0 };
-        for (x, y) in [(x_far, y), (x_far, y + pitch)] {
-            let node = geometry.add_node(Node::new(x, y, 0.0)).unwrap();
-            geometry
-                .add_segment(SegmentDef::new(previous, node, width, thickness, COPPER))
-                .unwrap();
-            previous = node;
-        }
-    }
-    (geometry, Port::new(first, previous))
-}
+// The fixtures this file times are the ones the benches measure, so both
+// read the single definition in `fasterhenry/benches/support.rs` rather
+// than keeping a copy each: `serpentine` is what `benches/assembly.rs` and
+// `benches/solve.rs` sweep, `meander` what `benches/scaling.rs` sweeps.
+// `cargo test` compiles each `tests/*.rs` as its own crate, so `#[path]` is
+// the only way to share it; `dead_code` because a test crate uses some of
+// the module, never all of it.
+#[path = "../benches/support.rs"]
+#[allow(dead_code)]
+mod support;
+use support::{meander, serpentine};
 
 #[test]
 #[ignore = "release-mode performance smoke; see the module documentation"]
@@ -107,36 +91,6 @@ fn two_thousand_filaments_solve_within_budget() {
         elapsed < budget,
         "2000 filaments took {elapsed:.2} s, over the {budget} s budget"
     );
-}
-
-/// A square meander of `bars` conductor runs along ±x, each cut into `bars`
-/// collinear segments one pitch long and joined to the next by a jog along
-/// +y; the port spans the whole chain. The footprint stays square and the
-/// segments stay short as `bars` grows, which is what makes it a fair
-/// scaling fixture for the pFFT operator — see the module documentation of
-/// `fasterhenry/benches/scaling.rs`, whose fixture this mirrors.
-fn meander(bars: usize) -> (Geometry, Port) {
-    let (pitch, width, thickness) = (100e-6, 20e-6, 10e-6);
-    let mut geometry = Geometry::new();
-    let mut previous = geometry.add_node(Node::new(0.0, 0.0, 0.0)).unwrap();
-    let first = previous;
-    let add = |geometry: &mut Geometry, previous: &mut _, x: f64, y: f64| {
-        let node = geometry.add_node(Node::new(x, y, 0.0)).unwrap();
-        geometry
-            .add_segment(SegmentDef::new(*previous, node, width, thickness, COPPER))
-            .unwrap();
-        *previous = node;
-    };
-    for bar in 0..bars {
-        let y = bar as f64 * pitch;
-        for step in 1..=bars {
-            let along = if bar % 2 == 0 { step } else { bars - step };
-            add(&mut geometry, &mut previous, along as f64 * pitch, y);
-        }
-        let x = if bar % 2 == 0 { bars } else { 0 } as f64 * pitch;
-        add(&mut geometry, &mut previous, x, y + pitch);
-    }
-    (geometry, Port::new(first, previous))
 }
 
 /// The matrix-free path's side of the scaling claim (issue #44): at 4 760
