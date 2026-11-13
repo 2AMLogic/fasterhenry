@@ -4,6 +4,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-13
+
+- **PR #343**: build: run cargo fmt/clippy/test from the package.json check scripts
+- **Issue #342** (closed): Wire package.json check:ci/test/lint to cargo: the stubs exit 0 without checking anything
+
 ### 2026-11-12
 
 - **PR #338**: chore(loom): resync installed Loom to v0.19.1294

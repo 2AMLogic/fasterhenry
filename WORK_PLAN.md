@@ -36,6 +36,7 @@ _None._
 
 - **#295**: Conductivity models: temperature coefficient and nanoscale size effects (Fuchs–Sondheimer, Mayadas–Shatzkes) *(curated; operator-gated)*
 - **#340**: Shared blocks, material schema, structure file and two interchange formats: proposals touching fasterhenry *(awaiting curation; asks for answers on units, structure file and material library)*
+- **#344**: Deduplicate hand-copied test and bench fixtures in fasterhenry (serpentine, meander, spiral, coupled structure) *(hermit proposal; awaiting approval)*
 
 ## Blocked / Operator-owned
 
@@ -67,6 +68,7 @@ _None._
 | PRs awaiting review | 0 |
 | Curated (proposed) | 3 (#243, #295, #311; all operator-gated) |
 | Awaiting curation | 1 (#340) |
+| Hermit proposals (unblocked) | 1 (#344) |
 | Blocked | 8 (#16, #74, #171, #172, #186, #187, #208, #317) |
 | Operator-gated (`loom:operator`) | 4 (#166, #243, #295, #311) |
 | Operator merge-risk holds | 0 |
