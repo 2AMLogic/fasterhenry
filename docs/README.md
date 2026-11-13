@@ -6,3 +6,4 @@
 | [`benchmarks.md`](benchmarks.md) | Performance: the committed criterion suite, the dense/iterative scaling measurement, and the head-to-head against FastHenry. |
 | [`output-formats.md`](output-formats.md) | The CLI's `--zc-mat` (MAT v4) and `--spice` output formats. |
 | [`fasthenry-compat.md`](fasthenry-compat.md) | Field-by-field audit of the deck reader against the public FastHenry `.inp` format: supported, differs, or rejected, with the reason for each. |
+| [`ROADMAP.md`](ROADMAP.md) | Where the project stands, what comes next and why, and what is blocked. |
