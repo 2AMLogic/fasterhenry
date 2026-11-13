@@ -15,6 +15,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use fasterhenry::{Discretization, MeshSystem, Port};
 
 #[path = "support.rs"]
+#[allow(dead_code)]
 mod support;
 use support::{bars_within_budget, filament_count, serpentine, SUBDIVISION_NH, SUBDIVISION_NW};
 

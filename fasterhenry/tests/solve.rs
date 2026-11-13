@@ -25,7 +25,12 @@ use fasterhenry::{
 use nalgebra::DMatrix;
 use num_complex::Complex;
 
-const COPPER: f64 = 5.8e7;
+// The coupled structure is shared with `tests/pfft.rs`, which asserts the
+// pFFT operator on the filaments this discretization produces; `COPPER`
+// comes from there so the two cannot disagree about the conductor.
+#[allow(dead_code)]
+mod common;
+use common::{coupled_structure, COPPER};
 
 type C64 = Complex<f64>;
 
@@ -398,51 +403,6 @@ fn rectangular_loop_is_the_signed_sum_of_its_partial_inductances() {
 // ---------------------------------------------------------------------------
 // Identities of the general solve
 // ---------------------------------------------------------------------------
-
-/// Two coupled traces of different sizes with bundles, a bend, a closed ring
-/// (so the loop basis has a conductor loop) and a floating bar.
-fn coupled_structure() -> (Geometry, Vec<Port>, Discretization) {
-    let geometry = geometry(
-        &[
-            // Trace A with a bend.
-            [0.0, 0.0, 0.0],
-            [4e-3, 0.0, 0.0],
-            [4e-3, 2e-3, 0.0],
-            // Trace B, above A.
-            [0.5e-3, 0.0, 0.3e-3],
-            [3.5e-3, 0.0, 0.3e-3],
-            // Closed ring beside them.
-            [0.0, -1e-3, 0.0],
-            [3e-3, -1e-3, 0.0],
-            [3e-3, -3e-3, 0.0],
-            [0.0, -3e-3, 0.0],
-            // Floating bar.
-            [1e-3, 1e-3, 0.0],
-            [3e-3, 1e-3, 0.0],
-        ],
-        &[
-            (0, 1, 0.4e-3, 0.1e-3),
-            (1, 2, 0.4e-3, 0.1e-3),
-            (3, 4, 0.2e-3, 0.05e-3),
-            (5, 6, 0.2e-3, 0.1e-3),
-            (6, 7, 0.2e-3, 0.1e-3),
-            (7, 8, 0.2e-3, 0.1e-3),
-            (8, 5, 0.2e-3, 0.1e-3),
-            (9, 10, 0.2e-3, 0.1e-3),
-        ],
-    );
-    let ports = vec![
-        port(0, 2).named("A"),
-        port(4, 3).named("B"),
-        port(5, 7).named("ring diagonal"),
-    ];
-    let mut subdivisions = vec![Subdivision::new(2, 2); 8];
-    subdivisions[0] = Subdivision::new(4, 3);
-    subdivisions[1] = Subdivision::new(3, 3);
-    subdivisions[2] = Subdivision::new(3, 1);
-    subdivisions[5] = Subdivision::SINGLE;
-    (geometry, ports, Discretization::PerSegment(subdivisions))
-}
 
 #[test]
 fn schur_reduction_matches_the_textbook_mesh_solve() {
