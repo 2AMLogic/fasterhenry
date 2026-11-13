@@ -3,7 +3,7 @@ import re, subprocess, sys, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build, compat, tablehtml
+import build, compat, mdinline, tablehtml
 
 SRC = "docs/validation.md"
 
@@ -209,11 +209,15 @@ class Compat(unittest.TestCase):
         lead, rest = compat.split_note("Start of a note `a. b` and more text here. " + "tail words " * 40)
         self.assertEqual(lead.count("`") % 2, 0)
 
-    def test_issue_refs_become_links_but_not_inside_links_or_pre(self):
-        out = compat.link_issues('<p>see #72 and <a href="x">#5</a></p><pre><code>#9</code></pre>')
+    def test_issue_refs_become_links_but_not_inside_links_code_or_pre(self):
+        out = mdinline.link_issues('<p>see #72 and <a href="x">#5</a></p><pre><code>#9</code></pre>'
+                                   '<p><code>#14</code> and ##18 and post-#18</p>')
         self.assertIn('<a href="{{repo}}/issues/72">#72</a>', out)
         self.assertIn('<a href="x">#5</a>', out)
         self.assertIn("<pre><code>#9</code></pre>", out)
+        self.assertIn("<code>#14</code>", out)                                  # a code span is text, not a ref
+        self.assertIn("##18", out)                                              # not an issue reference
+        self.assertIn('post-<a href="{{repo}}/issues/18">#18</a>', out)         # but this one is
 
     def test_page_has_three_tiers_in_order_no_tables_for_the_audit_and_no_bare_issue_numbers(self):
         html = (build.DIST / "fasthenry-users" / "index.html").read_text()
@@ -226,8 +230,8 @@ class Compat(unittest.TestCase):
             self.assertIn(f'class="badge s-{kind}"', main)
         # no audit table is left as a <table>: the remaining tables are output-formats.md's
         self.assertNotRegex(main, r"<th[^>]*>Notes</th>")
-        text = re.sub(r"<pre\b.*?</pre>|<a\b.*?</a>|<[^>]*>", "", main, flags=re.S)
-        self.assertEqual(re.findall(r".{0,20}(?<![\w&/#-])#\d+", text), [])
+        text = re.sub(r"<pre\b.*?</pre>|<a\b.*?</a>|<code\b[^>]*>.*?</code>|<[^>]*>", "", main, flags=re.S)
+        self.assertEqual(re.findall(r".{0,20}(?<![\w&/#])#\d+", text), [])
         # every Decision essay and the follow-ups list sit inside a collapsed <details>
         self.assertEqual(main.count('<details class="doc decision"'), 7)
         self.assertRegex(main, r'<details class="doc" id="follow-ups-filed"')
@@ -236,6 +240,45 @@ class Compat(unittest.TestCase):
         html = (build.DIST / "fasthenry-users" / "index.html").read_text()
         total = int(re.search(r'class="glance-total">(\d+) audited entries', html).group(1))
         self.assertEqual(total, html.count('<div class="entry" id="'))
+
+
+class SharedInline(unittest.TestCase):
+    """site/mdinline.py is the only copy of the inline helpers (issue #347).
+
+    Each of these used to exist twice -- once in build.py/compat.py and once in
+    render.py -- with two behaviours, so docs/benchmarks.md and
+    docs/validation.md rendered the same markdown differently.
+    """
+
+    def test_render_and_compat_define_no_second_copy(self):
+        import render
+        for mod, names in ((render, ("inline", "note_html", "_link_issues", "_ISSUE_REF")),
+                           (compat, ("slug", "link_issues"))):
+            for name in names:
+                self.assertFalse(hasattr(mod, name),
+                                 f"{mod.__name__}.{name} is a second copy of an mdinline helper")
+
+    def test_a_code_span_holding_a_bar_is_one_table_cell(self):
+        import render
+        head, rows = render.tables("| a | `|tan θ|` |\n|---|---|\n| x | y |")[0]
+        self.assertEqual(head, ["a", "`|tan θ|`"])          # not cut at each bar
+        self.assertEqual(rows, [["x", "y"]])
+        self.assertEqual(render.table_html(head, rows).count("<code>"), 1)
+
+    def test_a_relative_link_in_the_benchmarks_source_becomes_a_repo_url(self):
+        import render
+        self.assertEqual(mdinline.inline("see [doc](validation.md)", render.BENCH_SRC),
+                         'see <a href="{{repo}}/blob/main/docs/validation.md">doc</a>')
+
+    def test_a_link_that_does_not_resolve_fails_the_build(self):
+        with self.assertRaises(SystemExit):
+            mdinline.inline("[gone](no-such-file.md)", "docs/benchmarks.md")
+
+    def test_slug_is_unique_and_has_one_fallback_word(self):
+        seen = set()
+        self.assertEqual([mdinline.slug("Takeaway", seen), mdinline.slug("Takeaway", seen)],
+                         ["takeaway", "takeaway-2"])
+        self.assertEqual(mdinline.slug("", set()), "section")
 
 
 class Benchmarks(unittest.TestCase):
@@ -247,8 +290,9 @@ class Benchmarks(unittest.TestCase):
         cls.html, cls.svg = render.benchmarks_body(cls.doc)
 
     def test_single_asterisk_renders_as_emphasis(self):
-        self.assertEqual(self.render.inline("so *both* arms and **bold**"), "so <em>both</em> arms and <strong>bold</strong>")
-        self.assertEqual(self.render.inline("2*3*4 stays"), "2*3*4 stays")
+        bench = lambda md: mdinline.inline(md, self.render.BENCH_SRC)
+        self.assertEqual(bench("so *both* arms and **bold**"), "so <em>both</em> arms and <strong>bold</strong>")
+        self.assertEqual(bench("2*3*4 stays"), "2*3*4 stays")
         self.assertNotRegex(self.html, r"(?<![*\w])\*[A-Za-z]")
 
     def test_section_order(self):

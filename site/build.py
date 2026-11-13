@@ -26,19 +26,22 @@ headings, paragraphs, fenced code, tables, lists, inline code, links,
 emphasis) and appended after the fragment's own HTML, so the docs stay the
 single source of truth. Relative links in a source become
 {{repo}}/blob/main/<path> URLs; a link to a file that does not exist fails the
-build.
+build. The inline level of that renderer -- spans, table-cell splitting,
+heading ids and issue links -- is site/mdinline.py, shared with render.py and
+compat.py so every page renders the same markdown the same way.
 
 Copy rule: public wording follows the 2AMLogic/marketing POSITIONING.md (see
 the About quote was checked against marketing commit d3061f8, blob 7da7ca3e).
 Do not copy or paraphrase that file into this repository.
 """
-import json, posixpath, re, shutil, sys
+import json, re, shutil, sys
 from html import escape, unescape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compat
 import gen_hero
+import mdinline
 import render
 import tablehtml
 
@@ -114,7 +117,7 @@ def add_toc(body):
         if idm:
             hid = idm.group(1)
         else:
-            hid = _slug(unescape(text), seen)
+            hid = mdinline.slug(unescape(text), seen)
             attrs += f' id="{hid}"'
         entries.append((lvl, hid, text))
         return f"<h{lvl}{attrs}>{inner}</h{lvl}>"
@@ -156,69 +159,9 @@ def doc_page(note, doc_html):
 
 # ---- markdown rendering (stdlib only; covers what docs/*.md use) -----------
 
-_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:|^//")
 _FENCE = re.compile(r"^(\s*)```(.*)$")
 _ITEM = re.compile(r"^(\s*)([-*+]|\d+\.)\s+(.*)$")
 _SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
-
-
-def rewrite_link(url, src):
-    """Relative link in `src` (repo-relative path) -> GitHub URL under {{repo}}."""
-    if url.startswith("#") or _SCHEME.match(url):
-        return url
-    target, _, frag = url.partition("#")
-    rel = posixpath.normpath(posixpath.join(posixpath.dirname(src), target))
-    if rel.startswith("..") or not (ROOT / rel).exists():
-        sys.exit(f"{src}: relative link '{url}' does not resolve to a file in this repository")
-    kind = "tree" if (ROOT / rel).is_dir() else "blob"
-    return f"{{{{repo}}}}/{kind}/main/{rel}" + (f"#{frag}" if frag else "")
-
-
-def inline(text, src):
-    stash = []
-
-    def keep(html):
-        stash.append(html)
-        return f"\x00{len(stash) - 1}\x00"
-
-    text = re.sub(r"(`+)(.+?)\1", lambda m: keep(f"<code>{escape(m.group(2).strip())}</code>"), text)
-    text = re.sub(r"\\([\\`*_{}\[\]()#+\-.!|<>])", lambda m: keep(escape(m.group(1))), text)
-    text = escape(text, quote=False)
-    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)",
-                  lambda m: keep(f'<a href="{escape(rewrite_link(m.group(2), src), quote=True)}">') + m.group(1) + keep("</a>"),
-                  text)
-    text = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])", r"<em>\1</em>", text)
-    return re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], text)
-
-
-def _cells(row):
-    """Split a table row on `|` outside code spans (the docs write `|tan θ|` unescaped)."""
-    row = row.strip()
-    cells, cur = [], []
-    for m in re.finditer(r"(`+).+?\1|\\.|\||[^`\\|]+|.", row):
-        tok = m.group(0)
-        if tok == "|":
-            cells.append("".join(cur))
-            cur = []
-        else:
-            cur.append(tok)
-    cells.append("".join(cur))
-    if cells and cells[0].strip() == "":
-        cells = cells[1:]
-    if cells and cells[-1].strip() == "":
-        cells = cells[:-1]
-    return [c.strip().replace("\\|", "|") for c in cells]
-
-
-def _slug(text, seen):
-    base = re.sub(r"[^a-z0-9 _-]", "", re.sub(r"[`*]", "", text).lower()).strip().replace(" ", "-") or "section"
-    slug, n = base, 1
-    while slug in seen:
-        n += 1
-        slug = f"{base}-{n}"
-    seen.add(slug)
-    return slug
 
 
 def _starts_block(line):
@@ -247,21 +190,21 @@ def _blocks(lines, src, seen, hook=None):
         hm = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", line)
         if hm:
             lvl, title = len(hm.group(1)), hm.group(2)
-            out.append(f'<h{lvl} id="{_slug(title, seen)}">{inline(title, src)}</h{lvl}>')
+            out.append(f'<h{lvl} id="{mdinline.slug(title, seen)}">{mdinline.inline(title, src)}</h{lvl}>')
             i += 1
             continue
         if line.lstrip().startswith("|") and i + 1 < n and _SEP.match(lines[i + 1]) and "|" in lines[i + 1]:
-            head, aligns = _cells(line), []
-            for c in _cells(lines[i + 1]):
+            head, aligns = mdinline.cells(line), []
+            for c in mdinline.cells(lines[i + 1]):
                 aligns.append("center" if c.startswith(":") and c.endswith(":") else "right" if c.endswith(":") else "")
             i += 2
             rows = []
             while i < n and lines[i].lstrip().startswith("|"):
-                rows.append(_cells(lines[i]))
+                rows.append(mdinline.cells(lines[i]))
                 i += 1
 
             special = hook(head, rows) if hook else None
-            out.append(special or tablehtml.render_table(head, rows, lambda c: inline(c, src), aligns))
+            out.append(special or tablehtml.render_table(head, rows, lambda c: mdinline.inline(c, src), aligns))
             continue
         im = _ITEM.match(line)
         if im:
@@ -306,7 +249,7 @@ def _blocks(lines, src, seen, hook=None):
         while i < n and lines[i].strip() and not _starts_block(lines[i]):
             para.append(lines[i].strip())
             i += 1
-        out.append("<p>" + inline(" ".join(para), src) + "</p>")
+        out.append("<p>" + mdinline.inline(" ".join(para), src) + "</p>")
     return out
 
 
@@ -374,7 +317,7 @@ def fasthenry_users_body():
           '<h3 id="output-mapping">How outputs map</h3>',
           render_markdown("\n".join(o_pre), outs, seen)]
     for _, title, body in o_chunks:
-        t1.append(f'<details class="doc" id="{compat.slug(title, seen)}"><summary>{inline(title, outs)}</summary>\n'
+        t1.append(f'<details class="doc" id="{mdinline.slug(title, seen)}"><summary>{mdinline.inline(title, outs)}</summary>\n'
                   + render_markdown("\n".join(body), outs, seen) + "</details>")
     t1.append("</section>")
 
@@ -394,11 +337,11 @@ def fasthenry_users_body():
 
     for level, title, body in chunks:
         if level == 3:  # a "Decision:" essay, kept inside the family it belongs to
-            t3.append(f'<details class="doc decision" id="{compat.slug(title, seen)}"><summary>{inline(title, compat_src)}</summary>\n'
+            t3.append(f'<details class="doc decision" id="{mdinline.slug(title, seen)}"><summary>{mdinline.inline(title, compat_src)}</summary>\n'
                       + render_markdown("\n".join(body), compat_src, seen) + "</details>")
         elif title.startswith("Follow-ups filed"):
             close()
-            t3.append(f'<details class="doc" id="{compat.slug(title, seen)}"><summary>{inline(title, compat_src)}</summary>\n'
+            t3.append(f'<details class="doc" id="{mdinline.slug(title, seen)}"><summary>{mdinline.inline(title, compat_src)}</summary>\n'
                       + render_markdown("\n".join(body), compat_src, seen) + "</details>")
         else:
             close()
@@ -408,20 +351,20 @@ def fasthenry_users_body():
             def hook(head, rows, title=title, kinds=kinds):
                 if not compat.is_audit_table(head):
                     return None
-                html, ks = compat.entries_html(head, rows, lambda c: inline(c, compat_src), re.sub(r"[`]", "", title), seen)
+                html, ks = compat.entries_html(head, rows, lambda c: mdinline.inline(c, compat_src), re.sub(r"[`]", "", title), seen)
                 kinds.extend(ks)
                 return html
 
             html = render_markdown("\n".join([f"### {title}"] + body), compat_src, seen, hook)
             fid = re.match(r'<h3 id="([^"]+)"', html).group(1)
             t3.append(f'<section class="family" id="{fid}-family">\n' + html)
-            cur = (inline(title, compat_src), fid, kinds)
+            cur = (mdinline.inline(title, compat_src), fid, kinds)
     close()
     t3.append("</section>")
 
     glance = ['<section id="at-a-glance">', '<h2 id="at-a-glance-title">Support at a glance</h2>',
               compat.glance_html(families), "</section>"]
-    return compat.link_issues("\n".join(t1 + glance + t3))
+    return mdinline.link_issues("\n".join(t1 + glance + t3))
 
 
 def crate_version():

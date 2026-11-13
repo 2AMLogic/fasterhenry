@@ -5,25 +5,24 @@ Imported by build.py. Nothing here is hand-typed data:
   * the gallery comes from site/assets/gallery/gallery.json (tools/gallery_figures.py)
   * the benchmarks page is rendered from docs/benchmarks.md, and its scaling
     plot is drawn from that file's own "Scaling: dense vs pFFT + GMRES" table
+
+Inline markdown, table-cell splitting and issue links come from
+site/mdinline.py, the module build.py renders its own markdown sources with, so
+a link or a code span holding a `|` renders the same here as it does there.
 """
 import json, math, re
 from html import escape
 from pathlib import Path
 
 import charts
+import mdinline
 import tablehtml
 
 REPO = "https://github.com/2AMLogic/fasterhenry"
 BLOB = f"{REPO}/blob/main"
-
-
-def inline(md):
-    """Escape, then the four inline forms docs/benchmarks.md uses."""
-    s = escape(md, quote=False)
-    s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
-    s = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
-    s = re.sub(r"(?<![\w*])\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*(?![\w*])", r"<em>\1</em>", s)
-    return re.sub(r"(?<![\w*])_([^_]+)_(?![\w*])", r"<em>\1</em>", s)
+# Every markdown span this module renders comes from one of these two docs.
+BENCH_SRC = "docs/benchmarks.md"
+VALIDATION_SRC = "docs/validation.md"
 
 
 # ---- gallery ---------------------------------------------------------------
@@ -138,7 +137,7 @@ def tables(text):
     out, cur = [], []
     for ln in text.splitlines() + [""]:
         if ln.startswith("|"):
-            cur.append([c.strip() for c in ln.strip().strip("|").split("|")])
+            cur.append(mdinline.cells(ln))
         elif cur:
             if len(cur) >= 2 and all(re.fullmatch(r":?-+:?", c) for c in cur[1]):
                 out.append((cur[0], cur[2:]))
@@ -146,8 +145,8 @@ def tables(text):
     return out
 
 
-def table_html(header, rows):
-    return tablehtml.render_table(header, rows, inline)
+def table_html(header, rows, src=BENCH_SRC):
+    return tablehtml.render_table(header, rows, lambda c: mdinline.inline(c, src))
 
 
 def number(cell):
@@ -183,15 +182,6 @@ def scaling_svg(points, markers, layout=charts.WIDE, standalone=True, uid="scali
     """Log-log wall clock vs filaments; `markers` = [(x, label)] vertical guides.
     Default is the standalone wide file build.py writes to assets/benchmarks/."""
     return charts.scaling_figure(points, markers, SCALING_TITLE, SCALING_DESC, uid, layout, standalone)
-
-
-def note_html(text):
-    """One paragraph; a whole-paragraph `_..._` wrapper becomes <em> around the
-    rest. inline() alone cannot close it when a code span holds an underscore."""
-    t = " ".join(text.split())
-    if len(t) > 2 and t[0] == "_" and t[-1] == "_":
-        return f"<em>{inline(t[1:-1])}</em>"
-    return inline(t)
 
 
 def quote_after(text, prefix):
@@ -237,7 +227,7 @@ def benchmarks_body(md):
     caveat = quote_after(speed, "**Per thread")
     advantage = sentence(caveat, "Our dense wall-clock advantage")
     o = ['<h2>Takeaway</h2>',
-         f'<blockquote><p>{inline(agree)}</p><p>{inline(advantage)}</p></blockquote>',
+         f'<blockquote><p>{mdinline.inline(agree, BENCH_SRC)}</p><p>{mdinline.inline(advantage, BENCH_SRC)}</p></blockquote>',
          f'<p>Quoted from {doc}, which is where every number on this page comes from.</p>']
 
     o.append('<h2>Scaling: dense vs pFFT + GMRES</h2>')
@@ -257,14 +247,14 @@ def benchmarks_body(md):
     o.append('<h2>Speed against FastHenry</h2>')
     for hd, rows in tables(speed):
         o.append(table_html(hd, rows))
-    o.append(f'<p>{inline(caveat)}</p>')
+    o.append(f'<p>{mdinline.inline(caveat, BENCH_SRC)}</p>')
     o.append(f'<p>Operator-run, on one machine; method and caveats are in <a href="{BLOB}/docs/benchmarks.md#speed">docs/benchmarks.md</a>. '
              'CI never runs FastHenry.</p>')
 
     o.append('<h2>Accuracy against FastHenry</h2>')
     lead = re.search(r"^Same decks.*?(?=\n\s*\n)", acc, re.M | re.S)
     if lead:
-        o.append(f'<p>{inline(" ".join(lead.group(0).split()))}</p>')
+        o.append(f'<p>{mdinline.inline(" ".join(lead.group(0).split()), BENCH_SRC)}</p>')
     for hd, rows in tables(acc):
         o.append(table_html(hd, rows))
 
@@ -278,9 +268,9 @@ def benchmarks_body(md):
 
     o.append('<h2>How this was measured</h2><ul>')
     if hw:
-        o.append(f'<li><strong>FastHenry comparison and the criterion suite:</strong> {inline(hw)}</li>')
+        o.append(f'<li><strong>FastHenry comparison and the criterion suite:</strong> {mdinline.inline(hw, BENCH_SRC)}</li>')
     if hw2:
-        o.append(f'<li><strong>Scaling run:</strong> {inline(hw2)}</li>')
+        o.append(f'<li><strong>Scaling run:</strong> {mdinline.inline(hw2, BENCH_SRC)}</li>')
     o.append('<li><strong>SIMD:</strong> the partial-inductance kernels use 4-wide <code>f64</code> lanes (<code>wide::f64x4</code>), '
              f'as in <a href="{BLOB}/fasterhenry/src/inductance/neumann.rs"><code>neumann.rs</code></a>.</li></ul>')
     return "\n".join(o), scaling_svg(pts, markers)
@@ -303,7 +293,6 @@ VALIDATION_DROPPED = [
 ]
 
 _ISSUE_TAG = re.compile(r"\s*\((?:issue #\d+[^)]*)\)")
-_ISSUE_REF = re.compile(r"(?<![\w&/])(?:issue )?#(\d+)\b")
 
 
 def plain_cell(cell):
@@ -388,28 +377,13 @@ def _drop_blocks(text):
     return "\n\n".join(keep)
 
 
-def _link_issues(html):
-    """Turn remaining `#NN` / `issue #NN` in text (not code, not links) into issue links."""
-    out, in_a = [], 0
-    for part in re.split(r"(<code>.*?</code>|<pre>.*?</pre>|<[^>]+>)", html, flags=re.S):
-        if part.startswith("<"):
-            if part.startswith("<a ") or part.startswith("<a>"):
-                in_a += 1
-            elif part == "</a>":
-                in_a -= 1
-            out.append(part)
-        else:
-            out.append(part if in_a else _ISSUE_REF.sub(
-                lambda m: f'<a href="{REPO}/issues/{m.group(1)}">{m.group(0)}</a>', part))
-    return "".join(out)
-
-
 def validation_body(md, bench_md, render_markdown):
     """Summary table, then the allowlisted sections of docs/validation.md.
     `render_markdown(text, src)` is build.render_markdown (passed in: build imports this module)."""
     rows = validation_summary(md, bench_md)
     o = ['<section id="what-was-checked">', '<h2>What was checked</h2>',
-         table_html(["check", "independent reference", "measured agreement", "bound"], [list(r) for r in rows]),
+         table_html(["check", "independent reference", "measured agreement", "bound"],
+                    [list(r) for r in rows], VALIDATION_SRC),
          f'<p>Values are read from <a href="{BLOB}/docs/validation.md"><code>docs/validation.md</code></a> and '
          f'<a href="{BLOB}/docs/benchmarks.md"><code>docs/benchmarks.md</code></a> when the site is built; '
          'the build fails if one is missing.</p></section>']
@@ -421,7 +395,7 @@ def validation_body(md, bench_md, render_markdown):
         parts.append(m.group(0) + "\n" + section(md, h))
     text = _drop_blocks("\n\n".join(parts))
     text = "\n".join(_ISSUE_TAG.sub("", ln) if ln.startswith("#") else ln for ln in text.split("\n"))
-    o.append(_link_issues(render_markdown(text, "docs/validation.md")))
+    o.append(mdinline.link_issues(render_markdown(text, VALIDATION_SRC)))
     o.append('<details><summary>Reproduce</summary>'
              f'<p>The commands to regenerate every reference, the CI gate markers and the maintainer notes are in '
              f'<a href="{BLOB}/docs/validation.md"><code>docs/validation.md</code></a> on GitHub. '
