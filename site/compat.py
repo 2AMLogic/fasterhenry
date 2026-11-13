@@ -5,9 +5,14 @@ are turned into entry lists, each status is classified from the Status column
 by its leading words, and the "at a glance" tally is counted from those same
 rows. A status this module does not know fails the build, so a row can never
 silently drop out of the count.
+
+Entry ids and the bare-`#NN` issue links come from site/mdinline.py, shared
+with build.py and render.py.
 """
 import re
 from html import escape
+
+import mdinline
 
 # kind -> label used in the tally ("12 supported · 3 differ · 1 not supported")
 KINDS = [
@@ -73,16 +78,6 @@ def split_note(md, lead=60, min_total=200, min_rest=60):
     return md, ""
 
 
-def slug(text, seen):
-    base = re.sub(r"[^a-z0-9 _-]", "", re.sub(r"[`*]", "", text).lower()).strip().replace(" ", "-") or "entry"
-    out, n = base, 1
-    while out in seen:
-        n += 1
-        out = f"{base}-{n}"
-    seen.add(out)
-    return out
-
-
 def entries_html(head, rows, inline, family, seen):
     """Entry list (<dl>) for one audit table; returns (html, [kind per row])."""
     two = len(head) == 2
@@ -91,7 +86,7 @@ def entries_html(head, rows, inline, family, seen):
         field, status, note = (family, r[0], r[1]) if two else (r[0], r[1], r[2] if len(r) > 2 else "")
         word, kind, qual = classify_status(status)
         kinds.append(kind)
-        eid = slug(f"{family} {field}", seen)
+        eid = mdinline.slug(f"{family} {field}", seen)
         plain = re.sub(r"[`*\\]", "", field)
         fhtml = inline(field)
         if "<a " not in fhtml:
@@ -124,14 +119,3 @@ def glance_html(families):
             for title, fid, ks in families]
     return (f'<p class="glance-total">{len(total)} audited entries: {tally_html(tally(total))}</p>\n'
             '<ul class="glance">\n' + "\n".join(rows) + "\n</ul>")
-
-
-_MARKUP = re.compile(r"(<pre\b.*?</pre>|<a\b.*?</a>|<[^>]*>)", re.S)
-
-
-def link_issues(html, repo="{{repo}}"):
-    """Bare #NN in text becomes a link to that issue; text already in a link, a tag or a <pre> is left alone."""
-    parts = _MARKUP.split(html)
-    for i in range(0, len(parts), 2):
-        parts[i] = re.sub(r"(?<![\w&/#-])#(\d+)\b", rf'<a href="{repo}/issues/\1">#\1</a>', parts[i])
-    return "".join(parts)
