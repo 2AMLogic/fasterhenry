@@ -3,9 +3,9 @@
   "description": "Loom-managed workspace with AI development orchestration",
   "private": true,
   "scripts": {
-    "check:ci": "echo 'No CI checks configured. Customize this script for your project.' && exit 0",
-    "check:all": "echo 'No checks configured. Customize this script for your project.' && exit 0",
-    "test": "echo 'No tests configured. Customize this script for your project.' && exit 0",
-    "lint": "echo 'No linter configured. Customize this script for your project.' && exit 0"
+    "check:ci": "pnpm run lint && pnpm run test",
+    "check:all": "pnpm run check:ci",
+    "test": "cargo test --workspace",
+    "lint": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings"
   }
 }
