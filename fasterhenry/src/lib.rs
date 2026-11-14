@@ -31,10 +31,21 @@
 //! the default up to [`DENSE_PATH_MAX_FILAMENTS`] filaments, which is what
 //! [`SolverChoice::Auto`] — the front end's default — switches on.
 //!
-//! # Example
+//! # Examples
 //!
-//! A 1 mm copper bar, 100 µm × 20 µm in cross-section, with a port across
-//! its ends, swept from DC to 1 GHz. All quantities are SI.
+//! Two runnable programs live in the repository, outside the published crate:
+//! [`two_port.rs`] builds a two-conductor geometry, sweeps it on the dense
+//! path and prints the coupled impedance matrix, and [`iterative.rs`] solves
+//! one through [`IterativeSystem`] and reports the GMRES outcome. Run them
+//! with `cargo run --example two_port` and
+//! `cargo run --release --example iterative`.
+//!
+//! [`two_port.rs`]: https://github.com/2AMLogic/fasterhenry/blob/main/fasterhenry/examples/two_port.rs
+//! [`iterative.rs`]: https://github.com/2AMLogic/fasterhenry/blob/main/fasterhenry/examples/iterative.rs
+//!
+//! The short version, inline: a 1 mm copper bar, 100 µm × 20 µm in
+//! cross-section, with a port across its ends, swept from DC to 1 GHz. All
+//! quantities are SI.
 //!
 //! ```
 //! use fasterhenry::{solve, Discretization, Geometry, Node, Port, SegmentDef, Subdivision};
