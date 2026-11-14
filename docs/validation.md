@@ -18,7 +18,11 @@ Every PyPEEC- or reference-backed gate in this document prints a **positive
 marker on stdout** once its comparison has completed and passed —
 `SPIRAL GATE PASSED`, `SLOT GATE PASSED`, `CONTACT GATE PASSED`,
 `CROSS-SECTION GATE PASSED` — and the CI step counts occurrences of that
-marker against an exact expected number. One helper does every count,
+marker against an exact expected number. § "High-frequency refinement
+(issue #353)" follows the same convention (`REFINEMENT GATE PASSED`) even
+though it is backed by no external reference: a gate that is `#[ignore]`d
+and run by one dedicated step can silently stop running for its own
+reasons. One helper does every count,
 `tools/assert-gate-ran.sh <log> <marker> <expected-count> <label>`, which
 fails the step on a mismatch *and* on a log it could not read: an absent log
 is "not verified", never "zero markers, therefore compare". Two details make
@@ -396,3 +400,158 @@ FASTERHENRY_CROSS_SECTION_REFERENCE=target/cross_section_reference.json \
 - **Power balance** `Σ½|I|²R` against the port-delivered `½Re(I_pᴴV_p)`:
   `< 1e-9` dense, `< 1e-7` iterative on the ring fixture.
 - **Dense vs pFFT** currents agree to `1e-5` of the peak filament current.
+
+## High-frequency refinement (issue #353)
+
+`docs/benchmarks.md` § "FastHenry example corpus" records a worst-case
+relative Frobenius disagreement with FastHenry of 1.2e-2, at 1 THz on a
+735-filament pin deck, and says it has not been attributed. This section
+bounds **this engine's own share** of that figure — its discretization error
+at 1 THz — without running FastHenry at all, by refining one problem against
+itself. `fasterhenry/tests/refinement_study.rs` is the measurement; it needs
+no external oracle, so it needs no reference file and no venv.
+
+### Fixture and metric
+
+Three parallel copper pins (σ = 5.8e7 S/m), 5 mm long, 200 µm × 200 µm
+square cross-section, 600 µm pitch, one port across each pin's two ends — a
+3 × 3 port impedance matrix. Written from scratch for this study, not
+reconstructed from any FastHenry deck (`CONTRIBUTING.md` § "The one hard
+rule: clean room"). The existing graded and skin-effect gates above are all
+single-conductor comparisons against external references; none of them says
+what refinement does to the mutual terms.
+
+At 16 filaments per axis the three pins carry 768 filaments, which puts the
+coarsest level **in the corpus deck's class (735)**. That is deliberate: the
+question below is about the corpus deck's resolution, so the coarse end of
+the ladder has to sit there.
+
+The reported changes use exactly the metric behind the corpus table's
+agreement column — `rel_frobenius` at `tools/fasthenry_compare.py:107`,
+`‖ours − ref‖_F / ‖ref‖_F` — so the numbers are directly comparable with the
+1.2e-2 they bound. Each step uses the **next finer level as the reference**.
+Three are reported per step:
+
+- `dFrob`, over the full complex matrix;
+- `dR` and `dX`, the same metric restricted to the real and imaginary parts.
+
+All three are necessary. At 1 THz the port is reactance-dominated
+(`X₀₀/R₀₀ = 4.1e4` here), so `dFrob ≈ dX` and **the combined metric is
+nearly blind to the resistance** — which is the only part refinement
+meaningfully moves at this frequency. A bound on `dFrob` alone would pass for
+the wrong reason.
+
+### The ladder
+
+The skin depth at 1 THz is **6.6085e-8 m**, i.e. `side/δ = 3026`. Two
+constraints fix the ladder, both checked before any solve:
+
+- **The grading validity floor.** `fasterhenry/src/filament/grading.rs`
+  rejects any cell below `max(1e-7·max(l, w, h), 32·ε·coordinate_scale)`,
+  which is **5.0e-10 m** for a 5 mm pin — and it keys on the segment's
+  *length*, so a longer pin has a coarser floor at the same cross-section. At
+  `ratio = 3` that rules out more than about 20 filaments per axis here; at
+  `ratio = 2` the surface cell runs 3.922e-7 m (`n = 16`) down to 6.104e-9 m
+  (`n = 28`), clear of the floor throughout. The test asserts this from
+  `graded_surface_extent` up front, so an illegal level fails as a stated
+  precondition rather than as a `SolveError::Discretize` from inside CI.
+- **The counts are explicit, never `Discretization::SkinDepth`.** That
+  variant chooses counts itself and caps them at
+  `SkinDepthGrading::DEFAULT_MAX_PER_AXIS` (32), so two nominally successive
+  levels could saturate to the same grid and report a spurious zero change.
+  For the record, it does *not* saturate on this fixture: at 1 THz, 0.5 skin
+  depths and `ratio = 2` it would choose 1587 filaments (23 per axis).
+
+### Measured (2026-11-14, `fasterhenry` at `eff66b5`, release mode)
+
+16-vCPU Linux host under background load; wall-clock is one `solve` call per
+level, both frequencies in the same call (assembly dominates, so the second
+frequency is nearly free). `R₀₀` and `X₀₀` are port 0's diagonal entry, shown
+because it is the one a reader can check by hand; every `dFrob`/`dR`/`dX` is
+over the whole 3 × 3 matrix, mutual terms included.
+
+**Graded, `Discretization::graded(n, n, 2.0)`, at 1 THz** — the arm the bound
+applies to:
+
+| n | filaments | wall (s) | R₀₀ (Ω) | X₀₀ (Ω) | dFrob | dR | dX |
+|---|---|---|---|---|---|---|---|
+| 16 | 768 | 1.5 | 5.309173e-1 | 2.156528e4 | — | — | — |
+| 20 | 1200 | 4.0 | 1.853460e0 | 2.156014e4 | 2.029e-4 | 7.136e-1 | 1.965e-4 |
+| 24 | 1728 | 8.2 | 2.171827e0 | 2.155994e4 | 1.450e-5 | 1.466e-1 | 7.883e-6 |
+| 28 | 2352 | 15.6 | 2.186638e0 | 2.155990e4 | 1.672e-6 | 6.774e-3 | 1.573e-6 |
+
+**Coarsest to finest** (`n = 16` vs. `n = 28`, i.e. the corpus deck's
+resolution against the best available here): `dFrob = 2.154e-4`,
+`dR = 7.572e-1`, `dX = 2.059e-4`.
+
+**Graded, at 1 kHz** — the contrast arm, where the skin depth (2.0898e-3 m)
+is ten times the conductor and every grid must agree. `R₀₀ = 2.155173e-3 Ω`
+and `X₀₀ = 2.348549e-5 Ω` at **every** level; the per-step `dFrob` is
+8.196e-9, 6.816e-8 and 5.281e-7, and coarsest-to-finest 4.868e-7. The ladder
+itself therefore contributes nothing: what is left is rounding in a grid
+whose cells span 6 nm to 60 µm, which is why it grows with the grading's
+extremity instead of shrinking.
+
+**Uniform, `Discretization::uniform(n, n)`, at 1 THz** — for contrast only:
+
+| n | filaments | wall (s) | R₀₀ (Ω) | X₀₀ (Ω) | dFrob | dR | dX |
+|---|---|---|---|---|---|---|---|
+| 8 | 192 | 0.0 | 1.095830e-2 | 2.197717e4 | — | — | — |
+| 12 | 432 | 0.2 | 1.607819e-2 | 2.184109e4 | 5.150e-3 | 3.188e-1 | 5.150e-3 |
+| 16 | 768 | 0.5 | 2.117954e-2 | 2.177212e4 | 2.616e-3 | 2.411e-1 | 2.616e-3 |
+
+A uniform grid **cannot** resolve a 66 nm skin depth on a 200 µm conductor —
+it would need thousands of filaments per axis. At the same 768-filament cost
+as the graded ladder's coarsest level it reads `R₀₀` **103× low** (2.1e-2 Ω
+against 2.19 Ω) and is still climbing by 24 % per step. Asserting
+*convergence* on this arm would be a test that must fail; the test asserts
+that it has visibly **not** converged, which is the fact stated here. At
+1 kHz the uniform arm agrees with the graded one to better than 1.3e-8, as
+it must.
+
+### The answer
+
+**At the corpus deck's resolution the engine's own refinement error at 1 THz
+is 2.2e-4 in the relative Frobenius metric — below 1e-2, by a factor of
+about 46 — so discretization on this side does not explain the 1.2e-2 corpus
+disagreement.** That bound covers the **full complex matrix**, which at
+1 THz is almost entirely reactance; the **resistance** at that resolution is
+not converged at all, and the metric cannot see it: `R₀₀` moves **76 %**
+between the same two levels while `dFrob` stays at 2.2e-4. Read the 1.2e-2
+corpus figure the same way — in that metric, at 1 THz, it is a statement
+about the reactance, not about the losses.
+
+### What CI asserts
+
+One test, one positive marker (`REFINEMENT GATE PASSED`), counted exactly
+once by the `high-frequency refinement study` step. The assertions, with the
+measured value against each stated bound:
+
+| assertion | bound | measured |
+|---|---|---|
+| graded `dFrob`, last step, 1 THz | `< 1e-4` | 1.672e-6 |
+| graded `dFrob`/`dR`/`dX`, every step, 1 kHz | `< 1e-5` | ≤ 5.281e-7 |
+| the metric is blind to R: `dR > 10·dFrob`, last graded step | `> 10×` | 4051× |
+| the port is reactance-dominated: `X₀₀/R₀₀` | `> 1e2` | 4.062e4 |
+| coarsest graded level is in the corpus deck's class | 600–900 filaments | 768 |
+| every graded level clears the validity floor | `> 5.0e-10 m` | ≥ 6.104e-9 m |
+| `SkinDepthGrading` does not saturate its per-axis cap | `< 3072` filaments | 1587 |
+| the uniform arm has **not** converged (`dR`, last step) | `> 1e-2` | 2.411e-1 |
+| the uniform arm reads R low | `> 10×` low | 103× |
+
+The bounds sit one to two orders of magnitude off the measured values on
+purpose: they guard these headlines, they do not re-derive them. There is no
+wall-clock budget — every assertion is on convergence, so a busy runner
+cannot make the gate flaky.
+
+### Running
+
+```bash
+cargo test --release -p fasterhenry --test refinement_study \
+  -- --ignored --nocapture
+```
+
+`#[ignore]`d for the reason `perf_smoke.rs` is: seven dense solves of up to
+2 352 filaments in an unoptimized build are one to two orders of magnitude
+too slow to be worth the CI minutes. `cargo test --workspace` reports it as
+ignored and does not run it.
