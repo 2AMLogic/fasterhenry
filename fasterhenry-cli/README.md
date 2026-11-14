@@ -70,7 +70,7 @@ Options:
           [default: auto]
 
       --fasthenry-compat
-          Read a `.inp`/`.fh` deck's first line as an always-ignored title, as the public FastHenry format does, for third-party decks whose line 1 is prose. Off by default: line 1 is parsed like any other and `.title <text>` sets the title. A later `.title` is still honored in this mode. Also gives a segment or ground plane with no conductivity FastHenry's copper default (5.8e7 S/m), with a warning
+          Read a `.inp`/`.fh` deck's first line as an always-ignored title, as the public FastHenry format does, for third-party decks whose line 1 is prose. Off by default: line 1 is parsed like any other and `.title <text>` sets the title. A later `.title` is still honored in this mode. Also gives a segment or ground plane with no conductivity FastHenry's copper default (5.8e7 S/m), with a warning, and turns a `.equiv` of a node with itself into a warning
 
   -h, --help
           Print help (see a summary with '-h')

@@ -790,3 +790,55 @@ fn currents_flag_writes_csv_and_json_block_without_changing_other_outputs() {
         );
     }
 }
+
+/// The README's pasted `$ fasterhenry --help` block is the crates.io page's
+/// only in-page option reference, so it is pinned here to the command's real
+/// rendered long help: when an `#[arg]` doc comment changes, this fails on
+/// the first differing line until the paste is updated to match. Trailing
+/// whitespace is stripped from both sides before comparing — the real output
+/// carries trailing spaces on one blank line that the README (which has none
+/// anywhere) rightly omits.
+#[test]
+fn readme_help_block_matches_rendered_long_help() {
+    use clap::CommandFactory;
+
+    let readme = include_str!("../README.md");
+    let lines: Vec<&str> = readme.lines().collect();
+    let marker = lines
+        .iter()
+        .position(|&line| line == "$ fasterhenry --help")
+        .expect("README should contain a `$ fasterhenry --help` block");
+    let block: Vec<&str> = lines[marker + 1..]
+        .iter()
+        .take_while(|&&line| line != "```")
+        .copied()
+        .collect();
+    assert!(
+        !block.is_empty(),
+        "README's `$ fasterhenry --help` block is empty; was its fence moved?"
+    );
+
+    let rendered: Vec<String> = fasterhenry_cli::cli::BareCli::command()
+        .render_long_help()
+        .to_string()
+        .lines()
+        .map(str::to_string)
+        .collect();
+
+    assert_eq!(
+        block.len(),
+        rendered.len(),
+        "README help block is {} lines but the rendered long help is {}",
+        block.len(),
+        rendered.len()
+    );
+    for (offset, (pasted, real)) in block.iter().zip(&rendered).enumerate() {
+        assert_eq!(
+            pasted.trim_end(),
+            real.trim_end(),
+            "README help block line {} (README line {}) differs:\n  pasted: {pasted:?}\n  real:   {real:?}",
+            offset + 1,
+            marker + 2 + offset
+        );
+    }
+}
