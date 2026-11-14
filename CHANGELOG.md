@@ -14,6 +14,28 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- Every PyPEEC validation reference now declares the geometry it solved,
+  and every gate checks it before comparing an impedance (issue #369).
+  Each fixture gated in `docs/validation.md` is defined twice — once by the
+  Rust constants the engine meshes, once in `tools/pypeec_reference.py`,
+  which must stay an independent discretization and solve and so cannot
+  import the Rust fixture. The agreement between the two copies used to be
+  asserted in prose only: the reference JSON carried no geometry, so a
+  pitch, landing, thickness, conductivity or `--voxel-um` edit on either
+  side left a gate comparing two *different* problems at a 2–5.5 %
+  tolerance, passing until the drift happened to exceed it (a 15 → 16 µm
+  spiral pitch edit moves L by 1.39 %, inside the 2 % bound). The script
+  now writes a `geometry` object per fixture (`fixture_geometry`) and
+  `common::assert_reference_geometry` checks it, the declared `fixture` and
+  the declared `freq_ac_hz` against the Rust constants, failing with the
+  mismatching field named; the contact gates additionally verify each
+  landing centre is a voxel centre of the grid the reference declares.
+  `fixture`, `voxel_size_um` and `freq_ac_hz` were written and read by
+  nothing before this. Nothing in the library changed and no fixture
+  number moved — `tests/plane_validation.rs` also collapses the duplicate
+  sheet constants the contact fixture restated (`SHEET_*`/`SLOT_*`), and
+  `tests/spiral_validation.rs` gains `reference_geometry_gate` tests so the
+  new check cannot silently stop checking.
 - High-frequency refinement study (issue #353):
   `fasterhenry/tests/refinement_study.rs` refines a self-authored 3-pin
   multi-conductor bundle against itself at 1 THz and at 1 kHz, over graded
