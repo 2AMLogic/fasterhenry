@@ -177,11 +177,8 @@ jobs:
           cargo test --release -p fasterhenry --test refinement_study \
             -- --ignored --nocapture --test-threads=1 2>&1 \
             | tee target/refinement-study.log
-          passed="$(grep -c "REFINEMENT GATE PASSED" target/refinement-study.log || true)"
-          if [ "$passed" -ne 1 ]; then
-            echo "::error::refinement_study: $passed of 1 refinement gates ran"
-            exit 1
-          fi
+          ./tools/assert-gate-ran.sh target/refinement-study.log \
+            "REFINEMENT GATE PASSED" 1 "refinement_study convergence gates"
       # The PyPEEC venv is the same tree on every run with the same pin and
       # the same interpreter, so it is cached instead of reinstalled (the
       # install is ~40 s per Linux leg, per run). There is no setup-python
