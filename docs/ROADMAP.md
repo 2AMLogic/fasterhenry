@@ -45,7 +45,7 @@ what comes next and why.
 
 ## Now
 
-None of these has an issue yet.
+Each is now filed, in the order below: #350, #351, #352 and #353.
 
 1. **Record the filament-current output in the changelog and README.**
    Done when `CHANGELOG.md` `[Unreleased]` has an Added entry for
@@ -119,7 +119,8 @@ None of these has an issue yet.
 | #166 branch-protection read | an operator decision; merges are no longer blocked |
 | #172 Auditor Rust toolchain | a worker capability change outside this repository |
 
-Nothing in the tracker is dispatchable today; the Now items are once filed.
+Nothing else in the tracker is dispatchable today; the Now items (#350 to
+#353) are.
 
 ## Not planned
 
