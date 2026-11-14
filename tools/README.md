@@ -1,12 +1,14 @@
 # tools
 
 Helpers that sit outside the Rust crates: independent validation oracles, the
-benchmark-table generator, and the third-party license bundle generator. None
-of them ship in the published crates.
+CI gate assertion, the benchmark-table generator, and the third-party license
+bundle generator. None of them ship in the published crates.
 
 | Script | What it does | Used by |
 |---|---|---|
 | `third-party-licenses.sh` | Regenerates `THIRD_PARTY_LICENSES.md` (the Apache-2.0 §4(a) attribution bundle a binary distribution must ship) with cargo-about, pinned by version and checksum. `--check` fails if the committed bundle is stale, if `about.toml` and `deny.toml` disagree, or if a workflow ships an artifact without the bundle. Its template is `third-party-licenses.hbs`. | CI (`ci.yml`, `third-party-licenses` job); `README.md` |
+| `assert-gate-ran.sh` | Asserts a validation gate actually ran, by counting the positive marker it prints on success (`<log> <marker> <expected-count> <label>`) against an exact expected number. The single assertion behind every reference-backed gate; fails closed on a log it cannot read, so an unverifiable gate can never read as a passing one (#59, #362). | CI (`ci.yml`, all five validation gates); `docs/validation.md` |
+| `test_assert_gate_ran.sh` | Self-test for `assert-gate-ran.sh`: the mismatch, fail-closed and regex-marker cases (`./tools/test_assert_gate_ran.sh`). | Local |
 | `pypeec_reference.py` | Builds a validation fixture (the 2-turn spiral, or the ground-plane fixtures via `--fixture`) as a PyPEEC voxel geometry and writes its terminal impedance as JSON — the independent oracle for the spiral and plane validation tests. | CI (`ci.yml`, PyPEEC gates); `docs/validation.md` |
 | `cross_section_reference.py` | Independent 2-D skin-effect reference for a rectangular trace: per-unit-length internal impedance vs frequency, as JSON. Oracle for `fasterhenry/tests/width_graded_skin_validation.rs`. | CI (`ci.yml`); `docs/validation.md` |
 | `bench_table.py` | Reads criterion's JSON output and regenerates the dated results table between the `bench-table` markers in `docs/benchmarks.md`. | `bench.yml` (manual workflow) |
@@ -18,7 +20,7 @@ of them ship in the published crates.
 | `gallery_figures.py` | Runs the built CLI on the six committed decks and writes `site/assets/gallery/` (JSON + SVG figures) for the site's Gallery page. | manual (`python3 tools/gallery_figures.py`) |
 | `test_gallery_figures.py` | Unit tests for `gallery_figures.py` and `site/render.py` (`python3 -m unittest test_gallery_figures`, run from this directory). | manual |
 
-Each script's module docstring — or, for the shell script, its `--help` — has
+Each script's module docstring — or, for a shell script, its `--help` — has
 its full usage.
 
 ## FastHenry oracle
