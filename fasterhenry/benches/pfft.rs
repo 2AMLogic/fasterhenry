@@ -23,14 +23,14 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use fasterhenry::partial_inductance_matrix;
 use fasterhenry::pfft::{PfftOperator, PfftParams};
-use fasterhenry::{partial_inductance_matrix, Filament, Node, Segment};
 use nalgebra::DVector;
 
 #[path = "support.rs"]
 #[allow(dead_code)]
 mod support;
-use support::{max_filaments, COPPER};
+use support::{cloud, max_filaments};
 
 /// Filament counts swept: 1k to 10k, as issue #42 asks.
 const SIZES: [usize; 4] = [1_000, 2_000, 5_000, 10_000];
@@ -41,38 +41,6 @@ const DENSE_MAX_FILAMENTS: usize = 5_000;
 fn sizes() -> impl Iterator<Item = usize> {
     let cap = max_filaments();
     SIZES.into_iter().filter(move |&n| n <= cap)
-}
-
-/// `n` random axis-aligned filaments at constant density, from a fixed
-/// linear congruential sequence so that every run sees the same geometry.
-fn cloud(n: usize) -> Vec<Filament> {
-    let side = 10e-3 * (n as f64 / 400.0).cbrt();
-    let mut state = 11u64;
-    let mut next = move || {
-        state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        (state >> 11) as f64 / (1u64 << 53) as f64
-    };
-    (0..n)
-        .map(|_| {
-            let a = [side * next(), side * next(), side * next()];
-            let length = 1e-3 * (0.5 + next());
-            let mut d = [0.0; 3];
-            d[((next() * 3.0) as usize).min(2)] = if next() < 0.5 { -1.0 } else { 1.0 };
-            let b = [0, 1, 2].map(|k| a[k] + length * d[k]);
-            let width = 0.1e-3 + 0.2e-3 * next();
-            let height = 0.05e-3 + 0.1e-3 * next();
-            Filament::new(&Segment::new(
-                Node::from(a),
-                Node::from(b),
-                width,
-                height,
-                COPPER,
-            ))
-            .expect("valid segment")
-        })
-        .collect()
 }
 
 fn input(n: usize) -> Vec<f64> {
