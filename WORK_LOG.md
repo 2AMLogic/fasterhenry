@@ -4,10 +4,24 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-14
+
+- **PR #363**: test(validation): bound the engine's own refinement error at 1 THz
+- **Issue #353** (closed): High-frequency refinement study: how far does Z move with filament refinement at 1 THz?
+- **PR #357**: refactor(solve): share the sweep tail and R+jωL conversion across both paths
+- **Issue #354** (closed): Share one sweep() tail and one R+jωL helper between solve.rs and iterative.rs
+- **PR #355**: docs: record the --currents output in the changelog and both READMEs
+- **Issue #350** (closed): Record the --currents output (#294) in CHANGELOG.md and the README
+- **PR #349**: docs: roadmap as of 2026-11-13
+
 ### 2026-11-13
 
 - **PR #343**: build: run cargo fmt/clippy/test from the package.json check scripts
 - **Issue #342** (closed): Wire package.json check:ci/test/lint to cargo: the stubs exit 0 without checking anything
+- **PR #348**: refactor(site): share one copy of the inline markdown helpers
+- **Issue #347** (closed): Consolidate duplicate markdown helpers in site/ (inline, table cells, slug, issue links) and remove dead note_html
+- **PR #346**: refactor(tests): share the serpentine, meander, spiral and coupled fixtures
+- **Issue #344** (closed): Deduplicate hand-copied test and bench fixtures in fasterhenry (serpentine, meander, spiral, coupled structure)
 
 ### 2026-11-12
 
