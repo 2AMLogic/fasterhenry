@@ -241,10 +241,11 @@ jobs:
       # test with its *package* directory as the cwd, so a workspace-relative
       # `target/...` resolves to `fasterhenry/target/...` and never exists --
       # which silently sent this gate down its skip path on every run until
-      # #59. Stderr is folded into the log as well, because the skip reason
-      # is an `eprintln!`; and the gate is asserted *positively* by counting
-      # the marker the test prints only after the comparison passed, so a
-      # skip cannot pass for a run whatever the routing.
+      # #59. The gate is asserted *positively*, by counting the marker the
+      # test prints only after the comparison passed (tools/assert-gate-ran.sh
+      # has the why), so a skip cannot pass for a run whatever the routing.
+      # Stderr is folded in so the skip reason -- an `eprintln!`, invisible to
+      # a stdout-only log -- reaches a human reading the failed run.
       - name: validation reference (PyPEEC) + assert the gate ran
         if: startsWith(matrix.os, 'ubuntu')
         run: |
@@ -254,15 +255,8 @@ jobs:
           FASTERHENRY_PYPEEC_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_reference.json" \
             cargo test -p fasterhenry --test spiral_validation -- --nocapture 2>&1 \
             | tee target/spiral-validation.log
-          if grep -q "SKIPPED" target/spiral-validation.log; then
-            echo "::error::spiral_validation skipped although the reference was generated"
-            exit 1
-          fi
-          passed="$(grep -c "SPIRAL GATE PASSED" target/spiral-validation.log || true)"
-          if [ "$passed" -ne 1 ]; then
-            echo "::error::spiral_validation: $passed of 1 PyPEEC gates ran"
-            exit 1
-          fi
+          ./tools/assert-gate-ran.sh target/spiral-validation.log \
+            "SPIRAL GATE PASSED" 1 "spiral_validation PyPEEC gates"
       # The MAT v4 export round-trips through scipy.io.loadmat with values
       # identical to the JSON output (structure check lives in the Rust tests).
       - name: output formats (scipy loadmat vs JSON)
@@ -306,11 +300,8 @@ jobs:
             /tmp/pypeec-venv/bin/python tools/spice_check.py target/twobar.json target/twobar.cir 1e9 \
               --expect-lines '^K1_2 ' --expect-lines '^H1_2 ' --expect-lines '^H2_1 '
           } 2>&1 | tee target/spice-check.log
-          checked="$(grep -c "ngspice stamp vs JSON: [12] ports checked" target/spice-check.log || true)"
-          if [ "$checked" -ne 2 ]; then
-            echo "::error::SPICE export: $checked of 2 ngspice comparisons ran"
-            exit 1
-          fi
+          ./tools/assert-gate-ran.sh target/spice-check.log \
+            "ngspice stamp vs JSON: [12] ports checked" 2 "SPICE export ngspice comparisons"
       # The ground-plane PyPEEC gates: the slotted-vs-solid differential
       # and the graded contact-region separation differential (issue #36),
       # on both solvers (contact terms cancel on each). Release mode, for
@@ -345,23 +336,10 @@ jobs:
           FASTERHENRY_PYPEEC_CONTACT_NEAR_REFERENCE="$GITHUB_WORKSPACE/target/pypeec_contact_near.json" \
             cargo test --release -p fasterhenry --test plane_validation -- --nocapture 2>&1 \
             | tee target/plane-validation.log
-          if grep -q "SKIPPED" target/plane-validation.log; then
-            echo "::error::plane_validation skipped although the references were generated"
-            exit 1
-          fi
-          # Every reference-backed gate must announce itself positively: a
-          # skip that somehow avoided the word SKIPPED cannot look like a
-          # pass, and neither can one whose message went to stderr.
-          passed="$(grep -c "CONTACT GATE PASSED" target/plane-validation.log || true)"
-          if [ "$passed" -ne 2 ]; then
-            echo "::error::plane_validation: $passed of 2 contact gates ran"
-            exit 1
-          fi
-          passed="$(grep -c "SLOT GATE PASSED" target/plane-validation.log || true)"
-          if [ "$passed" -ne 1 ]; then
-            echo "::error::plane_validation: $passed of 1 slot gates ran"
-            exit 1
-          fi
+          ./tools/assert-gate-ran.sh target/plane-validation.log \
+            "CONTACT GATE PASSED" 2 "plane_validation contact gates"
+          ./tools/assert-gate-ran.sh target/plane-validation.log \
+            "SLOT GATE PASSED" 1 "plane_validation slot gates"
       # The width-graded skin-effect gate (issue #32): an independent 2-D
       # cross-section solve (numpy only; the venv above has it) against
       # uniform and width-graded filament grids, release mode. Passing is
@@ -376,11 +354,8 @@ jobs:
           FASTERHENRY_CROSS_SECTION_REFERENCE="$GITHUB_WORKSPACE/target/cross_section_reference.json" \
             cargo test --release -p fasterhenry --test width_graded_skin_validation -- --nocapture 2>&1 \
             | tee target/cross-section-validation.log
-          passed="$(grep -c "CROSS-SECTION GATE PASSED" target/cross-section-validation.log || true)"
-          if [ "$passed" -ne 4 ]; then
-            echo "::error::width_graded_skin_validation: $passed of 4 reference gates ran"
-            exit 1
-          fi
+          ./tools/assert-gate-ran.sh target/cross-section-validation.log \
+            "CROSS-SECTION GATE PASSED" 4 "width_graded_skin_validation reference gates"
 
   package:
     name: Package (cargo publish --dry-run)

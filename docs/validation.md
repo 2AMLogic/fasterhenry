@@ -18,8 +18,11 @@ Every PyPEEC- or reference-backed gate in this document prints a **positive
 marker on stdout** once its comparison has completed and passed —
 `SPIRAL GATE PASSED`, `SLOT GATE PASSED`, `CONTACT GATE PASSED`,
 `CROSS-SECTION GATE PASSED` — and the CI step counts occurrences of that
-marker against an exact expected number. Two details make that necessary
-rather than decorative (#59):
+marker against an exact expected number. One helper does every count,
+`tools/assert-gate-ran.sh <log> <marker> <expected-count> <label>`, which
+fails the step on a mismatch *and* on a log it could not read: an absent log
+is "not verified", never "zero markers, therefore compare". Two details make
+counting necessary rather than decorative (#59):
 
 - **The reference path passed to a test must be absolute.** `cargo test`
   runs an integration test with its *package* directory as the cwd, so a
@@ -30,8 +33,9 @@ rather than decorative (#59):
 - **Skip reasons go to stderr.** They are `eprintln!`, so a step that pipes
   only stdout into its log (`cargo test … | tee log`) and then greps for
   `SKIPPED` searches text the message never entered — a check that cannot
-  fail. CI folds stderr in with `2>&1 | tee` *and* counts the positive
-  marker, so a skip fails the step under either mechanism.
+  fail. Counting the positive marker is what fails the step instead, and it
+  is the only mechanism that does; CI still folds stderr in with
+  `2>&1 | tee`, so the skip reason reaches the log a human reads afterwards.
 
 Between them, the relative path and the invisible skip meant the spiral and
 slot gates took their "reference absent" path on every CI run from their
