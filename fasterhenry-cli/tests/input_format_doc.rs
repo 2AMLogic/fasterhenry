@@ -115,21 +115,99 @@ fn the_first_example_is_the_minimal_one() {
 }
 
 /// The document's claim about the strictness boundary: unknown keys are
-/// rejected at the top level of the document, but *not* inside a
-/// `discretization` payload. Both halves are load-bearing prose, so pin both.
+/// rejected at the top level, in `geometry`, in each node and segment, and in
+/// `coupling` — but *not* inside a `discretization` payload or a port object.
+///
+/// Every member of that boundary is load-bearing prose, so pin every member,
+/// not a sample of it. An earlier revision of this test pinned only the
+/// top-level rejection and the payload acceptance, and the one unpinned claim
+/// was the wrong one: the document had `ports` on the strict side, while
+/// `Port` carries no `deny_unknown_fields`. A table-driven sweep means the
+/// next edit to that sentence cannot drift the same way.
 #[test]
 fn the_documented_strictness_boundary_holds() {
     let minimal = json_blocks(&document()).swap_remove(0);
 
-    let top_level = minimal.replace("\"ports\":", "\"typo\": true, \"ports\":");
-    let error = serde_json::from_str::<Problem>(&top_level)
-        .expect_err("an unknown key at the top level is rejected");
-    assert!(error.to_string().contains("typo"), "{error}");
+    // `insertion` is spliced in immediately before the *unique* occurrence of
+    // `anchor` in the minimal example, placing an unknown key at `level`.
+    // `rejected` is what docs/input-format.md promises happens then.
+    let cases = [
+        ("the top level", "\"ports\":", "\"typo\": true, ", true),
+        ("geometry", "\"nodes\":", "\"typo\": true, ", true),
+        ("a node", "\"x\": 0.0,", "\"typo\": true, ", true),
+        ("a segment", "\"a\": 0,", "\"typo\": true, ", true),
+        ("a port", "\"positive\": 0,", "\"typo\": true, ", false),
+        (
+            "coupling",
+            "\"frequencies_hz\":",
+            "\"coupling\": { \"typo\": true }, ",
+            true,
+        ),
+        (
+            "a discretization payload",
+            "\"nw\": 3,",
+            "\"typo\": 1, ",
+            false,
+        ),
+    ];
 
-    let in_payload = minimal.replace("\"nw\": 3,", "\"typo\": 1, \"nw\": 3,");
-    assert_ne!(in_payload, minimal, "the replacement must actually apply");
-    serde_json::from_str::<Problem>(&in_payload)
-        .expect("an unknown key inside a discretization payload is accepted, as documented");
+    for (level, anchor, insertion, rejected) in cases {
+        assert_eq!(
+            minimal.matches(anchor).count(),
+            1,
+            "the minimal example must contain `{anchor}` exactly once, so the \
+             insertion for {level} lands where this case intends"
+        );
+        let mutated = minimal.replace(anchor, &format!("{insertion}{anchor}"));
+
+        match (rejected, serde_json::from_str::<Problem>(&mutated)) {
+            (true, Err(error)) => assert!(
+                error.to_string().contains("typo"),
+                "an unknown key in {level} is rejected, but not by name: {error}"
+            ),
+            (true, Ok(_)) => panic!(
+                "docs/input-format.md says an unknown key in {level} is rejected, \
+                 but this parsed:\n{mutated}"
+            ),
+            (false, Ok(_)) => {}
+            (false, Err(error)) => panic!(
+                "docs/input-format.md says an unknown key in {level} is accepted \
+                 and ignored, but it was rejected: {error}"
+            ),
+        }
+    }
+}
+
+/// The `ports` section spells out what the missing `deny_unknown_fields`
+/// costs a reader: a misspelled optional `name` is dropped in silence, while a
+/// misspelled *required* key is still caught — but reported as the key that is
+/// now missing, not as the typo that was written. Both are concrete claims
+/// about observable behaviour, so pin both.
+#[test]
+fn the_documented_port_typo_consequences_hold() {
+    let minimal = json_blocks(&document()).swap_remove(0);
+
+    let misspelled_name =
+        minimal.replace("\"positive\": 0,", "\"nmae\": \"sense\", \"positive\": 0,");
+    let problem: Problem = serde_json::from_str(&misspelled_name)
+        .expect("a misspelled optional port key is accepted, as documented");
+    assert_eq!(
+        problem.ports[0].name, None,
+        "a misspelled `name` must leave the port unnamed, as documented"
+    );
+
+    let misspelled_required = minimal.replace("\"positive\": 0,", "\"positiv\": 0,");
+    assert_ne!(
+        misspelled_required, minimal,
+        "the replacement must actually apply"
+    );
+    let error = serde_json::from_str::<Problem>(&misspelled_required)
+        .expect_err("a misspelled required port key is still caught");
+    assert!(
+        error.to_string().contains("missing field `positive`"),
+        "a misspelled required port key is reported as the missing key, not the \
+         typo written: {error}"
+    );
 }
 
 /// The document's discretization table gives, for each of the five schemes,

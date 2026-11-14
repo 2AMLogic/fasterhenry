@@ -33,9 +33,11 @@ A problem document is a JSON object with five keys:
 
 **Unknown keys at this level are rejected** — a typo is an error, not a
 silently ignored field. The same holds for `geometry`, for each node and
-segment, for each port, and for `coupling`; it does **not** hold inside a
+segment, and for `coupling`. It does **not** hold in exactly two places, where
+a stray key is accepted and silently ignored instead: inside a
 `discretization` payload (see the boundary noted under
-[Discretization](#discretization) below).
+[Discretization](#discretization) below) and inside a port object (see
+[`ports`](#ports)).
 
 `coupling` is the only optional key, and it is left out again when a problem
 is serialized back to JSON if it carries no group tags and truncates nothing
@@ -108,6 +110,14 @@ Swapping `positive` and `negative` flips the sign of that port's off-diagonal
 impedances and leaves its self-impedance unchanged. At least one port is
 required — by the solve, not by the parse.
 
+Along with a `discretization` payload, and unlike a node or a segment, a port
+object does **not** reject unknown keys.
+`{ "positive": 0, "negative": 1, "typo": true }` parses and the stray key is
+ignored. The consequence to watch for is a misspelled `name`: it is dropped in
+silence and the port comes out unnamed, rather than being reported. A
+misspelled `positive` or `negative` is still caught, but as ``missing field
+`positive` `` — naming the key you meant, not the one you wrote.
+
 ## `discretization`
 
 Exactly one key, naming the scheme; its value is the payload. The five
@@ -140,11 +150,11 @@ So, for example, `"discretization": { "uniform": { "nw": 3, "nh": 2 } }`.
 - `per_segment` and `per_segment_graded` are **positional**: entry *i*
   applies to segment *i* of `geometry.segments`.
 
-Unlike every other object in the document, a `discretization` payload does
-**not** reject unknown keys. `{"uniform": {"nw": 3, "nh": 2, "typo": 1}}` is
-accepted and the stray key ignored, where the same typo at the top level of
-the document is an error. Do not rely on a misspelled grading parameter being
-caught for you.
+Along with a port object, and unlike every other object in the document, a
+`discretization` payload does **not** reject unknown keys.
+`{"uniform": {"nw": 3, "nh": 2, "typo": 1}}` is accepted and the stray key
+ignored, where the same typo at the top level of the document is an error. Do
+not rely on a misspelled grading parameter being caught for you.
 
 Grading ratios are checked when the problem is **solved**, not when it is
 parsed, so an out-of-range `ratio` surfaces as a solve error naming the
