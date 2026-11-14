@@ -137,18 +137,7 @@ pub fn run_reporting_with(
     frequency_override: Option<Vec<f64>>,
     choice: SolverChoice,
 ) -> Result<(SweepResult, Vec<String>), String> {
-    let frequencies = frequency_override.unwrap_or_else(|| problem.frequencies_hz.clone());
-    if frequencies.is_empty() {
-        return Err(
-            "no frequencies: give .freq in the deck, frequencies_hz in the document, or --freq"
-                .to_string(),
-        );
-    }
-    if problem.ports.is_empty() {
-        return Err("no ports: give .external in the deck or ports in the document".to_string());
-    }
-    let system = assemble_system(problem, choice)?;
-    let warnings = system.warnings();
+    let (frequencies, system, warnings) = prepared(problem, frequency_override, choice)?;
     let result = system.sweep(&frequencies)?;
     Ok((result, warnings))
 }
@@ -212,6 +201,40 @@ fn assemble_system(problem: &Problem, choice: SolverChoice) -> Result<System, St
     .map_err(|error| error.to_string())
 }
 
+/// The frequency list, assembled system and truncation warnings that every
+/// solve entry point needs, behind the two input guards every one of them
+/// owes the user.
+///
+/// `frequency_override`, when given, replaces the problem's frequencies (the
+/// CLI's `--freq fmin fmax ndec`). An empty frequency list or an empty port
+/// list is reported here, by name, instead of surfacing as an obscure
+/// failure out of the assembly or an empty sweep.
+///
+/// [`run_reporting_with`] and [`run_with_currents`] both start here, so
+/// `fasterhenry run` and `fasterhenry run --currents` cannot disagree about
+/// which problems they accept or what they say when they refuse one — the
+/// same reason [`mod@fasterhenry::solve`] holds the sweep itself in one place
+/// for both solver paths (issue #368).
+fn prepared(
+    problem: &Problem,
+    frequency_override: Option<Vec<f64>>,
+    choice: SolverChoice,
+) -> Result<(Vec<f64>, System, Vec<String>), String> {
+    let frequencies = frequency_override.unwrap_or_else(|| problem.frequencies_hz.clone());
+    if frequencies.is_empty() {
+        return Err(
+            "no frequencies: give .freq in the deck, frequencies_hz in the document, or --freq"
+                .to_string(),
+        );
+    }
+    if problem.ports.is_empty() {
+        return Err("no ports: give .external in the deck or ports in the document".to_string());
+    }
+    let system = assemble_system(problem, choice)?;
+    let warnings = system.warnings();
+    Ok((frequencies, system, warnings))
+}
+
 /// The header row of the `--currents` CSV.
 pub const CURRENTS_CSV_HEADER: &str = "frequency_hz,filament,segment,conductor,x_m,y_m,z_m,\
 current_re_a,current_im_a,current_abs_a,j_abs_a_per_m2,power_w";
@@ -229,18 +252,7 @@ pub fn run_with_currents(
     choice: SolverChoice,
     csv: &mut dyn std::io::Write,
 ) -> Result<(SweepResult, Vec<String>, serde_json::Value), String> {
-    let frequencies = frequency_override.unwrap_or_else(|| problem.frequencies_hz.clone());
-    if frequencies.is_empty() {
-        return Err(
-            "no frequencies: give .freq in the deck, frequencies_hz in the document, or --freq"
-                .to_string(),
-        );
-    }
-    if problem.ports.is_empty() {
-        return Err("no ports: give .external in the deck or ports in the document".to_string());
-    }
-    let system = assemble_system(problem, choice)?;
-    let warnings = system.warnings();
+    let (frequencies, system, warnings) = prepared(problem, frequency_override, choice)?;
     let result = system.sweep(&frequencies)?;
     let io = |error: std::io::Error| format!("cannot write currents CSV: {error}");
     writeln!(csv, "{CURRENTS_CSV_HEADER}").map_err(io)?;
