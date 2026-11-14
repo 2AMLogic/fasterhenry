@@ -80,10 +80,10 @@ use crate::gmres::{gmres, GmresOutcome, GmresParams};
 use crate::inductance::{mutual_inductance, self_inductance, KernelError};
 use crate::mesh::{MeshMatrix, Port};
 use crate::pfft::{PfftOperator, PfftParams, PfftStats};
-use crate::result::{Counts, Provenance, SweepResult, Timing};
+use crate::result::{Counts, SweepResult};
 use crate::solve::{
-    check_excitation, check_frequency, discretize_geometry, filament_resistance, Discretization,
-    SolveError, SWEEP_MEMORY_BUDGET_BYTES,
+    check_excitation, check_frequency, complex_diagonal, complex_impedance, discretize_geometry,
+    filament_resistance, sweep_impedances, Discretization, SolveError,
 };
 
 type C64 = Complex<f64>;
@@ -301,14 +301,8 @@ impl IterativeSystem {
             (z.map(|re| C64::new(re, 0.0)), outcomes)
         } else {
             let omega = std::f64::consts::TAU * frequency;
-            let complex =
-                |r: &DMatrix<f64>, l: &DMatrix<f64>| r.zip_map(l, |r, l| C64::new(r, omega * l));
-            let diagonal: Vec<C64> = self
-                .r_diag
-                .iter()
-                .zip(&self.l_diag)
-                .map(|(&r, &l)| C64::new(r, omega * l))
-                .collect();
+            let complex = |r, l| complex_impedance(r, l, omega);
+            let diagonal = complex_diagonal(&self.r_diag, &self.l_diag, omega);
             schur_complement_gmres(
                 &complex(&self.r_ep, &self.l_ep),
                 &complex(&self.r_pp, &self.l_pp),
@@ -350,8 +344,7 @@ impl IterativeSystem {
         check_frequency(0, frequency)?;
         check_excitation(self.counts.ports, excitation)?;
         let omega = std::f64::consts::TAU * frequency;
-        let complex =
-            |r: &DMatrix<f64>, l: &DMatrix<f64>| r.zip_map(l, |r, l| C64::new(r, omega * l));
+        let complex = |r, l| complex_impedance(r, l, omega);
         let ep = complex(&self.r_ep, &self.l_ep);
         let pp = complex(&self.r_pp, &self.l_pp);
         let current = DMatrix::from_column_slice(excitation.len(), 1, excitation);
@@ -359,12 +352,7 @@ impl IterativeSystem {
         let mut internal = vec![C64::new(0.0, 0.0); internal_count];
         if internal_count > 0 {
             let rhs: Vec<C64> = (&ep * &current).iter().copied().collect();
-            let diagonal: Vec<C64> = self
-                .r_diag
-                .iter()
-                .zip(&self.l_diag)
-                .map(|(&r, &l)| C64::new(r, omega * l))
-                .collect();
+            let diagonal = complex_diagonal(&self.r_diag, &self.l_diag, omega);
             let outcome = gmres(
                 |x: &[C64]| {
                     if frequency == 0.0 {
@@ -429,43 +417,21 @@ impl IterativeSystem {
     /// As [`impedance`](Self::impedance); the first failing frequency in list
     /// order is reported.
     pub fn sweep(&self, frequencies: &[f64]) -> Result<SweepResult, SolveError> {
-        let start = Instant::now();
-        for (index, &frequency) in frequencies.iter().enumerate() {
-            check_frequency(index, frequency)?;
-        }
         let stats = self.operator.stats();
         let fft_points: usize = stats.fft_dims.iter().product();
         // Krylov basis and work vectors, branch vectors, FFT buffers.
         let bytes_per_solve = (self.gmres.restart + 4) * self.counts.internal_meshes * 16
             + 8 * self.counts.filaments * 8
             + 4 * fft_points * 16;
-        let concurrent = (SWEEP_MEMORY_BUDGET_BYTES / bytes_per_solve.max(1)).max(1);
-
-        let mut impedance = Vec::with_capacity(frequencies.len());
-        for chunk in frequencies.chunks(concurrent) {
-            let solved: Vec<_> = chunk.par_iter().map(|&f| self.impedance(f)).collect();
-            for z in solved {
-                impedance.push(z?);
-            }
-        }
-        let solve_seconds = start.elapsed().as_secs_f64();
-        Ok(SweepResult {
-            schema_version: SweepResult::SCHEMA_VERSION,
-            ports: self.ports.clone(),
-            frequencies_hz: frequencies.to_vec(),
-            impedance_ohm: impedance,
-            provenance: Provenance {
-                fasterhenry_version: crate::VERSION.to_owned(),
-                counts: self.counts,
-                timing: Some(Timing {
-                    threads: rayon::current_num_threads(),
-                    inductance_s: self.operator_seconds,
-                    assembly_s: self.assembly_seconds,
-                    solve_s: solve_seconds,
-                    total_s: self.assembly_seconds + solve_seconds,
-                }),
-            },
-        })
+        sweep_impedances(
+            frequencies,
+            &self.ports,
+            self.counts,
+            bytes_per_solve,
+            self.operator_seconds,
+            self.assembly_seconds,
+            |frequency| self.impedance(frequency),
+        )
     }
 
     /// Branch currents `M_eᵀ·x` of internal loop currents `x`.
