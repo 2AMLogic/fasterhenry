@@ -41,6 +41,17 @@ breaking changes to the API or the command-line interface; patch releases
   `PowerBalance` and `unit_excitation`. An excitation with the wrong
   length or a non-finite entry is the new
   `SolveError::InvalidExcitation`.
+- Runnable library examples: `fasterhenry/examples/two_port.rs` builds two
+  coupled copper bars, sweeps them on the dense path and prints the 2 × 2 `Z`
+  against the closed-form DC resistance `l / (σ·A)`;
+  `fasterhenry/examples/iterative.rs` drives `IterativeSystem` (pFFT + GMRES)
+  over a 480-filament serpentine and prints the problem size, operator grid
+  and per-port GMRES outcome. Both are covered by
+  `cargo build --workspace --all-targets`, so the public API cannot drift away
+  from them unnoticed. The crate docs link both; `examples/` is outside the
+  published `include` allowlist, so the links are absolute. Run them with
+  `cargo run --example two_port` and `cargo run --release --example iterative`
+  (the pFFT path is ~35× slower in a debug build).
 
 ## [0.2.0] - 2026-11-06
 
