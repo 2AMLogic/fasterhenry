@@ -42,6 +42,29 @@ jobs:
           done < <(find . -path ./target -prune -o \( -path '*/src/lib.rs' -o -path '*/src/main.rs' -o -path '*/src/bin/*.rs' -o -name build.rs \) -print)
           exit $status
 
+      - name: Fail if a published doc has a relative link
+        run: |
+          set -euo pipefail
+          # CHANGELOG.md and the two crate READMEs ship inside the crate
+          # tarballs (see each Cargo.toml's `include`); docs/ does not. A
+          # relative link in one of them resolves to an absent file for
+          # anyone reading the published package.
+          #
+          # The file list is deliberately explicit, NOT a *.md glob: the root
+          # README.md and everything under docs/ are unpublished, and their
+          # relative links are correct as-is.
+          status=0
+          for f in CHANGELOG.md fasterhenry/README.md fasterhenry-cli/README.md; do
+            # Absolute URLs, in-page anchors and mailto: are all fine anywhere.
+            if hits=$(grep -noE '\]\([^)]*\)' "$f" | grep -vE '\]\((https?://|#|mailto:)'); then
+              while IFS= read -r h; do
+                echo "::error file=$f,line=${h%%:*}::relative link in a published doc (must be an absolute https:// URL): ${h#*:}"
+              done <<< "$hits"
+              status=1
+            fi
+          done
+          exit $status
+
   dependency-policy:
     name: Dependency licenses & sources (cargo-deny)
     runs-on: ubuntu-latest

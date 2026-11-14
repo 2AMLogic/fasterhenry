@@ -10,6 +10,12 @@ While the version is `0.x`, a minor release (`0.1` → `0.2`) may make
 breaking changes to the API or the command-line interface; patch releases
 (`0.1.0` → `0.1.1`) stay compatible.
 
+Links in this file must be absolute `https://` URLs, never relative paths.
+This changelog ships inside both crate tarballs (each crate's `include` lists
+it) while `docs/` does not, so a relative `docs/...` target resolves to a file
+that is absent for anyone reading the published package. CI's `clean-room` job
+enforces this over every published document.
+
 ## [Unreleased]
 
 ### Added
@@ -38,7 +44,7 @@ breaking changes to the API or the command-line interface; patch releases
   `j_abs_a_per_m2` and the dissipated `power_w`. Currents are peak phasor
   amplitudes and power is the time-average `P = ½|I|²R`; the columns,
   units and the power-balance tolerances are specified in
-  [`docs/output-formats.md`](docs/output-formats.md).
+  [`docs/output-formats.md`](https://github.com/2AMLogic/fasterhenry/blob/main/docs/output-formats.md).
 - With that flag, the JSON result gains a top-level `currents` object:
   `by_frequency[k]` holds `frequency_hz`, `power_balance` (dissipated
   power, input power and their relative residual), `segments` (current and
