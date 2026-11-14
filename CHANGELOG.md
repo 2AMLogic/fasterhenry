@@ -14,6 +14,33 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- `--currents <OUT_CSV>` writes the per-filament currents the solve
+  already determines (no new physics), for 1 A into port 1 with every
+  other port open, at every frequency of the sweep (issue #294). The CSV
+  is streamed — one frequency's rows are in memory at a time — with a
+  header and one row per filament per frequency: `frequency_hz`, the
+  `filament`/`segment`/`conductor` indices, the filament centroid
+  `x_m`/`y_m`/`z_m`, the complex phasor current
+  `current_re_a`/`current_im_a`/`current_abs_a`, the current density
+  `j_abs_a_per_m2` and the dissipated `power_w`. Currents are peak phasor
+  amplitudes and power is the time-average `P = ½|I|²R`; the columns,
+  units and the power-balance tolerances are specified in
+  [`docs/output-formats.md`](docs/output-formats.md).
+- With that flag, the JSON result gains a top-level `currents` object:
+  `by_frequency[k]` holds `frequency_hz`, `power_balance` (dissipated
+  power, input power and their relative residual), `segments` (current and
+  power summed per segment) and `conductors` (peak `|J|` with the filament
+  and location where it occurs). The block is additive: `schema_version`
+  stays 1, and without the flag the JSON, `Zc.mat` and SPICE outputs are
+  unchanged.
+- Library API for the same quantities: `MeshSystem::currents` and
+  `IterativeSystem::currents`, which take any port-current vector rather
+  than only the unit excitation the CLI uses. The new
+  `fasterhenry::currents` module is re-exported from the crate root as
+  `CurrentSolution`, `FilamentCurrent`, `SegmentCurrent`, `ConductorPeak`,
+  `PowerBalance` and `unit_excitation`. An excitation with the wrong
+  length or a non-finite entry is the new
+  `SolveError::InvalidExcitation`.
 - Runnable library examples: `fasterhenry/examples/two_port.rs` builds two
   coupled copper bars, sweeps them on the dense path and prints the 2 × 2 `Z`
   against the closed-form DC resistance `l / (σ·A)`;

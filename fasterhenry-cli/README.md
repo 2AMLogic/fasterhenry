@@ -56,6 +56,9 @@ Options:
       --spice-freq <HZ>
           The frequency for `--spice`, in hertz; default: the last one
 
+      --currents <OUT_CSV>
+          Write the filament currents as CSV (one row per filament per frequency, streamed) for 1 A into port 1 with the other ports open, and add a `currents` block (power balance, per-segment sums, per-conductor peak current density) to the JSON result. Columns, units and the power convention are in `docs/output-formats.md`
+
       --solver <SOLVER>
           Which solve path to use. `auto` keeps the dense path up to `fasterhenry::DENSE_PATH_MAX_FILAMENTS` filaments and switches to the matrix-free precorrected-FFT + GMRES path above it; `dense` and `iterative` force one. A deck that truncates coupling (`.couples`) is dense-only
 
@@ -208,7 +211,7 @@ the same problem in the two syntaxes, and a test requires them to produce
 the same `Z(ω)`.
 
 Results are written as JSON with provenance (version, counts, timing).
-Two further outputs are optional:
+Three further outputs are optional:
 
 - `--zc-mat out.mat` — the sweep as a MATLAB level-4 binary file in the
   layout of FastHenry's `Zc.mat` (`Zc_1 … Zc_K`, complex ohms, plus
@@ -218,6 +221,13 @@ Two further outputs are optional:
 - `--spice out.cir [--spice-freq HZ]` — a SPICE subcircuit at one
   frequency (default: the last): coupled inductors for `L`, current-
   controlled sources for `R`.
+- `--currents out.csv` — the per-filament currents the solve already
+  determines, for 1 A into port 1 with every other port open, at every
+  frequency of the sweep: a streamed CSV with one row per filament per
+  frequency carrying the complex phasor current, the current density and
+  the dissipated power. It also adds an additive `currents` block (power
+  balance, per-segment sums, per-conductor peak current density) to the
+  JSON result; `schema_version` stays 1.
 
 No output may name the input file, and no two outputs may name the same
 file — counting relative and `./`/`../` spellings, symlinks and (on unix)
@@ -225,7 +235,7 @@ hard links as the same file. Such a run is refused before anything is
 written, with both paths in the message. An unrelated existing file at an
 output path is replaced.
 
-Both formats are specified in
+All three formats are specified in
 [`docs/output-formats.md`](https://github.com/2AMLogic/fasterhenry/blob/main/docs/output-formats.md).
 
 ## License

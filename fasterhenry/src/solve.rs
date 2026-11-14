@@ -813,9 +813,7 @@ impl MeshSystem {
                 .map(|re| Complex::new(re, 0.0))
         } else {
             let omega = std::f64::consts::TAU * frequency;
-            let complex = |r: &DMatrix<f64>, l: &DMatrix<f64>| {
-                r.zip_map(l, |r, l| Complex::new(r, omega * l))
-            };
+            let complex = |r, l| complex_impedance(r, l, omega);
             schur_complement(
                 complex(&self.r_ee, &self.l_ee),
                 &complex(&self.r_ep, &self.l_ep),
@@ -854,8 +852,7 @@ impl MeshSystem {
         check_excitation(self.counts.ports, excitation)?;
         let singular = SolveError::Singular { frequency };
         let omega = std::f64::consts::TAU * frequency;
-        let complex =
-            |r: &DMatrix<f64>, l: &DMatrix<f64>| r.zip_map(l, |r, l| Complex::new(r, omega * l));
+        let complex = |r, l| complex_impedance(r, l, omega);
         let (ee, ep, pp) = (
             complex(&self.r_ee, &self.l_ee),
             complex(&self.r_ep, &self.l_ep),
@@ -899,40 +896,18 @@ impl MeshSystem {
     /// As [`impedance`](Self::impedance); the first failing frequency in list
     /// order is reported.
     pub fn sweep(&self, frequencies: &[f64]) -> Result<SweepResult, SolveError> {
-        let start = Instant::now();
-        for (index, &frequency) in frequencies.iter().enumerate() {
-            check_frequency(index, frequency)?;
-        }
         let internal = self.counts.internal_meshes;
         // The matrix being factorized plus its right-hand sides and scratch.
         let bytes_per_solve = 2 * internal * (internal + self.counts.ports) * 16;
-        let concurrent = (SWEEP_MEMORY_BUDGET_BYTES / bytes_per_solve.max(1)).max(1);
-
-        let mut impedance = Vec::with_capacity(frequencies.len());
-        for chunk in frequencies.chunks(concurrent) {
-            let solved: Vec<_> = chunk.par_iter().map(|&f| self.impedance(f)).collect();
-            for z in solved {
-                impedance.push(z?);
-            }
-        }
-        let solve_seconds = start.elapsed().as_secs_f64();
-        Ok(SweepResult {
-            schema_version: SweepResult::SCHEMA_VERSION,
-            ports: self.ports.clone(),
-            frequencies_hz: frequencies.to_vec(),
-            impedance_ohm: impedance,
-            provenance: Provenance {
-                fasterhenry_version: crate::VERSION.to_owned(),
-                counts: self.counts,
-                timing: Some(Timing {
-                    threads: rayon::current_num_threads(),
-                    inductance_s: self.inductance_seconds,
-                    assembly_s: self.assembly_seconds,
-                    solve_s: solve_seconds,
-                    total_s: self.assembly_seconds + solve_seconds,
-                }),
-            },
-        })
+        sweep_impedances(
+            frequencies,
+            &self.ports,
+            self.counts,
+            bytes_per_solve,
+            self.inductance_seconds,
+            self.assembly_seconds,
+            |frequency| self.impedance(frequency),
+        )
     }
 }
 
@@ -1040,6 +1015,87 @@ pub(crate) fn check_frequency(index: usize, value: f64) -> Result<(), SolveError
     } else {
         Err(SolveError::InvalidFrequency { index, value })
     }
+}
+
+/// `R + jωL` as a complex matrix: entry `(i, j)` is
+/// `r[(i, j)] + j·ω·l[(i, j)]`. Both solver paths build their complex mesh
+/// blocks this way.
+pub(crate) fn complex_impedance(
+    r: &DMatrix<f64>,
+    l: &DMatrix<f64>,
+    omega: f64,
+) -> DMatrix<Complex<f64>> {
+    r.zip_map(l, |r, l| Complex::new(r, omega * l))
+}
+
+/// `R + jωL` for the stored diagonal only — element `i` is
+/// `r[i] + j·ω·l[i]` — as the Jacobi preconditioner wants it.
+pub(crate) fn complex_diagonal(r: &[f64], l: &[f64], omega: f64) -> Vec<Complex<f64>> {
+    r.iter()
+        .zip(l)
+        .map(|(&r, &l)| Complex::new(r, omega * l))
+        .collect()
+}
+
+/// The frequency sweep both solver paths share: validate every frequency,
+/// then evaluate `impedance_at` at all of them and package the result with
+/// its provenance.
+///
+/// Frequencies run concurrently on the `rayon` thread pool, in chunks of as
+/// many as fit [`SWEEP_MEMORY_BUDGET_BYTES`] at `bytes_per_solve` each. Each
+/// frequency is an independent deterministic computation, so the impedances
+/// do not depend on the number of threads. `bytes_per_solve` stays with the
+/// caller because only it knows what one of its own solves costs.
+///
+/// `solve_s` is measured here and `total_s` is `assembly_seconds` plus it;
+/// `inductance_seconds` is reported as `Timing::inductance_s` verbatim, so a
+/// matrix-free caller can pass its operator-build time instead.
+///
+/// # Errors
+///
+/// [`SolveError::InvalidFrequency`] for a negative or non-finite frequency,
+/// otherwise whatever `impedance_at` returns — the first failing frequency
+/// in list order.
+pub(crate) fn sweep_impedances(
+    frequencies: &[f64],
+    ports: &[Port],
+    counts: Counts,
+    bytes_per_solve: usize,
+    inductance_seconds: f64,
+    assembly_seconds: f64,
+    impedance_at: impl Fn(f64) -> Result<DMatrix<Complex<f64>>, SolveError> + Sync,
+) -> Result<SweepResult, SolveError> {
+    let start = Instant::now();
+    for (index, &frequency) in frequencies.iter().enumerate() {
+        check_frequency(index, frequency)?;
+    }
+    let concurrent = (SWEEP_MEMORY_BUDGET_BYTES / bytes_per_solve.max(1)).max(1);
+
+    let mut impedance = Vec::with_capacity(frequencies.len());
+    for chunk in frequencies.chunks(concurrent) {
+        let solved: Vec<_> = chunk.par_iter().map(|&f| impedance_at(f)).collect();
+        for z in solved {
+            impedance.push(z?);
+        }
+    }
+    let solve_seconds = start.elapsed().as_secs_f64();
+    Ok(SweepResult {
+        schema_version: SweepResult::SCHEMA_VERSION,
+        ports: ports.to_vec(),
+        frequencies_hz: frequencies.to_vec(),
+        impedance_ohm: impedance,
+        provenance: Provenance {
+            fasterhenry_version: crate::VERSION.to_owned(),
+            counts,
+            timing: Some(Timing {
+                threads: rayon::current_num_threads(),
+                inductance_s: inductance_seconds,
+                assembly_s: assembly_seconds,
+                solve_s: solve_seconds,
+                total_s: assembly_seconds + solve_seconds,
+            }),
+        },
+    })
 }
 
 /// `pp − epᵀ · ee⁻¹ · ep` by LU factorization with partial pivoting; `None`
