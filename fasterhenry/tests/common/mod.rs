@@ -16,7 +16,12 @@
 //! Current users:
 //!
 //! * [`coupled_structure`] — `tests/solve.rs`, `tests/pfft.rs`;
-//! * [`spiral_system`] — `tests/spiral_validation.rs`, `tests/pfft.rs`.
+//! * [`spiral_system`] — `tests/spiral_validation.rs`, `tests/pfft.rs`;
+//! * [`assert_reference_geometry`] — `tests/spiral_validation.rs`,
+//!   `tests/plane_validation.rs`. Not a fixture: the one check that a
+//!   PyPEEC reference solved the geometry the gate reading it is built on
+//!   (issue #369). It lives here for the same reason the fixtures do —
+//!   two test crates need it, and a copy could drift.
 //!
 //! Declare it with `#[allow(dead_code)]`: no single test crate uses all of
 //! it, and an unused item in a private module is a warning the workspace
@@ -96,6 +101,12 @@ pub const UM: f64 = 1e-6;
 pub const W_UM: f64 = 2.0;
 /// Conductor thickness of [`spiral_system`], in micrometres.
 pub const T_UM: f64 = 2.0;
+/// Turns of [`spiral_system`].
+pub const SPIRAL_TURNS: usize = 2;
+/// Starting side of [`spiral_system`], in micrometres.
+pub const SPIRAL_START_UM: f64 = 60.0;
+/// Pitch growth per turn of [`spiral_system`], in micrometres.
+pub const SPIRAL_PITCH_UM: f64 = 15.0;
 
 /// A centreline, as its two endpoints in the µm plane the spiral is laid
 /// out in.
@@ -131,7 +142,7 @@ pub fn square_spiral_segments(turns: usize, start_len_um: f64, pitch_um: f64) ->
 /// `tests/spiral_validation.rs` documents where the fixture comes from and
 /// validates it against independent references.
 pub fn spiral_system() -> (Geometry, Vec<Port>, Discretization) {
-    let segments = square_spiral_segments(2, 60.0, 15.0);
+    let segments = square_spiral_segments(SPIRAL_TURNS, SPIRAL_START_UM, SPIRAL_PITCH_UM);
     let mut nodes = vec![Node::new(0.0, 0.0, T_UM / 2.0 * UM)];
     for &(.., end) in &segments {
         nodes.push(Node::new(end.0 * UM, end.1 * UM, T_UM / 2.0 * UM));
@@ -143,4 +154,89 @@ pub fn spiral_system() -> (Geometry, Vec<Port>, Discretization) {
     let ports = vec![Port::new(NodeId(0), NodeId(segments.len())).named("spiral")];
     let discretization = Discretization::PerSegment(vec![Subdivision::new(4, 4); segments.len()]);
     (geometry, ports, discretization)
+}
+
+// ---------------------------------------------------------------------------
+// PyPEEC reference agreement (issue #369)
+// ---------------------------------------------------------------------------
+
+/// Assert a PyPEEC reference JSON solved the fixture its reader is about to
+/// compare against, at the same frequency, on the same geometry.
+///
+/// `tools/pypeec_reference.py` cannot share the Rust fixtures: the reference
+/// must stay an independent discretization and solve. So each fixture's
+/// geometry is stated twice, in two languages — and before #369 the two
+/// statements were asserted to agree in prose only. An edit to either copy
+/// of a pitch, a landing, a thickness or a conductivity left a 2 %-tolerance
+/// gate comparing two *different* problems, and it kept passing until the
+/// drift happened to exceed the tolerance.
+///
+/// What is shared is therefore the geometry *statement*, as data: the script
+/// writes what it solved into a `geometry` object (`fixture_geometry`), and
+/// this checks it against the constants the caller built its own mesh from.
+///
+/// `expected` names each field as `name` for a scalar and `name[i]` /
+/// `name[i][j]` for an array element. The panic names the first field that
+/// disagrees, so a drift reports *which* parameter moved rather than
+/// surfacing as an impedance deviation.
+pub fn assert_reference_geometry(
+    reference: &serde_json::Value,
+    fixture: &str,
+    freq_ac_hz: f64,
+    expected: &[(&str, f64)],
+) {
+    let declared = reference["fixture"].as_str().unwrap_or("<absent>");
+    assert_eq!(
+        declared, fixture,
+        "the reference file in place declares fixture {declared:?}, but this gate \
+         compares against {fixture:?}"
+    );
+    let declared_freq = reference["freq_ac_hz"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("the {fixture:?} reference declares no `freq_ac_hz`"));
+    assert!(
+        (declared_freq - freq_ac_hz).abs() <= 1e-9 * freq_ac_hz,
+        "the {fixture:?} reference solved at {declared_freq:e} Hz, this gate extracts \
+         L at {freq_ac_hz:e} Hz"
+    );
+    let geometry = reference.get("geometry").unwrap_or_else(|| {
+        panic!(
+            "the {fixture:?} reference carries no `geometry` object: regenerate it with \
+             tools/pypeec_reference.py, which declares the geometry it solved so this \
+             gate can check it against the Rust fixture"
+        )
+    });
+    for &(field, want) in expected {
+        let got = reference_field(geometry, field).unwrap_or_else(|| {
+            panic!(
+                "the {fixture:?} reference's geometry has no numeric `{field}` \
+                 (the Rust fixture uses {want:e})"
+            )
+        });
+        let agrees = if want == 0.0 {
+            got == 0.0
+        } else {
+            (got - want).abs() / want.abs() <= 1e-9
+        };
+        assert!(
+            agrees,
+            "the {fixture:?} reference solved {field} = {got:e}, the Rust fixture uses \
+             {want:e}: the two definitions have drifted apart, so comparing their \
+             impedances compares two different problems"
+        );
+    }
+}
+
+/// `geometry[field]` as an `f64`, where `field` is `name`, `name[i]` or
+/// `name[i][j]`; `None` if any step is missing or not a number.
+fn reference_field(geometry: &serde_json::Value, field: &str) -> Option<f64> {
+    let (name, indices) = field.split_once('[').unwrap_or((field, ""));
+    let mut node = geometry.get(name)?;
+    for index in indices.trim_end_matches(']').split("][") {
+        if index.is_empty() {
+            continue;
+        }
+        node = node.get(index.parse::<usize>().ok()?)?;
+    }
+    node.as_f64()
 }

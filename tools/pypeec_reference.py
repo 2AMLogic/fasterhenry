@@ -22,6 +22,11 @@ asserts agreement within 2 % on L; `tests/plane_validation.rs` reads the
 plane and contact pairs. CI regenerates them (nothing generated is
 committed).
 
+Each file also carries a `geometry` object stating the fixture geometry this
+script solved (`fixture_geometry`). The Rust gates assert it against their
+own constants before comparing impedances, so the two hand-kept definitions
+of a fixture cannot drift apart unnoticed (issue #369).
+
 PyPEEC is MPL-2.0 (Thomas Guillod, Dartmouth College); this script is an
 independent consumer of its public solver API.
 """
@@ -38,7 +43,18 @@ import pypeec
 from pypeec.run import mesher, solver
 
 # ---------------------------------------------------------------------------
-# The fixture: identical to klayout-tools' square_spiral_segments(2, 60, 15).
+# The fixture. This is a *copy*, in a second language, of the definition in
+# `fasterhenry/tests/common/mod.rs` — `square_spiral_segments` and the
+# `SPIRAL_*` / `W_UM` / `T_UM` / `COPPER` constants beside it. (The same
+# construction klayout-tools validates its MoM PEEC against, as
+# `square_spiral_segments(2, 60, 15)`.) The copy exists because the
+# reference has to stay an independent discretization and solve, so it
+# cannot import the Rust fixture.
+#
+# The agreement is no longer left to prose: `fixture_geometry` below writes
+# the geometry this run solved into the reference JSON, and the Rust gates
+# assert it equals their own constants before comparing any impedance
+# (issue #369).
 # ---------------------------------------------------------------------------
 
 
@@ -58,6 +74,11 @@ def square_spiral_segments(turns: int, start_len_um: float, pitch_um: float):
     return segments
 
 
+# The spiral's construction: 2 turns, 60 µm starting side, 15 µm pitch
+# growth per turn (segment lengths 60, 60, 75, 75, 90, 90, 105, 105 µm).
+SPIRAL_TURNS = 2
+SPIRAL_START_UM = 60.0
+SPIRAL_PITCH_UM = 15.0
 W_UM = 2.0  # trace width
 T_UM = 2.0  # trace thickness
 SIGMA = 5.8e7  # copper, S/m
@@ -177,7 +198,7 @@ def build_contact_geometry(voxel_m: float, near: bool = False) -> dict:
 
 
 def build_geometry(voxel_um: float) -> dict:
-    segments = square_spiral_segments(2, 60.0, 15.0)
+    segments = square_spiral_segments(SPIRAL_TURNS, SPIRAL_START_UM, SPIRAL_PITCH_UM)
     w = W_UM
     rects = []  # (x0, x1, y0, y1) in µm, conductor footprints
     for (x0, y0), (x1, y1) in segments:
@@ -249,6 +270,51 @@ def build_geometry(voxel_um: float) -> dict:
             "domain_adjacent": {},
         },
     }
+
+
+def fixture_geometry(fixture: str) -> dict:
+    """The geometry this run actually solved, as data.
+
+    `fasterhenry/tests/spiral_validation.rs` and
+    `fasterhenry/tests/plane_validation.rs` read this back and assert it
+    equals the Rust constants they build their own mesh from, before
+    comparing a single impedance. Without it a pitch, landing, thickness or
+    conductivity edit on either side of the language boundary leaves a
+    2 %-tolerance gate comparing two *different* problems, and the gate keeps
+    passing until the drift happens to exceed the tolerance (issue #369).
+    """
+    if fixture == "spiral":
+        return {
+            "turns": SPIRAL_TURNS,
+            "start_len_um": SPIRAL_START_UM,
+            "pitch_um": SPIRAL_PITCH_UM,
+            "width_um": W_UM,
+            "thickness_um": T_UM,
+            "sigma_s_per_m": SIGMA,
+        }
+    sheet = {
+        "lo_m": list(PLANE_LO),
+        "hi_m": list(PLANE_HI),
+        "thickness_m": PLANE_T,
+        "sigma_s_per_m": SIGMA,
+    }
+    if fixture in ("plane", "plane-solid"):
+        # `slot_count` is what distinguishes the pair: the Rust gate checks
+        # the slotted reference cut exactly one slot and the solid one none,
+        # so neither can stand in for the other.
+        if fixture == "plane-solid":
+            return {**sheet, "slot_count": 0}
+        (lo, hi) = PLANE_HOLE
+        return {**sheet, "slot_count": 1, "slot_lo_m": list(lo), "slot_hi_m": list(hi)}
+    if fixture in ("contact", "contact-near"):
+        landings = CONTACT_NEAR if fixture == "contact-near" else CONTACT_FAR
+        return {
+            **sheet,
+            "slot_count": 0,
+            "pad_m": CONTACT_PAD,
+            "landings_m": [list(centre) for centre in landings],
+        }
+    raise ValueError(f"no geometry declaration for fixture {fixture!r}")
 
 
 TOLERANCE = {
@@ -409,6 +475,7 @@ def main() -> None:
     result = {
         "pypeec_version": getattr(pypeec, "__version__", "unknown"),
         "fixture": args.fixture,
+        "geometry": fixture_geometry(args.fixture),
         "voxel_size_um": args.voxel_um,
         "conductor_voxels": n_voxel,
         "freq_ac_hz": FREQ_AC,

@@ -27,9 +27,25 @@
 //! `SLOT GATE PASSED`, which CI counts — see the note on positive markers
 //! below.
 //!
+//! # Why the references' geometry is checked (issue #369)
+//!
+//! `tools/pypeec_reference.py` must stay an independent discretization and
+//! solve, so it cannot share these fixtures: every geometry gated here is
+//! stated twice, once by [`SHEET_HI`] and friends below and once in Python.
+//! The agreement used to be asserted in prose only, and nothing read it —
+//! so a pitch, landing, thickness or conductivity edit on either side left
+//! a 2–5.5 %-tolerance gate comparing two *different* problems, passing
+//! until the drift happened to exceed the tolerance.
+//!
+//! The script therefore writes the geometry it solved into each reference's
+//! `geometry` object, and every gate below runs
+//! `common::assert_reference_geometry` against its own constants *before*
+//! comparing an impedance. A drift then fails naming the field that moved.
+//!
 //! # Graded contact regions (issue #36)
 //!
-//! The same 1.2 × 0.8 × 0.02 mm sheet, driven between two 25 µm via
+//! The same sheet — [`SHEET_HI`] / [`SHEET_T`], one definition shared with
+//! the slot fixture above — driven between two 25 µm via
 //! landings *inside* it, is meshed three ways: a 100 µm background graded
 //! down to 25 µm under each landing, a fully uniform 25 µm plane, and the
 //! bare 100 µm background. Two gates follow.
@@ -75,6 +91,107 @@ const MU0: f64 = 2.0 * std::f64::consts::TAU * 1e-7;
 /// Printed only once the slot differential has been compared against its
 /// PyPEEC references and passed; CI counts it (issue #59).
 const SLOT_PASSED: &str = "SLOT GATE PASSED";
+/// Where the PyPEEC-gated fixtures below extract L. The references solve at
+/// this frequency too (`FREQ_AC` in `tools/pypeec_reference.py`), which
+/// `assert_reference_geometry` checks against the `freq_ac_hz` they declare.
+const FREQ_HZ: f64 = 1.0e3;
+
+// The sheet both PyPEEC-gated plane fixtures are built on: 1.2 × 0.8 ×
+// 0.02 mm copper. Declared once, so the slot gate and the contact gates
+// cannot drift onto different sheets while both keep passing — the rule
+// `tests/common/mod.rs` and `benches/support.rs` already apply to fixtures
+// shared across crates, applied here to one shared within a file.
+/// Minimum corner of the gated sheet, metres.
+const SHEET_LO: [f64; 2] = [0.0, 0.0];
+/// Maximum corner of the gated sheet, metres.
+const SHEET_HI: [f64; 2] = [1.2e-3, 0.8e-3];
+/// Thickness of every copper sheet in this file, metres.
+const SHEET_T: f64 = 20e-6;
+/// The slot the slotted variant cuts into that sheet: 0.2 × 0.64 mm,
+/// reaching in from the `y = SHEET_LO[1]` edge.
+const SLOT_LO: [f64; 2] = [0.5e-3, 0.0];
+const SLOT_HI: [f64; 2] = [0.7e-3, 0.64e-3];
+
+/// The PyPEEC references state their own copy of a fixture's geometry; this
+/// is the one check that it matches the constants above. Shared with
+/// `tests/spiral_validation.rs`, which runs the same check on the spiral.
+#[allow(dead_code)]
+mod common;
+use common::assert_reference_geometry;
+
+/// The sheet itself, as `assert_reference_geometry` field/value pairs.
+fn sheet_fields() -> Vec<(&'static str, f64)> {
+    vec![
+        ("lo_m[0]", SHEET_LO[0]),
+        ("lo_m[1]", SHEET_LO[1]),
+        ("hi_m[0]", SHEET_HI[0]),
+        ("hi_m[1]", SHEET_HI[1]),
+        ("thickness_m", SHEET_T),
+        ("sigma_s_per_m", SIGMA),
+    ]
+}
+
+/// What a `plane` reference must declare: the sheet, with the slot cut.
+fn slotted_plane_fields() -> Vec<(&'static str, f64)> {
+    let mut fields = sheet_fields();
+    fields.extend([
+        ("slot_count", 1.0),
+        ("slot_lo_m[0]", SLOT_LO[0]),
+        ("slot_lo_m[1]", SLOT_LO[1]),
+        ("slot_hi_m[0]", SLOT_HI[0]),
+        ("slot_hi_m[1]", SLOT_HI[1]),
+    ]);
+    fields
+}
+
+/// What a `plane-solid` reference must declare: the same sheet, uncut.
+/// `slot_count` is what stops either half of the pair standing in for the
+/// other — the differential is meaningless if both solved the same sheet.
+fn solid_plane_fields() -> Vec<(&'static str, f64)> {
+    let mut fields = sheet_fields();
+    fields.push(("slot_count", 0.0));
+    fields
+}
+
+/// What a `contact` / `contact-near` reference must declare: the uncut
+/// sheet, the landing pad, and the two landing centres this separation
+/// drives.
+fn contact_fields(landings: [[f64; 2]; 2]) -> Vec<(&'static str, f64)> {
+    let mut fields = sheet_fields();
+    fields.extend([
+        ("slot_count", 0.0),
+        ("pad_m", CONTACT_FINE),
+        ("landings_m[0][0]", landings[0][0]),
+        ("landings_m[0][1]", landings[0][1]),
+        ("landings_m[1][0]", landings[1][0]),
+        ("landings_m[1][1]", landings[1][1]),
+    ]);
+    fields
+}
+
+/// A contact reference describes this fixture: the declared geometry above,
+/// plus the claim the landing constants make in prose — that every centre is
+/// a voxel centre of the reference's own grid, so the reference drives
+/// exactly the points fasterhenry drives.
+fn check_contact_reference(reference: &serde_json::Value, fixture: &str, landings: [[f64; 2]; 2]) {
+    assert_reference_geometry(reference, fixture, FREQ_HZ, &contact_fields(landings));
+    let voxel = reference["voxel_size_um"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("the {fixture:?} reference declares no `voxel_size_um`"))
+        * 1e-6;
+    for landing in landings {
+        for (axis, coordinate) in landing.iter().enumerate() {
+            let index = (coordinate - SHEET_LO[axis]) / voxel - 0.5;
+            assert!(
+                (index - index.round()).abs() < 1e-6,
+                "landing {landing:?} is not a voxel centre of the {fixture:?} reference's \
+                 {:.3} um grid on axis {axis}: the reference drives a different point \
+                 than fasterhenry does",
+                voxel * 1e6
+            );
+        }
+    }
+}
 
 fn trace_over_plane(nx: usize, ny: usize) -> (Geometry, Vec<Port>, Discretization) {
     let mut geometry = Geometry::new();
@@ -217,6 +334,52 @@ fn pypeec_plane_reference() -> Option<serde_json::Value> {
         .then(|| serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap())
 }
 
+/// The PyPEEC solid-plane reference, if generated (`--fixture plane-solid`).
+fn pypeec_plane_solid_reference() -> Option<serde_json::Value> {
+    let path = std::env::var("FASTERHENRY_PYPEEC_PLANE_SOLID_REFERENCE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../tools/pypeec_plane_solid_reference.json")
+        });
+    path.exists()
+        .then(|| serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap())
+}
+
+/// Every reference present describes the fixture this file would compare it
+/// against — checked without paying for a single solve.
+///
+/// The three reference-backed gates below each run this check before
+/// comparing impedances, but two of them are release-only, so in a debug
+/// build a drift would otherwise go unreported until CI. This runs in every
+/// profile and is the cheapest place a drift can surface.
+#[test]
+fn the_references_in_place_describe_these_fixtures() {
+    let mut checked = 0;
+    if let Some(reference) = pypeec_plane_reference() {
+        assert_reference_geometry(&reference, "plane", FREQ_HZ, &slotted_plane_fields());
+        checked += 1;
+    }
+    if let Some(reference) = pypeec_plane_solid_reference() {
+        assert_reference_geometry(&reference, "plane-solid", FREQ_HZ, &solid_plane_fields());
+        checked += 1;
+    }
+    for (near, fixture, landings) in [
+        (false, "contact", CONTACT_FAR),
+        (true, "contact-near", CONTACT_NEAR),
+    ] {
+        if let Some(reference) = pypeec_contact_reference(near) {
+            check_contact_reference(&reference, fixture, landings);
+            checked += 1;
+        }
+    }
+    if checked == 0 {
+        eprintln!("SKIPPED (no pypeec plane or contact reference present)");
+        return;
+    }
+    println!("{checked} pypeec reference(s) describe this file's fixtures");
+}
+
 /// The plane-with-slot fixture (1.2 × 0.8 × 0.02 mm copper, 0.2 × 0.64 mm
 /// slot) as a solvable system: port between the cell nodes nearest the
 /// two short ends.
@@ -224,17 +387,17 @@ fn slotted_plane(nx: usize, ny: usize, slotted: bool) -> (Geometry, Vec<Port>, D
     let mut geometry = Geometry::new();
     let holes = if slotted {
         vec![fasterhenry::plane::Hole::Rect {
-            lo: [0.5e-3, 0.0],
-            hi: [0.7e-3, 0.64e-3],
+            lo: SLOT_LO,
+            hi: SLOT_HI,
         }]
     } else {
         Vec::new()
     };
     let plane = GroundPlane {
-        lo: [0.0, 0.0],
-        hi: [1.2e-3, 0.8e-3],
-        z_top: 20e-6,
-        thickness: 20e-6,
+        lo: SHEET_LO,
+        hi: SHEET_HI,
+        z_top: SHEET_T,
+        thickness: SHEET_T,
         nx,
         ny,
         sigma: SIGMA,
@@ -243,9 +406,13 @@ fn slotted_plane(nx: usize, ny: usize, slotted: bool) -> (Geometry, Vec<Port>, D
         equipotentials: Vec::new(),
     };
     let centres = plane.build_into(&mut geometry).unwrap();
-    let west = plane.attach(&centres, [1e-9, 0.4e-3, 10e-6]).unwrap();
+    // The two short ends, at mid-height and mid-thickness of the sheet.
+    let (mid_y, mid_z) = (SHEET_HI[1] / 2.0, SHEET_T / 2.0);
+    let west = plane
+        .attach(&centres, [SHEET_LO[0] + 1e-9, mid_y, mid_z])
+        .unwrap();
     let east = plane
-        .attach(&centres, [1.2e-3 - 1e-9, 0.4e-3, 10e-6])
+        .attach(&centres, [SHEET_HI[0] - 1e-9, mid_y, mid_z])
         .unwrap();
     let ports = vec![Port::new(west, east).named("plane")];
     let subdivisions = vec![Subdivision::SINGLE; geometry.segment_count()];
@@ -265,10 +432,10 @@ fn slot_differential_against_pypec() {
     }
     let measure = |slotted: bool| -> (f64, f64) {
         let system = slotted_plane(96, 64, slotted);
-        let result = solve(&system.0, &system.1, &system.2, &[0.0, 1e3]).unwrap();
+        let result = solve(&system.0, &system.1, &system.2, &[0.0, FREQ_HZ]).unwrap();
         let z_dc = result.impedance_ohm[0][(0, 0)];
         let z_ac = result.impedance_ohm[1][(0, 0)];
-        (z_ac.im / (std::f64::consts::TAU * 1e3), z_dc.re)
+        (z_ac.im / (std::f64::consts::TAU * FREQ_HZ), z_dc.re)
     };
     let (l_slotted, r_slotted) = measure(true);
     let (l_solid, r_solid) = measure(false);
@@ -290,8 +457,8 @@ fn slot_differential_against_pypec() {
     {
         let l = |nx: usize, ny: usize, slotted: bool| {
             let s = slotted_plane(nx, ny, slotted);
-            let r = solve(&s.0, &s.1, &s.2, &[1e3]).unwrap();
-            r.impedance_ohm[0][(0, 0)].im / (std::f64::consts::TAU * 1e3)
+            let r = solve(&s.0, &s.1, &s.2, &[FREQ_HZ]).unwrap();
+            r.impedance_ohm[0][(0, 0)].im / (std::f64::consts::TAU * FREQ_HZ)
         };
         let coarse = l(48, 32, true) - l(48, 32, false);
         let grid_relative = (coarse - dl).abs() / dl;
@@ -301,18 +468,14 @@ fn slot_differential_against_pypec() {
 
     match pypeec_plane_reference() {
         Some(reference) => {
-            let solid = std::env::var("FASTERHENRY_PYPEEC_PLANE_SOLID_REFERENCE")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| {
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .join("../tools/pypeec_plane_solid_reference.json")
-                });
-            if !solid.exists() {
+            let Some(solid) = pypeec_plane_solid_reference() else {
                 eprintln!("SKIPPED (solid-plane reference absent)");
                 return;
-            }
-            let solid: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(solid).unwrap()).unwrap();
+            };
+            // Both references must have solved this sheet, and the pair must
+            // differ by exactly the slot (issue #369).
+            assert_reference_geometry(&reference, "plane", FREQ_HZ, &slotted_plane_fields());
+            assert_reference_geometry(&solid, "plane-solid", FREQ_HZ, &solid_plane_fields());
             let pypeec_dl = reference["l_h"].as_f64().unwrap() - solid["l_h"].as_f64().unwrap();
             let pypeec_dr = reference["r_ohm"].as_f64().unwrap() - solid["r_ohm"].as_f64().unwrap();
             let relative = (dl - pypeec_dl).abs() / pypeec_dl;
@@ -351,12 +514,12 @@ fn slot_differential_against_pypec() {
 // Contact-dominated fixture (issue #36): graded contact regions
 // ---------------------------------------------------------------------------
 
-/// The slot fixture's 1.2 × 0.8 × 0.02 mm copper sheet, driven between two
-/// via landings inside it instead of across its short ends: the port
-/// impedance is then dominated by the current crowding under the contacts,
-/// which is exactly what a graded contact region has to resolve.
-const CONTACT_HI: [f64; 2] = [1.2e-3, 0.8e-3];
-const CONTACT_T: f64 = 20e-6;
+// The slot fixture's sheet — [`SHEET_HI`] × [`SHEET_T`] — driven between
+// two via landings inside it instead of across its short ends: the port
+// impedance is then dominated by the current crowding under the contacts,
+// which is exactly what a graded contact region has to resolve. It is the
+// *same* sheet, so it is the same constants: restating its extent here is
+// what let the two fixtures drift onto different sheets.
 /// The fine cell under a landing, and the background cell away from it.
 const CONTACT_FINE: f64 = 25e-6;
 const CONTACT_COARSE: f64 = 100e-6;
@@ -368,8 +531,10 @@ const CONTACT_CELLS: usize = 5;
 /// The landing pairs: 0.825 mm apart, and 0.225 mm apart. Every centre is
 /// a cell centre of the graded *and* the uniform 25 µm mesh (an odd
 /// multiple of 12.5 µm on the 25 µm lattice), so every mesh under test
-/// drives exactly the same two points — and a voxel centre of the 5 µm
-/// PyPEEC grid, so the reference drives them too.
+/// drives exactly the same two points — and a voxel centre of the PyPEEC
+/// reference's grid, so the reference drives them too. Both halves of that
+/// are asserted: the cell-centre half in `contact_fixture`, the voxel-centre
+/// half against the grid the reference declares, in the gate below (#369).
 const CONTACT_FAR: [[f64; 2]; 2] = [[0.1875e-3, 0.3875e-3], [1.0125e-3, 0.3875e-3]];
 const CONTACT_NEAR: [[f64; 2]; 2] = [[0.4875e-3, 0.3875e-3], [0.7125e-3, 0.3875e-3]];
 
@@ -389,8 +554,8 @@ fn contact_plane(mesh: ContactMesh, far: bool) -> (GroundPlane, [[f64; 2]; 2]) {
     let landings = if far { CONTACT_FAR } else { CONTACT_NEAR };
     let cells = |pitch: f64| {
         [
-            (CONTACT_HI[0] / pitch).round() as usize,
-            (CONTACT_HI[1] / pitch).round() as usize,
+            (SHEET_HI[0] / pitch).round() as usize,
+            (SHEET_HI[1] / pitch).round() as usize,
         ]
     };
     let half = CONTACT_CELLS as f64 * CONTACT_FINE / 2.0;
@@ -413,10 +578,10 @@ fn contact_plane(mesh: ContactMesh, far: bool) -> (GroundPlane, [[f64; 2]; 2]) {
         ContactMesh::CoarseUniform => (cells(CONTACT_COARSE), Vec::new()),
     };
     let plane = GroundPlane {
-        lo: [0.0, 0.0],
-        hi: CONTACT_HI,
-        z_top: CONTACT_T,
-        thickness: CONTACT_T,
+        lo: SHEET_LO,
+        hi: SHEET_HI,
+        z_top: SHEET_T,
+        thickness: SHEET_T,
         nx: cells[0],
         ny: cells[1],
         sigma: SIGMA,
@@ -433,7 +598,7 @@ fn contact_fixture(mesh: ContactMesh, far: bool) -> (Geometry, Vec<Port>, Discre
     let mut geometry = Geometry::new();
     let centres = plane.build_into(&mut geometry).unwrap();
     let bars = geometry.segment_count();
-    let depth = CONTACT_T / 2.0;
+    let depth = SHEET_T / 2.0;
     let mut ends = Vec::new();
     for landing in landings {
         let node = plane
@@ -465,10 +630,10 @@ fn contact_fixture(mesh: ContactMesh, far: bool) -> (Geometry, Vec<Port>, Discre
 /// `(L at 1 kHz, R at DC, plane bars)` of the contact fixture.
 fn contact_impedance(mesh: ContactMesh, far: bool) -> (f64, f64, usize) {
     let (geometry, ports, discretization, bars) = contact_fixture(mesh, far);
-    let result = solve(&geometry, &ports, &discretization, &[0.0, 1e3]).unwrap();
+    let result = solve(&geometry, &ports, &discretization, &[0.0, FREQ_HZ]).unwrap();
     let z_dc = result.impedance_ohm[0][(0, 0)];
     let z_ac = result.impedance_ohm[1][(0, 0)];
-    (z_ac.im / (std::f64::consts::TAU * 1e3), z_dc.re, bars)
+    (z_ac.im / (std::f64::consts::TAU * FREQ_HZ), z_dc.re, bars)
 }
 
 /// Bars the plane mesh carries under each meshing strategy (no solve).
@@ -636,6 +801,11 @@ fn contact_separation_differential_against_pypec() {
         );
         return;
     };
+    // Both references must have solved this sheet, with this pad, driven
+    // between exactly the landings fasterhenry drives (issue #369).
+    check_contact_reference(&far_reference, "contact", CONTACT_FAR);
+    check_contact_reference(&near_reference, "contact-near", CONTACT_NEAR);
+
     let graded = |far: bool| {
         let (l, r, _) = contact_impedance(ContactMesh::Graded, far);
         (l, r)
@@ -696,9 +866,10 @@ fn contact_separation_differential_against_pypec() {
 // Equipotential contacts (issue #101): a landing that is a pad, not a point
 // ---------------------------------------------------------------------------
 
-/// A small copper sheet driven between two 100 µm landings, each resolved
-/// by its own graded contact region. The sheet is deliberately smaller than
-/// the fixture above (82 and 162 bars, four DC solves, ~15 s unoptimized)
+/// A small copper sheet — [`SHEET_T`] thick, like the fixtures above, but
+/// its own extent — driven between two 100 µm landings, each resolved by its
+/// own graded contact region. The sheet is deliberately smaller than the
+/// fixture above (82 and 162 bars, four DC solves, ~15 s unoptimized)
 /// so this gate runs in a debug build: what it measures is a *difference
 /// between two models of the same mesh*, not an accuracy claim that would
 /// need a fine one.
@@ -721,8 +892,8 @@ fn pad_resistance(cells: usize, pad: bool) -> (f64, usize, usize) {
     let mut plane = GroundPlane {
         lo: [0.0, 0.0],
         hi: PAD_HI,
-        z_top: CONTACT_T,
-        thickness: CONTACT_T,
+        z_top: SHEET_T,
+        thickness: SHEET_T,
         nx: 6,
         ny: 4,
         sigma: SIGMA,
@@ -756,7 +927,7 @@ fn pad_resistance(cells: usize, pad: bool) -> (f64, usize, usize) {
                 .expect("each pad ties at least one live cell")
         } else {
             plane
-                .attach(&centres, [landing[0], landing[1], CONTACT_T / 2.0])
+                .attach(&centres, [landing[0], landing[1], SHEET_T / 2.0])
                 .unwrap()
         });
     }

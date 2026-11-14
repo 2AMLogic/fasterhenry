@@ -41,6 +41,55 @@ Between them, the relative path and the invisible skip meant the spiral and
 slot gates took their "reference absent" path on every CI run from their
 introduction until #59, while the job stayed green.
 
+### How a gate asserts it compared the *same* problem (issue #369)
+
+A marker proves a comparison ran. It does not prove the two sides compared
+the same geometry — and every fixture gated here is stated **twice**, in two
+languages: once by the Rust constants the engine meshes
+(`fasterhenry/tests/common/mod.rs`, `fasterhenry/tests/plane_validation.rs`),
+once in `tools/pypeec_reference.py`. The copy is deliberate: the reference
+has to stay an independent discretization and solve, so it cannot import the
+Rust fixture.
+
+Until #369 the agreement between those two statements was asserted in prose
+only, and nothing read it. The reference JSON carried no geometry at all, so
+an edit to either copy — a pitch, a landing, a thickness, a conductivity, or
+`--voxel-um` — left a gate comparing two *different* problems at a 2–5.5 %
+tolerance, and it kept passing until the drift happened to exceed it. A
+15 → 16 µm pitch edit on the spiral, for instance, moves L by 1.39 % and so
+passes the 2 % bound while the two sides describe different spirals.
+
+What is shared is therefore the geometry **statement**, as data. Every
+reference JSON carries a `geometry` object naming the parameters that run
+actually solved (`fixture_geometry` in `tools/pypeec_reference.py`), and
+every gate runs `common::assert_reference_geometry` against its own
+constants **before** comparing a single impedance. A drift then fails
+naming the field that moved, rather than surfacing — if at all — as an
+impedance deviation:
+
+```
+the "contact" reference solved landings_m[1][0] = 1e-3, the Rust fixture
+uses 1.0125e-3: the two definitions have drifted apart, so comparing their
+impedances compares two different problems
+```
+
+The same check covers the declared `fixture` (so neither half of the
+slotted/solid or far/near pair can stand in for the other — `slot_count`
+distinguishes the plane pair) and the declared `freq_ac_hz` (L is extracted
+at that frequency on both sides). For the contact fixtures it also verifies
+every landing centre really is a voxel centre of the grid the reference
+declares in `voxel_size_um` — the one claim those constants used to make in
+a comment that nothing checked. `fixture`, `voxel_size_um` and `freq_ac_hz`
+were all written by the script and read by nothing before #369.
+
+Two places keep the mechanism itself honest: the
+`reference_geometry_gate` tests in `fasterhenry/tests/spiral_validation.rs`
+assert that each way of disagreeing fails and names what disagreed, and
+`the_references_in_place_describe_these_fixtures` in
+`fasterhenry/tests/plane_validation.rs` runs the geometry check on whatever
+references are present without paying for a solve, so a drift is reported in
+a debug build too and not only by the release-mode gates.
+
 ## Fixture
 
 The 2-turn square spiral klayout-tools validates its MoM PEEC against
@@ -170,7 +219,10 @@ accuracy claim the gate exists to defend.
 
 The `--fixture plane` / `--fixture plane-solid` modes of
 `tools/pypeec_reference.py` regenerate the references
-(`--voxel-um 5`, ~10 s each locally).
+(`--voxel-um 5`, ~10 s each locally). Both must declare the sheet this
+file's `SHEET_*` / `SLOT_*` constants describe, and must differ by exactly
+the slot, before the gate compares the differential — see § "How a gate
+asserts it compared the *same* problem (issue #369)".
 
 The gate is the most expensive one in CI: the differential is two 96 × 64
 solves plus a 48 × 32 pair for the grid-sensitivity check — 12 128 plane
@@ -225,7 +277,11 @@ Grading moves that differential by 0.06 % against the fully uniform 25 µm
 mesh, so the comparison measures physics rather than the mesh. The
 `--fixture contact` / `--fixture contact-near` modes of
 `tools/pypeec_reference.py` regenerate the references (`--voxel-um 5`,
-~3 min each locally).
+~3 min each locally). Each must declare the same sheet, the same 25 µm pad
+and the landing pair for its own separation, with every landing centre a
+voxel centre of the grid it declares, before the gate compares the
+differential (§ "How a gate asserts it compared the *same* problem
+(issue #369)").
 
 Both contact gates are **release-mode**: the fully-fine reference is 2 992
 filaments, ~12 s optimized and ~10 min unoptimized, so the first skips
