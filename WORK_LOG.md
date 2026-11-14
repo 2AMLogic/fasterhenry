@@ -6,6 +6,24 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-14
 
+- **PR #379**: test: pin the CLI README's pasted --help block to the rendered long help
+- **Issue #356** (closed): Pin fasterhenry-cli/README.md's pasted --help block to real output, or stop pasting it
+- **PR #378**: docs: make the changelog's docs/ link absolute, and guard it in CI
+- **Issue #358** (closed): CHANGELOG.md's relative docs/ link breaks in the published crate tarballs
+- **PR #376**: docs: attribute the 1.3e-8 refinement figure to the arm that produced it
+- **Issue #366** (closed): docs: two mislabelled figures in the high-frequency refinement section (#353 follow-up)
+- **PR #375**: refactor(cli): share the port/frequency guard preamble between both run paths
+- **Issue #368** (closed): Share the sweep preamble between run_reporting_with and run_with_currents: 13 byte-identical lines, one copy untested
+- **PR #371**: test(validation): declare each PyPEEC reference's geometry and check it
+- **Issue #369** (closed): Deduplicate the PyPEEC validation fixtures: every gated geometry is defined twice, in two languages, unchecked
+- **PR #370**: refactor(bench): share the pFFT random-filament generator from benches/support.rs
+- **Issue #364** (closed): Deduplicate the pFFT random-filament generator: three verbatim copies of cloud/random_set
+- **PR #367**: ci: assert every validation gate ran through one helper, drop the SKIPPED greps
+- **Issue #362** (closed): Collapse the five hand-rolled gate-ran assertions in ci.yml and drop the two SKIPPED greps the marker counts subsume
+- **PR #361**: docs: add runnable dense and iterative examples under fasterhenry/examples/
+- **Issue #352** (closed): Add runnable library examples under fasterhenry/examples/
+- **PR #360**: docs: document the JSON problem input format
+- **Issue #351** (closed): Document the JSON problem input format (docs/input-format.md)
 - **PR #363**: test(validation): bound the engine's own refinement error at 1 THz
 - **Issue #353** (closed): High-frequency refinement study: how far does Z move with filament refinement at 1 THz?
 - **PR #357**: refactor(solve): share the sweep tail and R+jωL conversion across both paths
