@@ -20,7 +20,7 @@ breaking changes to the API or the command-line interface; patch releases
   and uniform filament ladders, and bounds this engine's own
   discretization error at the resolution of the corpus deck behind
   `docs/benchmarks.md`'s unattributed 1.2e-2 FastHenry disagreement. It is
-  **2.2e-4** in the same relative Frobenius metric, about 46× below the
+  **2.2e-4** in the same relative Frobenius metric, about 55× below the
   1.2e-2 — but that metric is nearly blind to the resistance at 1 THz
   (`X/R = 4.1e4`), which moves 76 % over the same refinement span. Nothing
   in the library changed; the measurement, the bounds asserted and the

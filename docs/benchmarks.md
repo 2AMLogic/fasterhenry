@@ -311,7 +311,7 @@ own share of it is bounded** in
 [`docs/validation.md` § "High-frequency refinement (issue #353)"](validation.md#high-frequency-refinement-issue-353):
 refining a 3-pin bundle against itself puts our discretization error at
 1 THz, in this same metric and at this deck's resolution, at 2.2e-4 — about
-46× below the 1.2e-2 — so the remainder lies elsewhere. That section also
+55× below the 1.2e-2 — so the remainder lies elsewhere. That section also
 reads the figure above: at 1 THz this metric is dominated by the reactance,
 and our resistance is *not* converged at this resolution, so 1.2e-2 says
 little about agreement on the losses. FastHenry ran its default
