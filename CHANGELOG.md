@@ -88,6 +88,25 @@ breaking changes to the API or the command-line interface; patch releases
   `cargo run --example two_port` and `cargo run --release --example iterative`
   (the pFFT path is ~35× slower in a debug build).
 
+### Changed
+
+- JSON problem documents: unknown keys are now rejected **everywhere** in the
+  document (issue #365, completing the pass #12 started). `Port` and the four
+  discretization payload structs (`Subdivision`, `Grading`, `AxisGrading`,
+  `SkinDepthGrading`) gain `#[serde(deny_unknown_fields)]`, joining
+  `Problem`, `Node`, `Segment`, `SegmentDef`, `GeometryParts` and `Coupling`.
+  **Breaking wire-format change**: a document that parses today can become an
+  error — an unknown key inside a `ports` entry or inside a `discretization`
+  payload (`uniform`, `per_segment`, `graded`, `skin_depth`,
+  `per_segment_graded`) is now rejected instead of silently ignored. Two
+  consequences beyond the raw rejection: a misspelled optional port key
+  (`"nmae"`) is an error naming the typo, where it previously left the port
+  silently unnamed; and a misspelled required port key (`"positiv"`) is
+  reported as ``unknown field `positiv` `` at the typo's own position, where
+  it previously surfaced as ``missing field `positive` `` at the end of the
+  object. The input format is documented in
+  [docs/input-format.md](https://github.com/2AMLogic/fasterhenry/blob/main/docs/input-format.md).
+
 ## [0.2.0] - 2026-11-06
 
 ### Added
