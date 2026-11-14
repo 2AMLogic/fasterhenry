@@ -25,7 +25,9 @@ The physics is cross-checked against independent references — PyPEEC and
 the Greenhouse closed forms ([`docs/validation.md`](docs/validation.md)) and
 a head-to-head with FastHenry itself ([`docs/benchmarks.md`](docs/benchmarks.md));
 the precorrected-FFT path is tested against the dense solve. The CLI reads FastHenry
-`.inp` decks and writes JSON, a MAT v4 `Zc.mat`, or a SPICE subcircuit.
+`.inp` decks and writes JSON, a MAT v4 `Zc.mat`, a SPICE subcircuit, or a CSV
+of per-filament currents, current density and dissipated power
+([`docs/output-formats.md`](docs/output-formats.md)).
 
 ## Method
 
