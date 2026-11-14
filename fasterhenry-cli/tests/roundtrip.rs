@@ -4,7 +4,9 @@
 
 use fasterhenry::{Solver, SolverChoice, DENSE_PATH_MAX_FILAMENTS};
 use fasterhenry_cli::inp::ParseOptions;
-use fasterhenry_cli::{read_inputs, read_inputs_with, run, run_reporting_with, solver_for};
+use fasterhenry_cli::{
+    read_inputs, read_inputs_with, run, run_reporting_with, run_with_currents, solver_for,
+};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> PathBuf {
@@ -145,13 +147,34 @@ fn json_document_rejects_unknown_fields() {
     assert!(error.to_string().contains("freq"), "{error}");
 }
 
+/// An empty port list or an empty frequency list is a named error, and it is
+/// the *same* named error from both solve entry points: `run` (via
+/// [`fasterhenry_cli::run_reporting_with`]) and
+/// [`fasterhenry_cli::run_with_currents`] share one input-guard preamble, so
+/// `fasterhenry run` and `fasterhenry run --currents` cannot drift apart on
+/// what they tell the user about an underspecified deck (issue #368).
 #[test]
 fn missing_ports_and_frequencies_are_clear_errors() {
     let mut problem = read_inputs(&fixture("spiral.inp")).unwrap();
+
+    // The `--currents` path takes the same guards, and takes them before it
+    // writes anything: a rejected problem leaves the CSV sink untouched, not
+    // holding a lone header row.
+    let currents = |problem: &fasterhenry_cli::Problem| {
+        let mut csv = Vec::new();
+        let error = run_with_currents(problem, None, SolverChoice::Auto, &mut csv)
+            .expect_err("an underspecified problem cannot sweep");
+        assert!(csv.is_empty(), "guard fires before the CSV header");
+        error
+    };
+
     problem.ports.clear();
     assert!(run(&problem, None).unwrap_err().contains("no ports"));
+    assert!(currents(&problem).contains("no ports"));
+
     problem.frequencies_hz.clear();
     assert!(run(&problem, None).unwrap_err().contains("no frequencies"));
+    assert!(currents(&problem).contains("no frequencies"));
 }
 
 use fasterhenry::geometry::{Geometry, Node, NodeId, SegmentDef};
