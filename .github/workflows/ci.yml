@@ -162,6 +162,26 @@ jobs:
       - name: performance smoke (2 000 filaments < 10 s, release)
         if: matrix.os == 'ubuntu-latest'
         run: cargo test --release -p fasterhenry --test perf_smoke -- --ignored --nocapture --test-threads=1
+      # The 1 THz refinement study (issue #353): seven dense solves of up to
+      # 2 352 filaments, ignored and run here in release mode for the same
+      # reason as the smoke test above. It asserts convergence, not speed, so
+      # it carries no wall-clock budget -- but a gate that silently does not
+      # run must not look like one that passed, so the positive marker is
+      # counted exactly (docs/validation.md "How CI asserts a gate actually
+      # ran"). No reference and no venv: the study is self-consistency of one
+      # engine under refinement.
+      - name: high-frequency refinement study (1 THz, release) + assert the gate ran
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          cargo test --release -p fasterhenry --test refinement_study \
+            -- --ignored --nocapture --test-threads=1 2>&1 \
+            | tee target/refinement-study.log
+          passed="$(grep -c "REFINEMENT GATE PASSED" target/refinement-study.log || true)"
+          if [ "$passed" -ne 1 ]; then
+            echo "::error::refinement_study: $passed of 1 refinement gates ran"
+            exit 1
+          fi
       # The PyPEEC venv is the same tree on every run with the same pin and
       # the same interpreter, so it is cached instead of reinstalled (the
       # install is ~40 s per Linux leg, per run). There is no setup-python

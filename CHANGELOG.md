@@ -14,6 +14,19 @@ breaking changes to the API or the command-line interface; patch releases
 
 ### Added
 
+- High-frequency refinement study (issue #353):
+  `fasterhenry/tests/refinement_study.rs` refines a self-authored 3-pin
+  multi-conductor bundle against itself at 1 THz and at 1 kHz, over graded
+  and uniform filament ladders, and bounds this engine's own
+  discretization error at the resolution of the corpus deck behind
+  `docs/benchmarks.md`'s unattributed 1.2e-2 FastHenry disagreement. It is
+  **2.2e-4** in the same relative Frobenius metric, about 46× below the
+  1.2e-2 — but that metric is nearly blind to the resistance at 1 THz
+  (`X/R = 4.1e4`), which moves 76 % over the same refinement span. Nothing
+  in the library changed; the measurement, the bounds asserted and the
+  reading of the corpus figure are in `docs/validation.md`
+  § "High-frequency refinement (issue #353)", and CI runs the test in
+  release mode and counts its `REFINEMENT GATE PASSED` marker.
 - `--currents <OUT_CSV>` writes the per-filament currents the solve
   already determines (no new physics), for 1 A into port 1 with every
   other port open, at every frequency of the sweep (issue #294). The CSV
