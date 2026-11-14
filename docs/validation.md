@@ -506,8 +506,10 @@ as the graded ladder's coarsest level it reads `R₀₀` **103× low** (2.1e-2 �
 against 2.19 Ω) and is still climbing by 24 % per step. Asserting
 *convergence* on this arm would be a test that must fail; the test asserts
 that it has visibly **not** converged, which is the fact stated here. At
-1 kHz the uniform arm agrees with the graded one to better than 1.3e-8, as
-it must.
+1 kHz the uniform arm's own coarsest-to-finest change is just 1.295e-8, and
+both arms print the same `R₀₀ = 2.155173e-3 Ω` and `X₀₀ = 2.348549e-5 Ω`
+at every level — so the two agree far more tightly than that figure, as they
+must.
 
 ### The answer
 
