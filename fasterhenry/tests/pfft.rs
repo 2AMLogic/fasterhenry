@@ -28,53 +28,20 @@ use nalgebra::DVector;
 #[allow(dead_code)]
 mod common;
 use common::COPPER;
+
+// The random filament cloud is the fixture the pFFT bench measures on, so
+// this file reads the bench suite's one definition rather than keeping a
+// second copy that nothing checks against it. Same form as
+// `tests/perf_smoke.rs`, which asserts the bench headline on the same
+// geometry. `COPPER` is identical in both modules; the import above picks
+// `common`'s so the crate has exactly one in scope.
+#[path = "../benches/support.rs"]
+#[allow(dead_code)]
+mod support;
+use support::{cloud_side, lcg, random_set};
+
 /// Acceptance bound on the norm-wise relative error with default parameters.
 const TOLERANCE: f64 = 1e-6;
-
-/// Uniform deviates in `[0, 1)` from a fixed linear congruential sequence,
-/// so every run sees the same geometry.
-fn lcg(seed: u64) -> impl FnMut() -> f64 {
-    let mut state = seed;
-    move || {
-        state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        (state >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
-
-/// `n` filaments of length 0.5–1.5 mm scattered in a cube of side `side`:
-/// axis-aligned (random axis and sense) when `manhattan`, else in general
-/// position. Cross-sections 0.1–0.3 × 0.05–0.15 mm.
-fn random_set(n: usize, side: f64, manhattan: bool, seed: u64) -> Vec<Filament> {
-    let mut r = lcg(seed);
-    (0..n)
-        .map(|_| {
-            let a = [side * r(), side * r(), side * r()];
-            let length = 1e-3 * (0.5 + r());
-            let d = if manhattan {
-                let mut d = [0.0; 3];
-                d[((r() * 3.0) as usize).min(2)] = if r() < 0.5 { -1.0 } else { 1.0 };
-                d
-            } else {
-                let v = [r() - 0.5, r() - 0.5, r() - 0.5];
-                let norm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-                v.map(|c| c / norm)
-            };
-            let b = [0, 1, 2].map(|k| a[k] + length * d[k]);
-            let width = 0.1e-3 + 0.2e-3 * r();
-            let height = 0.05e-3 + 0.1e-3 * r();
-            Filament::new(&Segment::new(
-                Node::from(a),
-                Node::from(b),
-                width,
-                height,
-                COPPER,
-            ))
-            .unwrap()
-        })
-        .collect()
-}
 
 /// A deterministic vector with entries of both signs.
 fn test_vector(n: usize, seed: u64) -> Vec<f64> {
@@ -118,7 +85,7 @@ fn random_sets_match_the_dense_product_at_several_scales() {
     // Constant density (400 filaments per 1000 mm³), so the larger sets have
     // proportionally more well-separated pairs on the FFT path.
     for (n, seed) in [(60, 1), (200, 2), (500, 3)] {
-        let side = 10e-3 * (n as f64 / 400.0).cbrt();
+        let side = cloud_side(n);
         for manhattan in [true, false] {
             let filaments = random_set(n, side, manhattan, seed);
             let what = if manhattan { "manhattan" } else { "skew" };
@@ -132,7 +99,7 @@ fn most_pairs_of_a_large_random_set_take_the_fft_path() {
     // Guards against the accuracy tests passing only because everything is
     // near-field: at 500 filaments most pairs must be approximated.
     let n = 500;
-    let filaments = random_set(n, 10e-3 * (n as f64 / 400.0).cbrt(), true, 3);
+    let filaments = random_set(n, cloud_side(n), true, 3);
     let stats = PfftOperator::new(&filaments, &PfftParams::default())
         .unwrap()
         .stats();
@@ -382,7 +349,7 @@ fn memory_grows_linearly_with_the_filament_count() {
     // At constant density, quadrupling the filaments must not come close to
     // the 16× of a dense matrix; the measured ratio is about 4.
     let memory = |n: usize| {
-        let side = 10e-3 * (n as f64 / 400.0).cbrt();
+        let side = cloud_side(n);
         let filaments = random_set(n, side, true, 13);
         PfftOperator::new(&filaments, &PfftParams::default())
             .unwrap()
@@ -401,7 +368,7 @@ fn memory_grows_linearly_with_the_filament_count() {
 #[ignore]
 fn parameter_study() {
     let n = 1000;
-    let side = 10e-3 * (n as f64 / 400.0).cbrt();
+    let side = cloud_side(n);
     for manhattan in [true, false] {
         let filaments = random_set(n, side, manhattan, 7);
         let x = test_vector(n, 99);

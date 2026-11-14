@@ -424,12 +424,20 @@ mod profile {
 
     const COPPER: f64 = 5.8e7;
 
-    /// The same generator as `benches/pfft.rs::cloud` and
-    /// `tests/pfft.rs::random_set(.., manhattan: true, ..)`: `n` random
-    /// axis-aligned filaments at constant density (400 per 1 000 mm³), from a
-    /// fixed sequence so every run sees the same geometry. Duplicated here
-    /// because a private module can't share code with an integration test or
-    /// bench crate.
+    /// `n` random axis-aligned filaments at constant density (400 per
+    /// 1 000 mm³), from a fixed sequence so every run sees the same geometry.
+    ///
+    /// **This must stay byte-for-byte equivalent to `support::cloud` in
+    /// `fasterhenry/benches/support.rs`**, the single definition the pFFT
+    /// bench and the accuracy tests in `fasterhenry/tests/pfft.rs` both read.
+    /// The numbers this profile prints are only comparable to the set-up-cost
+    /// table in `fasterhenry/src/pfft/mod.rs` and to the `pfft_setup` bench
+    /// while the two generators agree, and nothing checks that they do.
+    ///
+    /// It is duplicated rather than shared because `fasterhenry/Cargo.toml`
+    /// packages `src/**/*.rs` and not the bench directory: a `#[path]`
+    /// reaching out of published source into `benches/` would compile here
+    /// but leave `cargo test` unbuildable in the crate tarball.
     fn cloud(n: usize) -> Vec<Filament> {
         let side = 10e-3 * (n as f64 / 400.0).cbrt();
         let mut state = 11u64;
