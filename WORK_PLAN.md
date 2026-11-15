@@ -35,38 +35,30 @@ _None._
 `loom:important`; taken before unlabelled work.
 
 - **#311**: site: landing page that says what it does, with proof figures, an example and a Get started page
-- **#366**: docs: two mislabelled figures in the high-frequency refinement section (#353 follow-up)
 
 ## Ready
 
 Human-approved issues ready for implementation (`loom:issue`).
 
-- **#368**: Share the sweep preamble between run_reporting_with and run_with_currents: 13 byte-identical lines, one copy untested
+_None._
 
 ## In Progress
 
 Issues currently being built (`loom:building`).
 
-- **#351**: Document the JSON problem input format (docs/input-format.md)
-- **#352**: Add runnable library examples under fasterhenry/examples/
-- **#362**: Collapse the five hand-rolled gate-ran assertions in ci.yml and drop the two SKIPPED greps the marker counts subsume
-- **#364**: Deduplicate the pFFT random-filament generator: three verbatim copies of cloud/random_set
-- **#369**: Deduplicate the PyPEEC validation fixtures: every gated geometry is defined twice, in two languages, unchecked
+_None._
 
 ## PRs Awaiting Review
 
 PRs waiting on Judge (`loom:review-requested`).
 
-- **#367**: ci: assert every validation gate ran through one helper, drop the SKIPPED greps
-- **#370**: refactor(bench): share the pFFT random-filament generator from benches/support.rs
-- **#371**: test(validation): declare each PyPEEC reference's geometry and check it
+_None._
 
 ## Approved (Awaiting Merge)
 
 PRs that passed review and are queued for Champion auto-merge (`loom:pr`).
 
-- **#360**: docs: document the JSON problem input format
-- **#361**: docs: add runnable dense and iterative examples under fasterhenry/examples/
+_None._
 
 ## Proposed
 
@@ -76,9 +68,6 @@ Issues carrying `loom:curated`.
 - **#243**: fasterhenry.org: public demo site (landing, gallery, benchmarks, validation, FastHenry compat) on Cloudflare Pages *(curated)*
 - **#295**: Conductivity models: temperature coefficient and nanoscale size effects (Fuchs–Sondheimer, Mayadas–Shatzkes) *(curated)*
 - **#311**: site: landing page that says what it does, with proof figures, an example and a Get started page *(curated)*
-- **#351**: Document the JSON problem input format (docs/input-format.md) *(curated)*
-- **#352**: Add runnable library examples under fasterhenry/examples/ *(curated)*
-- **#366**: docs: two mislabelled figures in the high-frequency refinement section (#353 follow-up) *(curated)*
 
 ## Proposed (Architect / Hermit)
 
@@ -98,12 +87,12 @@ Issues carrying `loom:curated`.
 |------|-------|
 | Operator merge-risk holds | 0 |
 | Very important | 0 |
-| Important | 2 |
-| Ready (`loom:issue`) | 1 |
-| In Progress (`loom:building`) | 5 |
-| PRs awaiting review | 3 |
-| Approved PRs awaiting merge | 2 |
-| Curated | 7 |
+| Important | 1 |
+| Ready (`loom:issue`) | 0 |
+| In Progress (`loom:building`) | 0 |
+| PRs awaiting review | 0 |
+| Approved PRs awaiting merge | 0 |
+| Curated | 4 |
 | Architect / Hermit proposals | 4 |
 | Active epics | 2 |
 <!-- guide:plan-body:end -->

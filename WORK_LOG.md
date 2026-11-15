@@ -6,6 +6,8 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 ### 2026-11-15
 
+- **PR #385**: ci: run gate-assertion self-test in the rust job
+- **Issue #373** (closed): ci: run tools/test_assert_gate_ran.sh in CI so the gate assertion's own fail-closed path is exercised
 - **PR #386**: test: probe every documented discretization payload for unknown-key rejection
 - **Issue #381** (closed): Three of the five new deny_unknown_fields attributes have no committed regression test
 - **PR #384**: refactor(pfft): share the cloud draw sequence from published src
