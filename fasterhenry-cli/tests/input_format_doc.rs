@@ -214,22 +214,19 @@ fn the_documented_port_typo_consequences_hold() {
     );
 }
 
-/// The document's discretization table gives, for each of the five schemes,
-/// the JSON key and an example payload in inline code. Rebuild the tagged
-/// object from each row and parse it, so the table's spellings are checked
-/// against the enum rather than merely transcribed from its serde
-/// attributes.
-#[test]
-fn the_documented_discretization_spellings_all_parse() {
-    use fasterhenry::solve::Discretization;
-
+/// The scheme table's rows from the document's `discretization` section,
+/// as `(key, payload)` pairs with each payload spelled exactly as the
+/// table spells it. Payloads are inline code in a table, never fenced
+/// example documents (see the module documentation), so the two
+/// discretization tests below share this scan.
+fn documented_scheme_rows() -> Vec<(String, String)> {
     let text = document();
     let table = text
         .split("## `discretization`")
         .nth(1)
         .expect("the document still has a `discretization` section");
 
-    let mut parsed = Vec::new();
+    let mut rows = Vec::new();
     for line in table.lines() {
         // Only the scheme table's rows: `| `key` | `{payload}` | prose |`.
         let cells: Vec<&str> = line.split('|').map(str::trim).collect();
@@ -245,12 +242,28 @@ fn the_documented_discretization_spellings_all_parse() {
         if !payload.starts_with('{') && !payload.starts_with('[') {
             continue;
         }
+        rows.push((key.to_owned(), payload.to_owned()));
+    }
+    rows
+}
+
+/// The document's discretization table gives, for each of the five schemes,
+/// the JSON key and an example payload in inline code. Rebuild the tagged
+/// object from each row and parse it, so the table's spellings are checked
+/// against the enum rather than merely transcribed from its serde
+/// attributes.
+#[test]
+fn the_documented_discretization_spellings_all_parse() {
+    use fasterhenry::solve::Discretization;
+
+    let mut parsed = Vec::new();
+    for (key, payload) in documented_scheme_rows() {
         let tagged = format!("{{ {key:?}: {payload} }}");
         let discretization: Discretization =
             serde_json::from_str(&tagged).unwrap_or_else(|error| {
                 panic!("documented `{key}` payload does not parse: {error}\n{tagged}")
             });
-        parsed.push((key.to_owned(), discretization));
+        parsed.push((key, discretization));
     }
 
     let keys: Vec<&str> = parsed.iter().map(|(key, _)| key.as_str()).collect();
@@ -278,5 +291,65 @@ fn the_documented_discretization_spellings_all_parse() {
             _ => panic!("a new discretization scheme exists and is undocumented"),
         };
         assert_eq!(key, variant, "documented key `{key}` parsed as `{variant}`");
+    }
+}
+
+/// The strictness boundary test above reaches a `discretization` payload
+/// only through the minimal example, whose scheme is `uniform`: of the five
+/// payload types only `Subdivision` had its unknown-key rejection pinned,
+/// and only through the `uniform` spelling — the `Vec` element path
+/// `per_segment` takes, and the whole of `Grading`, `SkinDepthGrading` and
+/// `AxisGrading`, were unpinned, and those are the types that carry every
+/// grading parameter the document's strictness sentence is about. A dropped
+/// `deny_unknown_fields` there meant a misspelled `ratio` or
+/// `target_skin_depths` silently changed the solved grid with every
+/// committed test green. Probe all five schemes from the document's own
+/// table — a typo inside each payload, inside an *element* for the two
+/// array schemes, must be an error naming the typo — so a scheme added to
+/// the table without the attribute fails here too.
+#[test]
+fn the_documented_discretization_payloads_all_reject_unknown_keys() {
+    use fasterhenry::solve::Discretization;
+
+    let rows = documented_scheme_rows();
+    let keys: Vec<&str> = rows.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "uniform",
+            "per_segment",
+            "graded",
+            "skin_depth",
+            "per_segment_graded"
+        ],
+        "the scheme table must still list the five schemes whose payloads \
+         this test probes; a renamed or emptied table must fail here rather \
+         than let the test pass vacuously over zero payloads"
+    );
+
+    for (key, payload) in rows {
+        // Splice the typo in after the payload's first `{`: inside the
+        // payload object for the `{…}` schemes, and inside the first
+        // element for the `[{…}]` ones — the element path `per_segment`
+        // and `per_segment_graded` actually parse through.
+        let typo = payload.replacen('{', "{\"typo\": 1,", 1);
+        assert_ne!(
+            typo, payload,
+            "the documented `{key}` payload must contain an object to typo"
+        );
+        let tagged = format!("{{ {key:?}: {typo} }}");
+
+        let error = match serde_json::from_str::<Discretization>(&tagged) {
+            Ok(_) => panic!(
+                "docs/input-format.md says an unknown key in a `{key}` \
+                 payload is rejected, but this parsed:\n{tagged}"
+            ),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("typo"),
+            "an unknown key in a `{key}` payload is rejected, but not by \
+             name: {error}"
+        );
     }
 }
