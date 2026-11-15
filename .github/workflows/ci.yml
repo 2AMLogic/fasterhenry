@@ -163,6 +163,12 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
       - uses: actions/checkout@v4
+      # The gate assertion's own fail-closed path is exercised only by its
+      # self-test; run it here so a regressed helper fails in ~1 s, before the
+      # build, in the same job as the assert-gate-ran.sh call sites it guards.
+      - name: gate-assertion self-test
+        if: matrix.os == 'ubuntu-latest'
+        run: ./tools/test_assert_gate_ran.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
