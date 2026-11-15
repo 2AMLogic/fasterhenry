@@ -4,6 +4,17 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-15
+
+- **PR #386**: test: probe every documented discretization payload for unknown-key rejection
+- **Issue #381** (closed): Three of the five new deny_unknown_fields attributes have no committed regression test
+- **PR #384**: refactor(pfft): share the cloud draw sequence from published src
+- **Issue #372** (closed): Nothing verifies src/pfft/near.rs::profile::cloud still agrees with support::cloud — share the draw sequence instead of checking it
+- **PR #382**: refactor: read contact_rect_values' centre and widths via equiv_rect_values
+- **Issue #377** (closed): Deduplicate the .inp rectangle readers: contact_rect_values copies equiv_rect_values instead of calling it
+- **PR #380**: fix: deny unknown JSON keys in ports and discretization payloads
+- **Issue #365** (closed): Finish the deny_unknown_fields pass: Port and the four discretization payload structs still accept typos
+
 ### 2026-11-14
 
 - **PR #379**: test: pin the CLI README's pasted --help block to the rendered long help
