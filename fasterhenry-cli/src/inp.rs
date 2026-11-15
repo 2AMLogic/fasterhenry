@@ -1368,24 +1368,11 @@ fn contact_rect_values(
     compat: bool,
     line: usize,
 ) -> Result<(DecayRect, [Option<f64>; 2]), ParseError> {
-    let centre = triple(&values[..3], what, unit, line)?;
-    let mut widths = [0.0f64; 2];
+    let (centre, widths) = equiv_rect_values(values, what, unit, line)?;
     let mut cell = [0.0f64; 2];
     let mut clamped = [None; 2];
     for axis in 0..2 {
         let name = ['x', 'y'][axis];
-        widths[axis] = parse_number(&values[3 + axis], line)? * unit;
-        // `parse_number` has already rejected a non-finite value, so a
-        // plain comparison is total here.
-        if widths[axis] <= 0.0 {
-            return Err(err(
-                line,
-                format!(
-                    "{what}: {name}width={} must be > 0 — it is the rectangle's full width about its centre, not a corner",
-                    widths[axis]
-                ),
-            ));
-        }
         cell[axis] = parse_number(&values[5 + axis], line)? * unit;
         // Both axes clamp at `>=`, so the ratio below never meets r0 = 1.
         if compat && cell[axis] > 0.0 && cell[axis] >= widths[axis] {
@@ -5880,6 +5867,14 @@ Gp x1=0 y1=0 z1=0 x2=10 y2=0 z2=0 x3=10 y3=6 z3=0
             ),
             (
                 "contact rect (5, 3, 0, 2, -1, 1, 1)",
+                "'contact rect': ywidth=-0.001 must be > 0",
+            ),
+            // A clause malformed in both a width and a cell behind it
+            // reports the structurally prior field: the widths are read
+            // first, as `equiv_rect_values` reads them, so a bad `ywidth`
+            // wins over a bad `xcell`.
+            (
+                "contact rect (5, 3, 0, 2, -1, 2, 1)",
                 "'contact rect': ywidth=-0.001 must be > 0",
             ),
             // …and its cell must be smaller than its width, as
