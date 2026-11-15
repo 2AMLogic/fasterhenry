@@ -190,6 +190,7 @@ impl SolverChoice {
 
 /// Number of filaments across a segment's width (`nw`) and height (`nh`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Subdivision {
     /// Filaments across the width.
     pub nw: usize,
@@ -215,6 +216,7 @@ impl Subdivision {
 /// Assembly rejects grids outside [`discretize_graded`](crate::filament::discretize_graded)'s scale-aware
 /// numerical limits, reporting the segment, axis, counts and ratio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Grading {
     /// Filaments across the width.
     pub nw: usize,
@@ -253,6 +255,7 @@ impl Grading {
 /// Both ratios at `1.0` is the uniform [`Subdivision`] of the same counts,
 /// bit for bit; equal ratios are the [`Grading`] of that ratio.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AxisGrading {
     /// Filaments across the width.
     pub nw: usize,
@@ -317,6 +320,7 @@ impl From<Subdivision> for AxisGrading {
 /// is unusable. It does not silently replace the selected grid with a coarser
 /// one when the requested resolution is numerically unsafe.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SkinDepthGrading {
     /// The frequency whose skin depth the grid must resolve, in hertz.
     pub frequency_hz: f64,

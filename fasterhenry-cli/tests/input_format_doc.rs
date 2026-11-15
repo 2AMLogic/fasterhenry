@@ -115,14 +115,16 @@ fn the_first_example_is_the_minimal_one() {
 }
 
 /// The document's claim about the strictness boundary: unknown keys are
-/// rejected at the top level, in `geometry`, in each node and segment, and in
-/// `coupling` — but *not* inside a `discretization` payload or a port object.
+/// rejected everywhere in a problem document — at the top level, in
+/// `geometry`, in each node and segment, in each port, in `coupling`, and in
+/// every `discretization` payload.
 ///
 /// Every member of that boundary is load-bearing prose, so pin every member,
 /// not a sample of it. An earlier revision of this test pinned only the
 /// top-level rejection and the payload acceptance, and the one unpinned claim
 /// was the wrong one: the document had `ports` on the strict side, while
-/// `Port` carries no `deny_unknown_fields`. A table-driven sweep means the
+/// `Port` carried no `deny_unknown_fields`. The two lenient levels became
+/// strict in #365; the table-driven sweep keeps every level pinned so the
 /// next edit to that sentence cannot drift the same way.
 #[test]
 fn the_documented_strictness_boundary_holds() {
@@ -136,7 +138,7 @@ fn the_documented_strictness_boundary_holds() {
         ("geometry", "\"nodes\":", "\"typo\": true, ", true),
         ("a node", "\"x\": 0.0,", "\"typo\": true, ", true),
         ("a segment", "\"a\": 0,", "\"typo\": true, ", true),
-        ("a port", "\"positive\": 0,", "\"typo\": true, ", false),
+        ("a port", "\"positive\": 0,", "\"typo\": true, ", true),
         (
             "coupling",
             "\"frequencies_hz\":",
@@ -147,7 +149,7 @@ fn the_documented_strictness_boundary_holds() {
             "a discretization payload",
             "\"nw\": 3,",
             "\"typo\": 1, ",
-            false,
+            true,
         ),
     ];
 
@@ -178,22 +180,24 @@ fn the_documented_strictness_boundary_holds() {
     }
 }
 
-/// The `ports` section spells out what the missing `deny_unknown_fields`
-/// costs a reader: a misspelled optional `name` is dropped in silence, while a
-/// misspelled *required* key is still caught — but reported as the key that is
-/// now missing, not as the typo that was written. Both are concrete claims
-/// about observable behaviour, so pin both.
+/// The `ports` section spells out what the strictness costs a reader: a
+/// misspelled optional `name` is an error naming `nmae` instead of silently
+/// leaving the port unnamed, and a misspelled *required* key is reported as
+/// the typo written — ``unknown field `positiv` `` — not as the key that is
+/// now missing, and at the typo's own position rather than the end of the
+/// object. Both are concrete claims about observable behaviour, so pin both.
 #[test]
 fn the_documented_port_typo_consequences_hold() {
     let minimal = json_blocks(&document()).swap_remove(0);
 
     let misspelled_name =
         minimal.replace("\"positive\": 0,", "\"nmae\": \"sense\", \"positive\": 0,");
-    let problem: Problem = serde_json::from_str(&misspelled_name)
-        .expect("a misspelled optional port key is accepted, as documented");
-    assert_eq!(
-        problem.ports[0].name, None,
-        "a misspelled `name` must leave the port unnamed, as documented"
+    let error = serde_json::from_str::<Problem>(&misspelled_name)
+        .expect_err("a misspelled optional port key is rejected, as documented");
+    assert!(
+        error.to_string().contains("unknown field `nmae`"),
+        "a misspelled `name` must be reported as the typo written, not leave \
+         the port silently unnamed: {error}"
     );
 
     let misspelled_required = minimal.replace("\"positive\": 0,", "\"positiv\": 0,");
@@ -204,9 +208,9 @@ fn the_documented_port_typo_consequences_hold() {
     let error = serde_json::from_str::<Problem>(&misspelled_required)
         .expect_err("a misspelled required port key is still caught");
     assert!(
-        error.to_string().contains("missing field `positive`"),
-        "a misspelled required port key is reported as the missing key, not the \
-         typo written: {error}"
+        error.to_string().contains("unknown field `positiv`"),
+        "a misspelled required port key is reported as the typo written, not \
+         as the key now missing: {error}"
     );
 }
 

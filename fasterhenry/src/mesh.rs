@@ -64,6 +64,7 @@ use crate::geometry::{Geometry, NodeId, SegmentDef};
 /// nodes flips the sign of the port's off-diagonal impedances and leaves its
 /// self-impedance unchanged.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Port {
     /// Node at which the port current enters the conductor.
     pub positive: NodeId,
