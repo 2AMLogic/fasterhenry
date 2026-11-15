@@ -400,6 +400,15 @@ fn grid_interactions(
         .collect()
 }
 
+/// The random-filament draw sequence `profile::cloud` runs on, shared
+/// with `fasterhenry/benches/support.rs` — see `cloud_draws.rs`'s module
+/// docs for the arrangement. `#[cfg(test)]`-gated so the published library
+/// gains no new items; the file itself ships, because the manifest's
+/// `include` packages `src/**/*.rs`.
+#[cfg(test)]
+#[path = "cloud_draws.rs"]
+mod cloud_draws;
+
 /// Manual, phase-by-phase profiling of `PfftOperator::new`'s set-up cost
 /// (issue #51). Not run by `cargo test`; the phases mirror `PfftOperator::new`
 /// and `precorrect` exactly (rather than sampling with an external profiler)
@@ -422,46 +431,26 @@ mod profile {
     use crate::pfft::grid as grid_mod;
     use crate::pfft::{auto_spacing, bounding_box, GridSpacing, PfftParams};
 
-    const COPPER: f64 = 5.8e7;
-
     /// `n` random axis-aligned filaments at constant density (400 per
-    /// 1 000 mm³), from a fixed sequence so every run sees the same geometry.
+    /// 1 000 mm³), from a fixed sequence so every run sees the same
+    /// geometry.
     ///
-    /// **This must stay byte-for-byte equivalent to `support::cloud` in
-    /// `fasterhenry/benches/support.rs`**, the single definition the pFFT
-    /// bench and the accuracy tests in `fasterhenry/tests/pfft.rs` both read.
-    /// The numbers this profile prints are only comparable to the set-up-cost
-    /// table in `fasterhenry/src/pfft/mod.rs` and to the `pfft_setup` bench
-    /// while the two generators agree, and nothing checks that they do.
-    ///
-    /// It is duplicated rather than shared because `fasterhenry/Cargo.toml`
-    /// packages `src/**/*.rs` and not the bench directory: a `#[path]`
-    /// reaching out of published source into `benches/` would compile here
-    /// but leave `cargo test` unbuildable in the crate tarball.
+    /// The draw sequence — LCG, seed 11, draw order and the `n^(1/3)`
+    /// density rule — lives in `cloud_draws.rs`, the one file this
+    /// profile and `support::cloud` in `fasterhenry/benches/support.rs`
+    /// both read (issue #372), so the numbers this profile prints stay
+    /// comparable to the set-up-cost table in `fasterhenry/src/pfft/mod.rs`
+    /// and to the `pfft_setup` bench by construction.
     fn cloud(n: usize) -> Vec<Filament> {
-        let side = 10e-3 * (n as f64 / 400.0).cbrt();
-        let mut state = 11u64;
-        let mut next = move || {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            (state >> 11) as f64 / (1u64 << 53) as f64
-        };
-        (0..n)
-            .map(|_| {
-                let a = [side * next(), side * next(), side * next()];
-                let length = 1e-3 * (0.5 + next());
-                let mut d = [0.0; 3];
-                d[((next() * 3.0) as usize).min(2)] = if next() < 0.5 { -1.0 } else { 1.0 };
-                let b = [0, 1, 2].map(|k| a[k] + length * d[k]);
-                let width = 0.1e-3 + 0.2e-3 * next();
-                let height = 0.05e-3 + 0.1e-3 * next();
+        cloud_draws::bars(n, cloud_draws::cloud_side(n), true, 11)
+            .into_iter()
+            .map(|bar| {
                 Filament::new(&Segment::new(
-                    Node::from(a),
-                    Node::from(b),
-                    width,
-                    height,
-                    COPPER,
+                    Node::from(bar.a),
+                    Node::from(bar.b),
+                    bar.width,
+                    bar.height,
+                    cloud_draws::COPPER,
                 ))
                 .expect("valid segment")
             })

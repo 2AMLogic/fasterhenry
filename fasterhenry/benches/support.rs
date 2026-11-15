@@ -13,14 +13,28 @@
 //! have exactly one definition, so a bench and the test that guards it can
 //! never drift onto different geometry while both keep passing.
 //!
-//! Nothing here is part of the published crate: `fasterhenry/Cargo.toml`
-//! packages `src/**/*.rs` only.
+//! Nothing else here is part of the published crate
+//! (`fasterhenry/Cargo.toml` packages `src/**/*.rs` only); the random
+//! filament cloud's draw sequence is, because the library's
+//! `#[cfg(test)]` `profile` module shares it — it lives in
+//! `fasterhenry/src/pfft/cloud_draws.rs`, which this file includes
+//! inward (issue #372).
 
 use fasterhenry::{Filament, Geometry, Node, Port, Segment, SegmentDef};
 
-/// Copper conductivity, siemens per metre (matches `benches/kernels.rs` and
-/// `tests/perf_smoke.rs`).
-pub const COPPER: f64 = 5.8e7;
+// The random-filament draw sequence (LCG, density rule, bar geometry) is
+// published source shared with the library's `#[cfg(test)]` `profile`
+// module, so it lives in `src/pfft/cloud_draws.rs` and this file includes
+// it inward rather than keeping a second copy (issue #372). `#[path]`
+// plus `#[allow]` is the same shape every bench crate uses to reach this
+// file, and the re-exports carry `#[allow(unused_imports)]` because the
+// crates pulling this module in do not all use them.
+#[path = "../src/pfft/cloud_draws.rs"]
+#[allow(dead_code)]
+mod cloud_draws;
+
+#[allow(unused_imports)]
+pub use cloud_draws::{cloud_side, lcg, COPPER};
 
 /// `nw × nh` cross-section subdivision applied to every segment: enough to
 /// give the solve stage real internal-mesh work (`nw·nh − 1` loops per
@@ -141,44 +155,18 @@ pub fn bars_within_budget() -> impl Iterator<Item = usize> {
 // The random filament cloud
 // ---------------------------------------------------------------------------
 
-/// Uniform deviates in `[0, 1)` from a fixed linear congruential sequence,
-/// so every run sees the same geometry.
-pub fn lcg(seed: u64) -> impl FnMut() -> f64 {
-    let mut state = seed;
-    move || {
-        state = state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        (state >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
-
 /// `n` filaments of length 0.5–1.5 mm scattered in a cube of side `side`:
 /// axis-aligned (random axis and sense) when `manhattan`, else in general
 /// position. Cross-sections 0.1–0.3 × 0.05–0.15 mm.
 pub fn random_set(n: usize, side: f64, manhattan: bool, seed: u64) -> Vec<Filament> {
-    let mut r = lcg(seed);
-    (0..n)
-        .map(|_| {
-            let a = [side * r(), side * r(), side * r()];
-            let length = 1e-3 * (0.5 + r());
-            let d = if manhattan {
-                let mut d = [0.0; 3];
-                d[((r() * 3.0) as usize).min(2)] = if r() < 0.5 { -1.0 } else { 1.0 };
-                d
-            } else {
-                let v = [r() - 0.5, r() - 0.5, r() - 0.5];
-                let norm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-                v.map(|c| c / norm)
-            };
-            let b = [0, 1, 2].map(|k| a[k] + length * d[k]);
-            let width = 0.1e-3 + 0.2e-3 * r();
-            let height = 0.05e-3 + 0.1e-3 * r();
+    cloud_draws::bars(n, side, manhattan, seed)
+        .into_iter()
+        .map(|bar| {
             Filament::new(&Segment::new(
-                Node::from(a),
-                Node::from(b),
-                width,
-                height,
+                Node::from(bar.a),
+                Node::from(bar.b),
+                bar.width,
+                bar.height,
                 COPPER,
             ))
             .expect("valid segment")
@@ -197,19 +185,9 @@ pub fn random_set(n: usize, side: f64, manhattan: bool, seed: u64) -> Vec<Filame
 /// accuracy bound asserted in `fasterhenry/tests/pfft.rs` and the
 /// `pfft_setup` numbers of `fasterhenry/benches/pfft.rs` are only
 /// comparable to each other while all three run on the same geometry.
-/// `profile::cloud` in `fasterhenry/src/pfft/near.rs` is the one copy that
-/// cannot read this definition — see the note there.
+/// `profile::cloud` in `fasterhenry/src/pfft/near.rs` reads the same
+/// draw sequence — `cloud_draws.rs`, included from published source —
+/// so there is no second copy to drift (issue #372).
 pub fn cloud(n: usize) -> Vec<Filament> {
     random_set(n, cloud_side(n), true, 11)
-}
-
-/// Side of the cube [`cloud`] scatters `n` filaments through, from the
-/// constant density of 400 filaments per 1 000 mm³ every pFFT measurement
-/// is taken at: `n^(1/3)` growth, so the physics per filament does not
-/// change as a sweep gets larger.
-///
-/// Separate from [`cloud`] because the accuracy tests in
-/// `fasterhenry/tests/pfft.rs` need this density at their own seeds.
-pub fn cloud_side(n: usize) -> f64 {
-    10e-3 * (n as f64 / 400.0).cbrt()
 }
