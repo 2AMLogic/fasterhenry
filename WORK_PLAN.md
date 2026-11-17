@@ -22,7 +22,7 @@ direction behind this queue, and it is where operator-owned items are explained.
 
 Judge-approved PRs under a hold (`loom:blocked` or `loom:operator`) — only a human merge decision is missing.
 
-- **#389**: chore(loom): resync installed Loom to v0.19.1302
+_None._
 
 ## Very Important
 
@@ -58,7 +58,7 @@ _None._
 
 PRs that passed review and are queued for Champion auto-merge (`loom:pr`).
 
-- **#389**: chore(loom): resync installed Loom to v0.19.1302
+_None._
 
 ## Proposed
 
@@ -85,13 +85,13 @@ Issues carrying `loom:curated`.
 
 | Bucket | Count |
 |------|-------|
-| Operator merge-risk holds | 1 |
+| Operator merge-risk holds | 0 |
 | Very important | 0 |
 | Important | 1 |
 | Ready (`loom:issue`) | 0 |
 | In Progress (`loom:building`) | 0 |
 | PRs awaiting review | 0 |
-| Approved PRs awaiting merge | 1 |
+| Approved PRs awaiting merge | 0 |
 | Curated | 4 |
 | Architect / Hermit proposals | 4 |
 | Active epics | 2 |
