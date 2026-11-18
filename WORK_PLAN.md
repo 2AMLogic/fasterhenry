@@ -18,6 +18,7 @@ it is waiting on, see the "Blocked and waiting" table in
 direction behind this queue, and it is where operator-owned items are explained.
 
 <!-- guide:plan-body:start -->
+_Generated: 2026-11-18T20:31:00Z (snapshot; compare against live labels)_
 ## Operator Attention: Merge-Risk-Hold Pileup
 
 Judge-approved PRs under a hold (`loom:blocked` or `loom:operator`) — only a human merge decision is missing.
@@ -34,11 +35,11 @@ _None._
 
 `loom:important`; taken before unlabelled work.
 
-- **#311**: site: landing page that says what it does, with proof figures, an example and a Get started page
+- **#311**: site: landing page that says what it does, with proof figures, an example and a Get started page *(held)*
 
 ## Ready
 
-Human-approved issues ready for implementation (`loom:issue`).
+Human-approved issues (`loom:issue`) ready for implementation — excluding held (`loom:blocked`/`loom:operator`/`loom:frozen`), `loom:building`, and issues closed by an open `loom:pr` PR (listed under Approved).
 
 _None._
 
@@ -67,13 +68,13 @@ Issues carrying `loom:curated`.
 - **#166**: Champion merges blocked: branch-protection read returns 403 (Resource not accessible by integration) *(curated)*
 - **#243**: fasterhenry.org: public demo site (landing, gallery, benchmarks, validation, FastHenry compat) on Cloudflare Pages *(curated)*
 - **#295**: Conductivity models: temperature coefficient and nanoscale size effects (Fuchs–Sondheimer, Mayadas–Shatzkes) *(curated)*
-- **#311**: site: landing page that says what it does, with proof figures, an example and a Get started page *(curated)*
+- **#311**: site: landing page that says what it does, with proof figures, an example and a Get started page *(curated)* *(held)*
 
 ## Proposed (Architect / Hermit)
 
-- **#171**: Refactor: split the 8.5k-line fasterhenry-cli/src/inp.rs into an inp/ module directory *(architect)*
-- **#208**: Split inp.rs: move 5k-line inline test module into a child file *(hermit)*
-- **#317**: Remove site/gen_hero.py: duplicates tools/gallery_figures.py for the spiral deck *(hermit)*
+- **#171**: Refactor: split the 8.5k-line fasterhenry-cli/src/inp.rs into an inp/ module directory *(architect)* *(held)*
+- **#208**: Split inp.rs: move 5k-line inline test module into a child file *(hermit)* *(held)*
+- **#317**: Remove site/gen_hero.py: duplicates tools/gallery_figures.py for the spiral deck *(hermit)* *(held)*
 - **#359**: Remove ten never-called public accessors from the fasterhenry library API *(hermit)*
 
 ## Epics
@@ -88,7 +89,7 @@ Issues carrying `loom:curated`.
 | Operator merge-risk holds | 0 |
 | Very important | 0 |
 | Important | 1 |
-| Ready (`loom:issue`) | 0 |
+| Ready (`loom:issue`, net of holds/building/merge-pending) | 0 |
 | In Progress (`loom:building`) | 0 |
 | PRs awaiting review | 0 |
 | Approved PRs awaiting merge | 0 |
