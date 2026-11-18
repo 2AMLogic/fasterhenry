@@ -18,7 +18,7 @@ it is waiting on, see the "Blocked and waiting" table in
 direction behind this queue, and it is where operator-owned items are explained.
 
 <!-- guide:plan-body:start -->
-_Generated: 2026-11-18T20:31:00Z (snapshot; compare against live labels)_
+_Generated: 2026-11-18T22:42:24Z (snapshot; compare against live labels)_
 ## Operator Attention: Merge-Risk-Hold Pileup
 
 Judge-approved PRs under a hold (`loom:blocked` or `loom:operator`) — only a human merge decision is missing.
@@ -65,9 +65,9 @@ _None._
 
 Issues carrying `loom:curated`.
 
-- **#166**: Champion merges blocked: branch-protection read returns 403 (Resource not accessible by integration) *(curated)*
-- **#243**: fasterhenry.org: public demo site (landing, gallery, benchmarks, validation, FastHenry compat) on Cloudflare Pages *(curated)*
-- **#295**: Conductivity models: temperature coefficient and nanoscale size effects (Fuchs–Sondheimer, Mayadas–Shatzkes) *(curated)*
+- **#166**: Champion merges blocked: branch-protection read returns 403 (Resource not accessible by integration) *(curated)* *(held)*
+- **#243**: fasterhenry.org: public demo site (landing, gallery, benchmarks, validation, FastHenry compat) on Cloudflare Pages *(curated)* *(held)*
+- **#295**: Conductivity models: temperature coefficient and nanoscale size effects (Fuchs–Sondheimer, Mayadas–Shatzkes) *(curated)* *(held)*
 - **#311**: site: landing page that says what it does, with proof figures, an example and a Get started page *(curated)* *(held)*
 
 ## Proposed (Architect / Hermit)
@@ -75,7 +75,7 @@ Issues carrying `loom:curated`.
 - **#171**: Refactor: split the 8.5k-line fasterhenry-cli/src/inp.rs into an inp/ module directory *(architect)* *(held)*
 - **#208**: Split inp.rs: move 5k-line inline test module into a child file *(hermit)* *(held)*
 - **#317**: Remove site/gen_hero.py: duplicates tools/gallery_figures.py for the spiral deck *(hermit)* *(held)*
-- **#359**: Remove ten never-called public accessors from the fasterhenry library API *(hermit)*
+- **#359**: Remove ten never-called public accessors from the fasterhenry library API *(hermit)* *(held)*
 
 ## Epics
 
