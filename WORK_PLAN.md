@@ -71,9 +71,9 @@ Issues carrying `loom:curated`.
 
 ## Proposed (Architect / Hermit)
 
-- **#171**: Refactor: split the 8.5k-line fasterhenry-cli/src/inp.rs into an inp/ module directory *(architect)* *(held)*
-- **#208**: Split inp.rs: move 5k-line inline test module into a child file *(hermit)* *(held)*
-- **#317**: Remove site/gen_hero.py: duplicates tools/gallery_figures.py for the spiral deck *(hermit)* *(held)*
+- **#171**: Refactor: split the 8.5k-line fasterhenry-cli/src/inp.rs into an inp/ module directory *(architect)*
+- **#208**: Split inp.rs: move 5k-line inline test module into a child file *(hermit)*
+- **#317**: Remove site/gen_hero.py: duplicates tools/gallery_figures.py for the spiral deck *(hermit)*
 - **#359**: Remove ten never-called public accessors from the fasterhenry library API *(hermit)*
 
 ## Epics
