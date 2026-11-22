@@ -73,7 +73,7 @@ use nalgebra::{ComplexField, DMatrix};
 use num_complex::Complex;
 use rayon::prelude::*;
 
-use crate::currents::{assemble_solution, CurrentSolution, Layout};
+use crate::currents::{CurrentSolution, Layout};
 use crate::filament::Filament;
 use crate::geometry::Geometry;
 use crate::gmres::{gmres, GmresOutcome, GmresParams};
@@ -82,8 +82,8 @@ use crate::mesh::{MeshMatrix, Port};
 use crate::pfft::{PfftOperator, PfftParams, PfftStats};
 use crate::result::{Counts, SweepResult};
 use crate::solve::{
-    check_excitation, check_frequency, complex_diagonal, complex_impedance, discretize_geometry,
-    filament_resistance, sweep_impedances, Discretization, SolveError,
+    check_frequency, complex_diagonal, complex_impedance, discretize_geometry, filament_resistance,
+    solve_currents, sweep_impedances, CurrentsContext, Discretization, SolveError,
 };
 
 type C64 = Complex<f64>;
@@ -341,66 +341,50 @@ impl IterativeSystem {
         frequency: f64,
         excitation: &[C64],
     ) -> Result<CurrentSolution, SolveError> {
-        check_frequency(0, frequency)?;
-        check_excitation(self.counts.ports, excitation)?;
-        let omega = std::f64::consts::TAU * frequency;
-        let complex = |r, l| complex_impedance(r, l, omega);
-        let ep = complex(&self.r_ep, &self.l_ep);
-        let pp = complex(&self.r_pp, &self.l_pp);
-        let current = DMatrix::from_column_slice(excitation.len(), 1, excitation);
-        let internal_count = self.counts.internal_meshes;
-        let mut internal = vec![C64::new(0.0, 0.0); internal_count];
-        if internal_count > 0 {
-            let rhs: Vec<C64> = (&ep * &current).iter().copied().collect();
-            let diagonal = complex_diagonal(&self.r_diag, &self.l_diag, omega);
-            let outcome = gmres(
-                |x: &[C64]| {
-                    if frequency == 0.0 {
-                        // `L` drops out at DC: two real products, no pFFT.
-                        let re: Vec<f64> = x.iter().map(|c| c.re).collect();
-                        let im: Vec<f64> = x.iter().map(|c| c.im).collect();
-                        let (re, im) = (self.apply_dc(&re), self.apply_dc(&im));
-                        re.iter().zip(&im).map(|(&a, &b)| C64::new(a, b)).collect()
-                    } else {
-                        self.apply_ac(omega, x)
-                    }
-                },
-                |v: &[C64]| v.iter().zip(&diagonal).map(|(&v, &d)| v / d).collect(),
-                &rhs,
-                &mut internal,
-                &self.gmres,
-            );
-            if !outcome.converged {
-                return Err(SolveError::NotConverged {
-                    frequency,
-                    port: 0,
-                    iterations: outcome.iterations,
-                    relative_residual: outcome.relative_residual,
-                });
-            }
-            for x in &mut internal {
-                *x = -*x;
-            }
-        }
-        let internal_column = DMatrix::from_column_slice(internal_count, 1, &internal);
-        let voltage = &pp * &current + ep.transpose() * &internal_column;
-        if internal
-            .iter()
-            .chain(voltage.iter())
-            .any(|e| !(e.re.is_finite() && e.im.is_finite()))
-        {
-            return Err(SolveError::Singular { frequency });
-        }
-        Ok(assemble_solution(
-            &self.layout,
-            &self.filaments,
-            &self.resistances,
-            &self.mesh,
+        solve_currents(
+            &CurrentsContext {
+                layout: &self.layout,
+                filaments: &self.filaments,
+                resistances: &self.resistances,
+                mesh: &self.mesh,
+                r_ep: &self.r_ep,
+                l_ep: &self.l_ep,
+                r_pp: &self.r_pp,
+                l_pp: &self.l_pp,
+            },
             frequency,
             excitation,
-            &internal,
-            voltage.as_slice(),
-        ))
+            |omega, rhs| {
+                let diagonal = complex_diagonal(&self.r_diag, &self.l_diag, omega);
+                let mut x = vec![C64::new(0.0, 0.0); rhs.nrows()];
+                let outcome = gmres(
+                    |x: &[C64]| {
+                        if frequency == 0.0 {
+                            // `L` drops out at DC: two real products, no pFFT.
+                            let re: Vec<f64> = x.iter().map(|c| c.re).collect();
+                            let im: Vec<f64> = x.iter().map(|c| c.im).collect();
+                            let (re, im) = (self.apply_dc(&re), self.apply_dc(&im));
+                            re.iter().zip(&im).map(|(&a, &b)| C64::new(a, b)).collect()
+                        } else {
+                            self.apply_ac(omega, x)
+                        }
+                    },
+                    |v: &[C64]| v.iter().zip(&diagonal).map(|(&v, &d)| v / d).collect(),
+                    rhs.as_slice(),
+                    &mut x,
+                    &self.gmres,
+                );
+                if !outcome.converged {
+                    return Err(SolveError::NotConverged {
+                        frequency,
+                        port: 0,
+                        iterations: outcome.iterations,
+                        relative_residual: outcome.relative_residual,
+                    });
+                }
+                Ok(DMatrix::from_vec(rhs.nrows(), 1, x))
+            },
+        )
     }
 
     /// `Z(ω)` at every one of `frequencies` (hertz), with provenance; the

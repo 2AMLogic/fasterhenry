@@ -163,20 +163,27 @@ fn multi_port_excitation_and_single_filament_segments() {
     assert!(max_diff(&sol, &sol2) < 1e-12);
 }
 
-#[test]
-fn bad_inputs_are_rejected() {
-    let (g, ports) = bar(1e-3, 1e-4, 1e-4);
-    let sys = MeshSystem::assemble(&g, &ports, &Discretization::uniform(1, 1)).unwrap();
+fn rejects_bad_inputs(solve: impl Fn(f64, &[C64]) -> Result<CurrentSolution, SolveError>) {
     assert!(matches!(
-        sys.currents(0.0, &[]),
+        solve(0.0, &[]),
         Err(SolveError::InvalidExcitation { .. })
     ));
     assert!(matches!(
-        sys.currents(-1.0, &unit_excitation(1)),
+        solve(-1.0, &unit_excitation(1)),
         Err(SolveError::InvalidFrequency { .. })
     ));
     assert!(matches!(
-        sys.currents(0.0, &[C64::new(f64::NAN, 0.0)]),
+        solve(0.0, &[C64::new(f64::NAN, 0.0)]),
         Err(SolveError::InvalidExcitation { .. })
     ));
+}
+
+#[test]
+fn bad_inputs_are_rejected() {
+    let (g, ports) = bar(1e-3, 1e-4, 1e-4);
+    let d = Discretization::uniform(1, 1);
+    let dense = MeshSystem::assemble(&g, &ports, &d).unwrap();
+    let iter = IterativeSystem::assemble(&g, &ports, &d, &IterativeParams::default()).unwrap();
+    rejects_bad_inputs(|frequency, excitation| dense.currents(frequency, excitation));
+    rejects_bad_inputs(|frequency, excitation| iter.currents(frequency, excitation));
 }
