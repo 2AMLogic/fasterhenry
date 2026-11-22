@@ -852,40 +852,24 @@ impl MeshSystem {
         frequency: f64,
         excitation: &[Complex<f64>],
     ) -> Result<CurrentSolution, SolveError> {
-        check_frequency(0, frequency)?;
-        check_excitation(self.counts.ports, excitation)?;
-        let singular = SolveError::Singular { frequency };
-        let omega = std::f64::consts::TAU * frequency;
-        let complex = |r, l| complex_impedance(r, l, omega);
-        let (ee, ep, pp) = (
-            complex(&self.r_ee, &self.l_ee),
-            complex(&self.r_ep, &self.l_ep),
-            complex(&self.r_pp, &self.l_pp),
-        );
-        let current = DMatrix::from_column_slice(excitation.len(), 1, excitation);
-        let internal = if ee.is_empty() {
-            DMatrix::zeros(0, 1)
-        } else {
-            -lu_solve(ee, &(&ep * &current)).ok_or(singular.clone())?
-        };
-        let voltage = &pp * &current + ep.transpose() * &internal;
-        if internal
-            .iter()
-            .chain(voltage.iter())
-            .any(|e| !(e.re.is_finite() && e.im.is_finite()))
-        {
-            return Err(singular);
-        }
-        Ok(assemble_solution(
-            &self.layout,
-            &self.filaments,
-            &self.resistances,
-            &self.mesh,
+        solve_currents(
+            &CurrentsContext {
+                layout: &self.layout,
+                filaments: &self.filaments,
+                resistances: &self.resistances,
+                mesh: &self.mesh,
+                r_ep: &self.r_ep,
+                l_ep: &self.l_ep,
+                r_pp: &self.r_pp,
+                l_pp: &self.l_pp,
+            },
             frequency,
             excitation,
-            internal.as_slice(),
-            voltage.as_slice(),
-        ))
+            |omega, rhs| {
+                let ee = complex_impedance(&self.r_ee, &self.l_ee, omega);
+                lu_solve(ee, rhs).ok_or(SolveError::Singular { frequency })
+            },
+        )
     }
 
     /// `Z(ω)` at every one of `frequencies` (hertz), with provenance.
@@ -995,10 +979,7 @@ pub(crate) fn discretize_geometry(
     Ok((filaments, per_segment))
 }
 
-pub(crate) fn check_excitation(
-    ports: usize,
-    excitation: &[Complex<f64>],
-) -> Result<(), SolveError> {
+fn check_excitation(ports: usize, excitation: &[Complex<f64>]) -> Result<(), SolveError> {
     if excitation.len() == ports
         && excitation
             .iter()
@@ -1100,6 +1081,76 @@ pub(crate) fn sweep_impedances(
             }),
         },
     })
+}
+
+/// The shared inputs of the two `currents` implementations: the fields
+/// [`MeshSystem`] and [`IterativeSystem`](crate::IterativeSystem) hold in
+/// common, borrowed for one solve.
+pub(crate) struct CurrentsContext<'a> {
+    pub(crate) layout: &'a Layout,
+    pub(crate) filaments: &'a [Filament],
+    pub(crate) resistances: &'a [f64],
+    pub(crate) mesh: &'a MeshMatrix,
+    pub(crate) r_ep: &'a DMatrix<f64>,
+    pub(crate) l_ep: &'a DMatrix<f64>,
+    pub(crate) r_pp: &'a DMatrix<f64>,
+    pub(crate) l_pp: &'a DMatrix<f64>,
+}
+
+/// The solve envelope both `currents` implementations share: validate the
+/// inputs, build the port-coupled blocks `Z_ep`/`Z_pp`, hand the right-hand
+/// side `Z_ep·I_p` to `solve_internal` (a dense LU solve for
+/// [`MeshSystem`], one GMRES solve for
+/// [`IterativeSystem`](crate::IterativeSystem)), negate its result into the
+/// internal loop currents `−Z_ee⁻¹·Z_ep·I_p`, form the port voltages
+/// `V_p = Z_pp·I_p + Z_epᵀ·I_e`, and package the
+/// [`CurrentSolution`](crate::currents::CurrentSolution). When the mesh has
+/// no internal loops nothing is solved.
+///
+/// # Errors
+///
+/// [`SolveError::InvalidFrequency`], [`SolveError::InvalidExcitation`] for a
+/// wrong-length or non-finite excitation, otherwise whatever `solve_internal`
+/// returns, plus [`SolveError::Singular`] for a non-finite result.
+pub(crate) fn solve_currents(
+    ctx: &CurrentsContext<'_>,
+    frequency: f64,
+    excitation: &[Complex<f64>],
+    solve_internal: impl FnOnce(
+        f64,
+        &DMatrix<Complex<f64>>,
+    ) -> Result<DMatrix<Complex<f64>>, SolveError>,
+) -> Result<CurrentSolution, SolveError> {
+    check_frequency(0, frequency)?;
+    check_excitation(ctx.mesh.port_count(), excitation)?;
+    let singular = SolveError::Singular { frequency };
+    let omega = std::f64::consts::TAU * frequency;
+    let complex = |r, l| complex_impedance(r, l, omega);
+    let (ep, pp) = (complex(ctx.r_ep, ctx.l_ep), complex(ctx.r_pp, ctx.l_pp));
+    let current = DMatrix::from_column_slice(excitation.len(), 1, excitation);
+    let internal = if ctx.mesh.internal_count() == 0 {
+        DMatrix::zeros(0, 1)
+    } else {
+        -solve_internal(omega, &(&ep * &current))?
+    };
+    let voltage = &pp * &current + ep.transpose() * &internal;
+    if internal
+        .iter()
+        .chain(voltage.iter())
+        .any(|e| !(e.re.is_finite() && e.im.is_finite()))
+    {
+        return Err(singular);
+    }
+    Ok(assemble_solution(
+        ctx.layout,
+        ctx.filaments,
+        ctx.resistances,
+        ctx.mesh,
+        frequency,
+        excitation,
+        internal.as_slice(),
+        voltage.as_slice(),
+    ))
 }
 
 /// `pp − epᵀ · ee⁻¹ · ep` by LU factorization with partial pivoting; `None`
