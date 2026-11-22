@@ -4,6 +4,11 @@ Chronological record of completed work in this repository, maintained by the Gui
 
 <!-- Maintained automatically by the Guide triage agent. Manual edits are fine but may be overwritten. -->
 
+### 2026-11-22
+
+- **PR #402**: refactor: share the currents() solve envelope between MeshSystem and IterativeSystem
+- **Issue #401** (closed): Share the currents() envelope between MeshSystem and IterativeSystem
+
 ### 2026-11-19
 
 - **Issue #340** (closed): Shared blocks, material schema, structure file and two interchange formats: proposals touching fasterhenry
