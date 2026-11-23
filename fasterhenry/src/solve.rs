@@ -765,11 +765,6 @@ impl MeshSystem {
         })
     }
 
-    /// The ports, in the order of the rows and columns of `Z`.
-    pub fn ports(&self) -> &[Port] {
-        &self.ports
-    }
-
     /// Every filament (branch), segment by segment.
     pub fn filaments(&self) -> &[Filament] {
         &self.filaments

@@ -113,6 +113,20 @@ enforces this over every published document.
   object. The input format is documented in
   [docs/input-format.md](https://github.com/2AMLogic/fasterhenry/blob/main/docs/input-format.md).
 
+### Removed
+
+- Ten never-called public accessor methods, removed from the library API
+  under the 0.x break licence (issue #359): `Coupling::segment_groups`,
+  `Coupling::declared_couples`, `IterativeSystem::ports`,
+  `IterativeSystem::gmres_params`, `MeshSystem::ports`, `PairMask::all`,
+  `PairMask::groups`, `PairMask::len`, `PairMask::is_empty` and
+  `PairMask::keeps_everything`. Each was a one-line getter (or, for
+  `PairMask::all`, a convenience constructor) over state the caller already
+  holds, and no caller in this repository — library, CLI, tests, benches or
+  docs — ever called one. Their removal takes nothing with it: the masked
+  assembly path still reads the stored ports and GMRES parameters, and
+  `PairMask::keeps`, `kept_pairs` and `total_pairs` remain.
+
 ## [0.2.0] - 2026-11-06
 
 ### Added

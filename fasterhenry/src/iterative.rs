@@ -237,11 +237,6 @@ impl IterativeSystem {
         })
     }
 
-    /// The ports, in the order of the rows and columns of `Z`.
-    pub fn ports(&self) -> &[Port] {
-        &self.ports
-    }
-
     /// Every filament (branch), segment by segment.
     pub fn filaments(&self) -> &[Filament] {
         &self.filaments
@@ -260,11 +255,6 @@ impl IterativeSystem {
     /// Sizes of the pFFT operator.
     pub fn operator_stats(&self) -> PfftStats {
         self.operator.stats()
-    }
-
-    /// The GMRES parameters every solve uses.
-    pub fn gmres_params(&self) -> GmresParams {
-        self.gmres
     }
 
     /// The port impedance matrix `Z(ω)`, in ohms, at `frequency` hertz; the
