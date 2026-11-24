@@ -224,17 +224,6 @@ impl Coupling {
         self.segment_groups.is_empty() && self.couples.is_none()
     }
 
-    /// The group names, in geometry segment order.
-    pub fn segment_groups(&self) -> &[String] {
-        &self.segment_groups
-    }
-
-    /// The declared cross-group couplings, or `None` when nothing is
-    /// truncated.
-    pub fn declared_couples(&self) -> Option<&[[String; 2]]> {
-        self.couples.as_deref()
-    }
-
     /// The group of segment `index`; [`DEFAULT_GROUP`] when it carries no tag.
     pub fn group_of(&self, index: usize) -> &str {
         self.segment_groups
@@ -530,9 +519,7 @@ mod tests {
         assert_eq!(coupling.group_of(7), DEFAULT_GROUP);
 
         let mask = coupling.pair_mask(&[2, 3]).unwrap();
-        assert!(mask.keeps_everything());
         assert_eq!(mask.kept_pairs(), mask.total_pairs());
-        assert_eq!(mask.len(), 5);
     }
 
     #[test]
@@ -551,7 +538,6 @@ mod tests {
         assert!(mask.keeps(2, 2));
         assert!(!mask.keeps(0, 2));
         assert!(!mask.keeps(3, 1));
-        assert!(!mask.keeps_everything());
     }
 
     #[test]

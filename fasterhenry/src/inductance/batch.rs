@@ -43,16 +43,6 @@ pub struct PairMask {
 }
 
 impl PairMask {
-    /// The mask that keeps every pair of `filaments` filaments — today's
-    /// behaviour, and what [`partial_inductance_matrix`] does.
-    pub fn all(filaments: usize) -> Self {
-        Self {
-            group: vec![0; filaments],
-            coupled: vec![true],
-            groups: 1,
-        }
-    }
-
     /// A mask from a per-filament group index and a predicate on group
     /// indices.
     ///
@@ -83,21 +73,6 @@ impl PairMask {
         }
     }
 
-    /// Number of filaments the mask describes.
-    pub fn len(&self) -> usize {
-        self.group.len()
-    }
-
-    /// Whether the mask describes no filaments at all.
-    pub fn is_empty(&self) -> bool {
-        self.group.is_empty()
-    }
-
-    /// Number of groups.
-    pub fn groups(&self) -> usize {
-        self.groups
-    }
-
     /// Whether the partial inductance of filaments `i` and `j` is evaluated.
     pub fn keeps(&self, i: usize, j: usize) -> bool {
         match (self.group.get(i), self.group.get(j)) {
@@ -108,11 +83,6 @@ impl PairMask {
                 .unwrap_or(true),
             _ => true,
         }
-    }
-
-    /// Whether every pair is kept, so that masking costs nothing.
-    pub fn keeps_everything(&self) -> bool {
-        self.coupled.iter().all(|&keep| keep)
     }
 
     /// Unordered pairs (including the `n` self terms) the mask keeps, out of
@@ -321,8 +291,8 @@ pub fn partial_inductance_matrix_detailed(
 /// truncated to zero — and, more to the point, never evaluated.
 ///
 /// Entries the mask keeps are bit-for-bit those of
-/// [`partial_inductance_matrix`]; entries it rejects are exactly `0.0`. With
-/// [`PairMask::all`] the two functions agree everywhere.
+/// [`partial_inductance_matrix`]; entries it rejects are exactly `0.0`. When
+/// every pair is kept, the two functions agree everywhere.
 ///
 /// The result is symmetric, so it is still a valid branch-inductance matrix —
 /// but truncation is a physical approximation, not a free lunch: see
